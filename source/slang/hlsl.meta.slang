@@ -10208,6 +10208,32 @@ ${{{{
         auto ccTF = candidateOrCommitted == 0 ? "false" : "true";
 }}}}
 
+    __glsl_extension(GL_EXT_ray_query)
+    __glsl_extension(GL_EXT_ray_tracing_position_fetch)
+    __glsl_version(460)
+    [__NoSideEffect]
+    void $(ccName)GetIntersectionTriangleVertexPositions(out float3 positions[3])
+    {
+        __target_switch
+        {
+        case glsl: __intrinsic_asm "rayQueryGetIntersectionTriangleVertexPositionsEXT($0, $(ccTF), $1)";
+        case spirv:
+            uint iCandidateOrCommitted = $(candidateOrCommitted);
+            let arrayLenth = 3;
+            spirv_asm
+            {
+                OpCapability RayQueryKHR;
+                OpCapability RayTracingPositionFetchKHR;
+                OpCapability RayQueryPositionFetchKHR;
+                OpExtension "SPV_KHR_ray_query";
+                OpExtension "SPV_KHR_ray_tracing_position_fetch";
+                %_arr_v3float_uint_3 = OpTypeArray $$float3 $arrayLenth;
+		        %res = OpRayQueryGetIntersectionTriangleVertexPositionsKHR %_arr_v3float_uint_3 &this $iCandidateOrCommitted;
+                OpStore &positions %res;
+            };
+        }
+    };
+
     // CandidateObjectToWorld3x4, CandidateWorldToObject4x3
     // CommittedObjectToWorld3x4, CommittedObjectToWorld4x3
     ${{{{
