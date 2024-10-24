@@ -92,9 +92,14 @@ __intrinsic_type($(kIROp_HLSLAppendStructuredBufferType))
 [require(cpp_cuda_glsl_hlsl_spirv, appendstructuredbuffer)]
 struct AppendStructuredBuffer
 {
+    /// Appends a new element to the buffer.
+    /// @param value:T The element to be appended to the buffer.
     __intrinsic_op($(kIROp_StructuredBufferAppend))
     void Append(T value);
 
+    /// Get information about the number of elements and stride of the buffer.
+    /// @param[out] numStructs:uint The number of elements in the buffer.
+    /// @param[out] stride:uint The stride of the buffer.
     [ForceInline]
     void GetDimensions(
         out uint numStructs,
