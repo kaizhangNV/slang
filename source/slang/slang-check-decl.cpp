@@ -2353,6 +2353,7 @@ void SemanticsDeclBodyVisitor::checkVarDeclCommon(VarDeclBase* varDecl)
 
         if (initExpr->type.isWriteOnly)
             getSink()->diagnose(initExpr, Diagnostics::readingFromWriteOnly);
+
         initExpr = coerce(CoercionSite::Initializer, varDecl->type.Ptr(), initExpr);
         varDecl->initExpr = initExpr;
 
