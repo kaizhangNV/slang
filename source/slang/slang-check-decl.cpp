@@ -9633,10 +9633,7 @@ void SemanticsDeclHeaderVisitor::checkCallableDeclCommon(CallableDecl* decl)
 {
     for (auto paramDecl : decl->getParameters())
     {
-        ensureDecl(
-            paramDecl,
-            DeclCheckState::ReadyForReference,
-            m_checkForSynthesizedCtor ? this : nullptr);
+        ensureDecl(paramDecl, DeclCheckState::ReadyForReference);
     }
 
     auto errorType = decl->errorType;
