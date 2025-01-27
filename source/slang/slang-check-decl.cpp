@@ -2421,11 +2421,27 @@ void SemanticsDeclBodyVisitor::checkVarDeclCommon(VarDeclBase* varDecl)
                 // for the variable, that will be used for all downstream
                 // code generation.
                 //
-                varDecl->initExpr =
-                    CompleteOverloadCandidate(overloadContext, *overloadContext.bestCandidate);
-                getShared()->cacheImplicitCastMethod(
-                    key,
-                    ImplicitCastMethod{*overloadContext.bestCandidate, 0});
+                if (auto constructorDecl = as<ConstructorDecl>(overloadContext.bestCandidate->item.declRef.getDecl()))
+                {
+                    // In SP-004, we don't allow implicitly initialization for a struct with a synthesized default constructor.
+                    // Only explicit default constructor can be used for implicit initialization.
+                    if (!constructorDecl->containsFlavor(ConstructorDecl::ConstructorFlavor::SynthesizedDefault))
+                    {
+                        varDecl->initExpr =
+                            CompleteOverloadCandidate(overloadContext, *overloadContext.bestCandidate);
+                        getShared()->cacheImplicitCastMethod(
+                            key,
+                            ImplicitCastMethod{*overloadContext.bestCandidate, 0});
+                    }
+                }
+                else
+                {
+                    varDecl->initExpr =
+                        CompleteOverloadCandidate(overloadContext, *overloadContext.bestCandidate);
+                    getShared()->cacheImplicitCastMethod(
+                        key,
+                        ImplicitCastMethod{*overloadContext.bestCandidate, 0});
+                }
             }
         }
     }
