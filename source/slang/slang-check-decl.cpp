@@ -342,10 +342,10 @@ private:
         DeclAndCtorInfo(
             ASTBuilder* m_astBuilder,
             SemanticsVisitor* visitor,
-            StructDecl* parent,
+            StructDecl* inParent,
             const bool getOnlyDefault)
         {
-            this->parent = parent;
+            this->parent = inParent;
             if (getOnlyDefault)
                 defaultCtor = _getDefaultCtor(parent);
             else
