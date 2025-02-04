@@ -14,38 +14,33 @@ using namespace Slang;
 namespace metal
 {
 
-class SwapchainImpl
-    : public ISwapchain
-    , public ComObject
+class SwapchainImpl : public ISwapchain, public ComObject
 {
 public:
     SLANG_COM_OBJECT_IUNKNOWN_ALL
     ISwapchain* getInterface(const Guid& guid);
 
 public:
+    RefPtr<DeviceImpl> m_device;
     ISwapchain::Desc m_desc;
-    RefPtr<CommandQueueImpl> m_queue;
-    ShortList<RefPtr<TextureResourceImpl>> m_images;
-    ShortList<MTL::Drawable*> m_drawables;
-    RefPtr<DeviceImpl> m_renderer;
-    uint32_t m_currentImageIndex = 0;
     WindowHandle m_windowHandle;
+    CA::MetalLayer* m_metalLayer = nullptr;
+    ShortList<RefPtr<TextureResourceImpl>> m_images;
+    NS::SharedPtr<CA::MetalDrawable> m_currentDrawable;
+    Index m_currentImageIndex = -1;
     MTL::PixelFormat m_metalFormat = MTL::PixelFormat::PixelFormatInvalid;
 
-    void destroySwapchainAndImages();
-
     void getWindowSize(int& widthOut, int& heightOut) const;
-
-    Result createSwapchainAndImages();
+    void createImages();
 
 public:
     ~SwapchainImpl();
 
-    Result init(DeviceImpl* renderer, const ISwapchain::Desc& desc, WindowHandle window);
+    Result init(DeviceImpl* device, const ISwapchain::Desc& desc, WindowHandle window);
 
     virtual SLANG_NO_THROW const Desc& SLANG_MCALL getDesc() override { return m_desc; }
     virtual SLANG_NO_THROW Result SLANG_MCALL
-        getImage(GfxIndex index, ITextureResource** outResource) override;
+    getImage(GfxIndex index, ITextureResource** outResource) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL resize(GfxCount width, GfxCount height) override;
     virtual SLANG_NO_THROW Result SLANG_MCALL present() override;
     virtual SLANG_NO_THROW int SLANG_MCALL acquireNextImage() override;

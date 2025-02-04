@@ -1,31 +1,183 @@
 
-// Custom Forward Derivative Function reference
+/// `[ForwardDerivative(fwdFn)]` attribute can be used to provide a forward-mode
+/// derivative implementation.
+/// Invoking `fwd_diff(decoratedFn)` will place a call to `fwdFn` instead of synthesizing
+/// a derivative implementation.
+/// The same behavior holds if `decoratedFn` is used in a differentiable context.
+///
+///
+/// @remarks
+/// - The signature of `fwdFn` must match the expected signature of `fwd_diff(decoratedFn)`.
+/// - See the [reference](https://shader-slang.org/slang/user-guide/autodiff.html#fwd_difff--slang_function---slang_function) for `fwd_diff` for a full list of signature rules.
+/// - See the [user guide's section](https://shader-slang.org/slang/user-guide/autodiff.html#user-defined-derivative-functions) on custom derivatives for an introduction to this approach. 
+///
+/// - This attribute can be used on generic functions, member functions and accessors.
+/// - For generic functions, the generic signatures (parameters + constraints) of both functions must match exactly.
+///
+/// - The decorated function will be considered forward-differentiable. There is no need for a `[Differentiable]` tag. 
+/// If the `[Differentiable]` tag is present, 
+/// and no custom backward derivative is specified with `[BackwardDerivative]`, then the
+/// Slang will use auto-diff to generate the backward=mode derivative, but will use the provided
+/// derivative for forward-mode.
+/// 
+/// Example:
+/// ```csharp
+/// [ForwardDerivative(foo_fwd)]
+/// T foo<T : IFloat, P : IArray<T>>(T x, P xarr) { /* ... */ }
+///
+/// DifferentialPair<T> foo_fwd<T : IFloat, P : IArray<T>>( // Use the same generic signature for a match.
+///     DifferentialPair<T> x, P dp_xarr) { /* ... */ }
+/// ```
+/// 
+/// For member functions, or functions nested inside namespaces, `fwdFn` may need a fully qualified name.
+///
+/// Example:
+/// ```csharp
+/// namespace A
+/// {
+///     DifferentialPair<float> foo(DifferentialPair<float> x) { /* ... */ }
+/// }
+/// [ForwardDerivative(A.foo)] // Use namespace and/or parent struct names
+/// float bar(float x) { /* ... */ }
+/// ```
+///
 __attributeTarget(FunctionDeclBase)
 attribute_syntax [ForwardDerivative(function)] : ForwardDerivativeAttribute;
 
+/// `[BackwardDerivative(bwdFn)]` attribute can be used to provide a forward-mode
+/// derivative implementation.
+/// Invoking `bwd_diff(decoratedFn)` will place a call to `bwdFn` instead of synthesizing
+/// a derivative implementation.
+/// The same behavior holds if `decoratedFn` is used in a differentiable context.
+///
+/// @remarks
+/// The signature of `bwdFn` must match the expected signature of `bwd_diff(decoratedFn)`.
+/// See the [reference](https://shader-slang.org/slang/user-guide/autodiff.html#bwd_difff--slang_function---slang_function)
+/// for `bwd_diff` for a full list of signature rules.
+///
+/// See the [user guide's section](https://shader-slang.org/slang/user-guide/autodiff.html#user-defined-derivative-functions) on custom derivatives for an introduction to custom
+/// derivatives.
+///
+/// This attribute can be used on generic functions, member functions and accessors.
+/// For generic functions, the generic signatures (parameters + constraints) of both functions
+/// must match exactly. 
+/// Overloaded functions are also supported. The compiler will attempt to resolve the overload
+/// from the expected derivative signature. If it is unable to do so, it will issue a 
+/// diagnostic error.
+///
+/// The decorated function will be considered differentiable.
+/// There is no need for a `[Differentiable]` tag.
+///
+/// Example:
+/// ```csharp
+/// [BackwardDerivative(foo_bwd)]
+/// T foo<T : IFloat, P : IArray<T>>(T x, P xarr) { /* ... */ }
+///
+/// void foo_bwd<T : IFloat, P : IArray<T>>( // Use the same generic signature for a match.
+///     inout DifferentialPair<T> x, P dp_xarr, T.Differential dresult) { /* ... */ }
+/// ```
+///
+/// For member functions, or functions nested inside namespaces, `bwdFn` may need to be a fully qualified 
+/// name.
+///
+///
 __attributeTarget(FunctionDeclBase)
 attribute_syntax [BackwardDerivative(function)] : BackwardDerivativeAttribute;
 
+/// `[PrimalSubstitute(substFn)]` attribute denotes a substitute `substFn` that should be used for
+/// differentiation instead of the original function. This serves as a sort of 'reference' implementation
+/// where the original function cannot be differentiated (for whatever reason).
+///
+/// See the auto-diff user guide for more: https://shader-slang.org/slang/user-guide/autodiff.html#primal-substitute-functions
+///
+/// @example The following example shows in more detail on how primal substitute affects derivative computation.
+/// ```csharp
+/// [PrimalSubstitute(myFuncSubst)]
+/// float myFunc(float x) { return x*x; }
+///
+/// [Differentiable]
+/// float myFuncSubst(float x) { return x*x*x; }
+///
+/// [Differentiable]
+/// float caller(float x) { return myFunc(x); }
+///
+/// let a = caller(4.0); /// a == 16.0 (calling myFunc)
+/// let b = fwd_diff(caller)(diffPair(4.0, 1.0)).p; /// b == 64.0 (calling myFuncSubst)
+/// let c = fwd_diff(caller)(diffPair(4.0, 1.0)).d; /// c == 48.0 (calling derivative of myFuncSubst)
+/// ```
+/// @remarks
+/// `substFn` must have a function definition (i.e. a body).
+/// 
+/// In case that a function has both custom defined derivatives and a differentiable 
+/// primal substitute, the primal substitute overrides the custom defined derivative 
+/// on the original function. All calls to the original function will be translated 
+/// into calls to the primal substitute first, and differentiation step follows after. 
+/// This means that the derivatives of the primal substitute function will be used instead 
+/// of the derivatives defined on the original function.
+///
+/// This attribute can be used on generic functions and member functions. 
+/// For generic functions, the generic signatures (parameters + constraints) of both functions
+/// must match exactly.
+/// For member functions, or functions nested inside namespaces, `substFn` should be a fully qualified name.
+/// `substFn`
+/// Example:
+/// ```csharp
+/// namespace A
+/// {
+///     float foo(float x) { /* ... */ }
+/// }
+/// [PrimalSubstitute(A.foo)] // Use namespace and/or parent struct names
+/// float bar(float x) { /* ... */ }
+/// ```
+///
 __attributeTarget(FunctionDeclBase)
 attribute_syntax [PrimalSubstitute(function)] : PrimalSubstituteAttribute;
 
+/// `[ForwardDerivativeOf(fn)]` is the back-reference version of `[ForwardDerivative(derivFn)]`
+///
+/// When used to decorate a function, the decorated function is considered the forward-derivative
+/// implementation of the referenced function `fn`.
+///
+/// Apart from this, the semantics of the custom derivative are the same as for 
+/// `[ForwardDerivative(derivFn)]`
+///
 __attributeTarget(FunctionDeclBase)
 attribute_syntax [ForwardDerivativeOf(function)] : ForwardDerivativeOfAttribute;
 
+/// `[BackwardDerivativeOf(fn)]` is the back-reference version of `[BackwardDerivative(derivFn)]`
+///
+/// When used to decorate a function, the decorated function is considered the backward-derivative
+/// implementation of the referenced function `fn`.
+///
+/// Apart from this, the semantics of the custom derivative are the same as for
+/// `[BackwardDerivative(derivFn)]`
+///
 __attributeTarget(FunctionDeclBase)
 attribute_syntax [BackwardDerivativeOf(function)] : BackwardDerivativeOfAttribute;
 
+/// `[PrimalSubstituteOf(fn)]` is the back-reference version of `[PrimalSubstitute(substFn)]`
+///
+/// When used to decorate a function, that function is considered the substitute for the 
+/// referenced `fn`. 
+/// Apart from this difference, the semantics of the substitution are the same as for 
+/// `[PrimalSubstitute(substFn)]`
+///
 __attributeTarget(FunctionDeclBase)
 attribute_syntax [PrimalSubstituteOf(function)] : PrimalSubstituteOfAttribute;
 
 __attributeTarget(DeclBase)
 attribute_syntax [DerivativeMember(memberName)] : DerivativeMemberAttribute;
 
-// Exclude "this" parameter from differentiation.
+// Exclude "this" parameter from differentiation. Effectively like putting a 'no_diff' on the 
+// "this" parameter.
+//
 __attributeTarget(FunctionDeclBase)
 attribute_syntax [NoDiffThis] : NoDiffThisAttribute;
 
-// A 'none-type' that acts as a run-time sentinel for zero differentials.
+// A 'none-type' that acts as a run-time sentinel for zero differentials. This is primarily
+// for internal use.
+//
+[__AutoDiffBuiltin]
 export struct NullDifferential : IDifferentiable
 { 
     // for now, we'll use at least one field to make sure the type is non-empty
@@ -273,7 +425,13 @@ struct TensorView
     __subscript(uint index) -> T
     {
         [ForceInline] [__NoSideEffect] get { return load(index); }
-        [ForceInline] set { store(index, newValue); }
+        
+        [ForceInline]
+        [nonmutating]
+        set
+        {
+            store(index, newValue);
+        }
 
         [__NoSideEffect]
         ref
@@ -288,7 +446,14 @@ struct TensorView
     __subscript(uint i1, uint i2) -> T
     {
         [ForceInline] [__NoSideEffect] get { return load(i1, i2); }
-        [ForceInline] set { store(i1, i2, newValue); }
+
+        [ForceInline]
+        [nonmutating]
+        set
+        {
+            store(i1, i2, newValue);
+        }
+        
         [__NoSideEffect]
         ref
         {
@@ -302,8 +467,16 @@ struct TensorView
     __subscript(uint2 i) -> T
     {
         [ForceInline] [__NoSideEffect] get { return load(i.x, i.y); }
-        [ForceInline] set { store(i.x, i.y, newValue); }
+
+        [ForceInline]
+        [nonmutating]
+        set
+        {
+            store(i.x, i.y, newValue);
+        }
+
         [__NoSideEffect]
+        [nonmutating]
         ref
         {
             __target_switch
@@ -316,8 +489,16 @@ struct TensorView
     __subscript(uint i1, uint i2, uint i3) -> T
     {
         [ForceInline] [__NoSideEffect] get { return load(i1, i2, i3); }
-        [ForceInline] set { store(i1, i2, i3, newValue); }
+
+        [ForceInline]
+        [nonmutating]
+        set
+        {
+            store(i1, i2, i3, newValue);
+        }
+
         [__NoSideEffect]
+        [nonmutating]
         ref
         {
             __target_switch
@@ -330,8 +511,16 @@ struct TensorView
     __subscript(uint3 i) -> T
     {
         [ForceInline] [__NoSideEffect] get { return load(i.x, i.y, i.z); }
-        [ForceInline] set { store(i.x, i.y, i.z, newValue); }
+
+        [ForceInline]
+        [nonmutating]
+        set
+        {
+            store(i.x, i.y, i.z, newValue);
+        }
+
         [__NoSideEffect]
+        [nonmutating]
         ref
         {
             __target_switch
@@ -343,8 +532,17 @@ struct TensorView
     }
     __subscript(uint i1, uint i2, uint i3, uint i4) -> T
     {
-        [ForceInline] [__NoSideEffect] get { return load(i1, i2, i3, i4); }
-        [ForceInline] set { store(i1, i2, i3, i4, newValue); }
+        [ForceInline]
+        [__NoSideEffect]
+        get { return load(i1, i2, i3, i4); }
+
+        [ForceInline]
+        [nonmutating]
+        set
+        {
+            store(i1, i2, i3, i4, newValue);
+        }
+
         [__NoSideEffect]
         ref
         {
@@ -358,7 +556,14 @@ struct TensorView
     __subscript(uint4 i) -> T
     {
         [__NoSideEffect][ForceInline] get { return load(i.x, i.y, i.z, i.w); }
-        [ForceInline] set { store(i.x, i.y, i.z, i.w, newValue); }
+
+        [ForceInline]
+        [nonmutating]
+        set
+        {
+            store(i.x, i.y, i.z, i.w, newValue);
+        }
+
         [__NoSideEffect]
         ref
         {
@@ -372,8 +577,16 @@ struct TensorView
     __subscript(uint i1, uint i2, uint i3, uint i4, uint i5) -> T
     {
         [ForceInline] [__NoSideEffect] get { return load(i1, i2, i3, i4, i5); }
-        [ForceInline] set { store(i1, i2, i3, i4, i5, newValue); }
+
+        [ForceInline]
+        [nonmutating]
+        set
+        {
+            store(i1, i2, i3, i4, i5, newValue);
+        }
+
         [__NoSideEffect]
+        [nonmutating]
         ref
         {
             __target_switch
@@ -793,17 +1006,20 @@ struct DiffTensorView
         return diffPair(primal.load(x), reinterpret<T.Differential, T>(diff.load_forward<T>(x)));
     }
 
+    [ForceInline]
     __generic<let N : int>
     DifferentialPair<T> __load_forward(vector<uint, N> x)
     {
         return diffPair(primal.load(x), reinterpret<T.Differential, T>(diff.load_forward<T, N>(x)));
     }
 
+    [ForceInline]
     void __load_backward(uint x, T.Differential dOut)
     {
         diff.load_backward<T>(x, reinterpret<T, T.Differential>(dOut));
     }
 
+    [ForceInline]
     __generic<let N : int>
     void __load_backward(vector<uint, N> x, T.Differential dOut)
     {
@@ -832,11 +1048,13 @@ struct DiffTensorView
         diff.store_forward<T, N>(x, reinterpret<T, T.Differential>(dpval.d));
     }
 
+    [ForceInline]
     void __store_backward(uint x, inout DifferentialPair<T> dpval)
     {
         dpval = diffPair(dpval.p, reinterpret<T.Differential, T>(diff.store_backward<T>(x)));
     }
 
+    [ForceInline]
     __generic<let N : int>
     void __store_backward(vector<uint, N> x, inout DifferentialPair<T> dpval)
     {
@@ -846,63 +1064,70 @@ struct DiffTensorView
     __subscript(uint index)->T
     {
         [__unsafeForceInlineEarly] [Differentiable] [__NoSideEffect] get { return load(index); }
-        [__unsafeForceInlineEarly] [Differentiable] set { store(index, newValue); }
+        [__unsafeForceInlineEarly] [Differentiable] [nonmutating] set { store(index, newValue); }
 
         [__NoSideEffect]
+        [nonmutating]
         ref;
     }
 
     __subscript(uint2 index)->T
     {
         [__unsafeForceInlineEarly] [Differentiable] [__NoSideEffect] get { return load(index); }
-        [__unsafeForceInlineEarly] [Differentiable] set { store(index, newValue); }
+        [__unsafeForceInlineEarly] [Differentiable] [nonmutating] set { store(index, newValue); }
 
         [__NoSideEffect]
+        [nonmutating]
         ref;
     }
 
     __subscript(uint x, uint y)->T
     {
         [__unsafeForceInlineEarly] [Differentiable] [__NoSideEffect] get { return load(uint2(x, y)); }
-        [__unsafeForceInlineEarly] [Differentiable] set { store(uint2(x, y), newValue); }
+        [__unsafeForceInlineEarly] [Differentiable] [nonmutating] set { store(uint2(x, y), newValue); }
 
         [__NoSideEffect]
+        [nonmutating]
         ref;
     }
 
     __subscript(uint3 index)->T
     {
         [__unsafeForceInlineEarly] [Differentiable] [__NoSideEffect] get { return load(index); }
-        [__unsafeForceInlineEarly] [Differentiable] set { store(index, newValue); }
+        [__unsafeForceInlineEarly] [Differentiable] [nonmutating] set { store(index, newValue); }
 
         [__NoSideEffect]
+        [nonmutating]
         ref;
     }
 
     __subscript(uint x, uint y, uint z)->T
     {
         [__unsafeForceInlineEarly] [Differentiable] [__NoSideEffect] get { return load(uint3(x, y, z)); }
-        [__unsafeForceInlineEarly] [Differentiable] set { store(uint3(x, y, z), newValue); }
+        [__unsafeForceInlineEarly] [Differentiable] [nonmutating] set { store(uint3(x, y, z), newValue); }
 
         [__NoSideEffect]
+        [nonmutating]
         ref;
     }
 
     __subscript(uint4 index)->T
     {
         [__unsafeForceInlineEarly] [Differentiable] [__NoSideEffect] get { return load(index); }
-        [__unsafeForceInlineEarly] [Differentiable] set { store(index, newValue); }
+        [__unsafeForceInlineEarly] [Differentiable] [nonmutating] set { store(index, newValue); }
 
         [__NoSideEffect]
+        [nonmutating]
         ref;
     }
 
     __subscript(uint x, uint y, uint z, uint w)->T
     {
         [__unsafeForceInlineEarly] [Differentiable] [__NoSideEffect] get { return load(uint4(x, y, z, w)); }
-        [__unsafeForceInlineEarly] [Differentiable] set { store(uint4(x, y, z, w), newValue); }
+        [__unsafeForceInlineEarly] [Differentiable] [nonmutating] set { store(uint4(x, y, z, w), newValue); }
 
         [__NoSideEffect]
+        [nonmutating]
         ref;
     }
 
@@ -930,11 +1155,13 @@ struct DiffTensorView
         return diffPair(primal.load(x), reinterpret<T.Differential, T>(diff.loadOnce_forward<T, N>(x)));
     }
 
+    [ForceInline]
     void __loadOnce_backward(uint x, T.Differential dOut)
     {
         diff.loadOnce_backward<T>(x, reinterpret<T, T.Differential>(dOut));
     }
 
+    [ForceInline]
     __generic<let N : int>
     void __loadOnce_backward(vector<uint, N> x, T.Differential dOut)
     {
@@ -963,11 +1190,13 @@ struct DiffTensorView
         diff.storeOnce_forward<T, N>(x, reinterpret<T, T.Differential>(dpval.d));
     }
 
+    [ForceInline]
     void __storeOnce_backward(uint x, inout DifferentialPair<T> dpval)
     {
         dpval = diffPair(dpval.p, reinterpret<T.Differential, T>(diff.storeOnce_backward<T>(x)));
     }
 
+    [ForceInline]
     __generic<let N : int>
     void __storeOnce_backward(vector<uint, N> x, inout DifferentialPair<T> dpval)
     {
@@ -1160,6 +1389,37 @@ extension Array<T, N> : IDifferentiable
         for (int i = 0; i < N; i++)
             result[i] = T.dmul<U>(a, b[i]);
         return result;
+    }
+}
+
+__generic<T : IDifferentiablePtrType, let N : int>
+extension Array<T, N> : IDifferentiablePtrType
+{
+    typedef Array<T.Differential, N> Differential;
+}
+
+__generic<each T : IDifferentiable>
+extension Tuple<T> : IDifferentiable
+{
+    typealias Differential = Tuple<expand(each T).Differential>;
+
+    [__unsafeForceInlineEarly]
+    static Differential dzero()
+    {
+        return makeTuple(expand (each T).dzero());
+    }
+
+    [__unsafeForceInlineEarly]
+    static Differential dadd(Differential a, Differential b)
+    {
+        return makeTuple(expand(each T).dadd(each a, each b));
+    }
+
+    __generic<U : __BuiltinRealType>
+    [__unsafeForceInlineEarly]
+    static Differential dmul(U a, Differential b)
+    {
+        return makeTuple(expand(each T).dmul(a, each b));
     }
 }
 

@@ -1,9 +1,11 @@
 //TEST(smoke):COMPARE_HLSL_RENDER:
+//DISABLE_TEST(smoke):COMPARE_HLSL_RENDER:-mtl
 //TEST_INPUT: Texture2D(size=16, content=chessboard, format=R32_FLOAT):name g_texture
 //TEST_INPUT: Sampler :name g_sampler
 
-Texture2D<float> g_texture : register(t0);
-SamplerState g_sampler : register(s0);
+Texture2D<float> g_texture;
+
+SamplerState g_sampler;
 
 cbuffer Uniforms
 {

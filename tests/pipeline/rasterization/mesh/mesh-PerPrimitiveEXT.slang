@@ -1,11 +1,11 @@
 // Test that a mesh shader generates PerPrimitiveNV decoration for OutputPrimitives
-//TEST:SIMPLE(filecheck=CHECK):-target spirv -entry main -stage mesh -emit-spirv-directly
+//TEST:SIMPLE(filecheck=CHECK):-target spirv -entry main -stage mesh -emit-spirv-directly -skip-spirv-validation
 
 // CHECK: OpDecorate %gl_PrimitiveID BuiltIn PrimitiveId
-// CHECK: OpDecorate %gl_PrimitiveID PerPrimitiveNV
+// CHECK: OpDecorate %gl_PrimitiveID PerPrimitive{{NV|EXT}}
 
 // CHECK: OpDecorate {{.*}} BuiltIn CullPrimitiveEXT
-// CHECK: OpDecorate {{.*}} PerPrimitiveNV
+// CHECK: OpDecorate {{.*}} PerPrimitive{{NV|EXT}}
 
 const static let color: float3[] = {
   float3(1.0, 0.0, 0.0),

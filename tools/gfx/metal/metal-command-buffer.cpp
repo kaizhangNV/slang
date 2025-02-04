@@ -1,10 +1,10 @@
 // metal-command-buffer.cpp
 #include "metal-command-buffer.h"
 
-#include "metal-device.h"
 #include "metal-command-encoder.h"
-#include "metal-shader-object.h"
 #include "metal-command-queue.h"
+#include "metal-device.h"
+#include "metal-shader-object.h"
 
 namespace gfx
 {
@@ -21,17 +21,17 @@ ICommandBuffer* CommandBufferImpl::getInterface(const Guid& guid)
     return nullptr;
 }
 
-void CommandBufferImpl::comFree() { }
-
-Result CommandBufferImpl::init(DeviceImpl* renderer, TransientResourceHeapImpl* transientHeap)
+Result CommandBufferImpl::init(DeviceImpl* device, TransientResourceHeapImpl* transientHeap)
 {
-    m_renderer = renderer;
-    m_commandBuffer = m_renderer->m_commandQueue->commandBuffer();
+    m_device = device;
+    m_commandBuffer = NS::RetainPtr(m_device->m_commandQueue->commandBuffer());
     return SLANG_OK;
 }
 
 void CommandBufferImpl::encodeRenderCommands(
-    IRenderPassLayout* renderPass, IFramebuffer* framebuffer, IRenderCommandEncoder** outEncoder)
+    IRenderPassLayout* renderPass,
+    IFramebuffer* framebuffer,
+    IRenderCommandEncoder** outEncoder)
 {
     if (!m_renderCommandEncoder)
     {
@@ -74,13 +74,67 @@ void CommandBufferImpl::encodeRayTracingCommands(IRayTracingCommandEncoder** out
 
 void CommandBufferImpl::close()
 {
-    //m_commandBuffer->commit();
+    // m_commandBuffer->commit();
 }
 
 Result CommandBufferImpl::getNativeHandle(InteropHandle* outHandle)
 {
-    return SLANG_E_NOT_IMPLEMENTED;
+    outHandle->api = InteropHandleAPI::Metal;
+    outHandle->handleValue = reinterpret_cast<intptr_t>(m_commandBuffer.get());
+    return SLANG_OK;
 }
+
+MTL::RenderCommandEncoder* CommandBufferImpl::getMetalRenderCommandEncoder(
+    MTL::RenderPassDescriptor* renderPassDesc)
+{
+    if (!m_metalRenderCommandEncoder)
+    {
+        endMetalCommandEncoder();
+        m_metalRenderCommandEncoder =
+            NS::RetainPtr(m_commandBuffer->renderCommandEncoder(renderPassDesc));
+    }
+    return m_metalRenderCommandEncoder.get();
+}
+
+MTL::ComputeCommandEncoder* CommandBufferImpl::getMetalComputeCommandEncoder()
+{
+    if (!m_metalComputeCommandEncoder)
+    {
+        endMetalCommandEncoder();
+        m_metalComputeCommandEncoder = NS::RetainPtr(m_commandBuffer->computeCommandEncoder());
+    }
+    return m_metalComputeCommandEncoder.get();
+}
+
+MTL::BlitCommandEncoder* CommandBufferImpl::getMetalBlitCommandEncoder()
+{
+    if (!m_metalBlitCommandEncoder)
+    {
+        endMetalCommandEncoder();
+        m_metalBlitCommandEncoder = NS::RetainPtr(m_commandBuffer->blitCommandEncoder());
+    }
+    return m_metalBlitCommandEncoder.get();
+}
+
+void CommandBufferImpl::endMetalCommandEncoder()
+{
+    if (m_metalRenderCommandEncoder)
+    {
+        m_metalRenderCommandEncoder->endEncoding();
+        m_metalRenderCommandEncoder.reset();
+    }
+    if (m_metalComputeCommandEncoder)
+    {
+        m_metalComputeCommandEncoder->endEncoding();
+        m_metalComputeCommandEncoder.reset();
+    }
+    if (m_metalBlitCommandEncoder)
+    {
+        m_metalBlitCommandEncoder->endEncoding();
+        m_metalBlitCommandEncoder.reset();
+    }
+}
+
 
 } // namespace metal
 } // namespace gfx

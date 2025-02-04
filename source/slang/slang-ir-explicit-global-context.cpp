@@ -1,8 +1,9 @@
 // slang-ir-explicit-global-context.cpp
 #include "slang-ir-explicit-global-context.h"
 
-#include "slang-ir-insts.h"
 #include "slang-ir-clone.h"
+#include "slang-ir-insts.h"
+#include "slang-ir-util.h"
 
 namespace Slang
 {
@@ -12,22 +13,156 @@ namespace Slang
 // thread-group, and wrap them up in an explicit "context"
 // type that gets passed between functions.
 
+enum class GlobalObjectKind : UInt
+{
+    None = 0,
+    GlobalVar = 1 << 0,
+    GlobalParam = 1 << 1,
+    All = 0xFFFFFFFF,
+};
+
+enum class HoistGlobalVarOptions : UInt
+{
+    PlainGlobal = 0,
+    SharedGlobal = 1 << 0,
+    RaytracingGlobal = 1 << 1,
+    All = 0xFFFFFFFF,
+};
+
 struct IntroduceExplicitGlobalContextPass
 {
-    IRModule*       m_module = nullptr;
-    CodeGenTarget   m_target = CodeGenTarget::Unknown;
 
-    IRStructType*       m_contextStructType     = nullptr;
-    IRPtrType*          m_contextStructPtrType  = nullptr;
+    // TODO: (#4742) Discontinuity of AddressSpace values between targets
+    // (SpvStorageClassFunction vs. AddressSpace::ThreadLocal) needs
+    // to be addressed. This means `addressSpaceOfLocals` may be refactored out.
 
-    List<IRGlobalParam*> m_globalParams;
-    List<IRGlobalVar*>  m_globalVars;
-    List<IRFunc*>       m_entryPoints;
-
-    enum class GlobalObjectKind
+    /// Target specific options to manage `IntroduceExplicitGlobalContextPass`
+    class ExplicitContextPolicy
     {
-        GlobalParam, GlobalVar
+    public:
+        ExplicitContextPolicy(CodeGenTarget inTarget)
+            : target(inTarget)
+        {
+            switch (target)
+            {
+            case CodeGenTarget::SPIRV:
+            case CodeGenTarget::SPIRVAssembly:
+                hoistableGlobalObjectKind = GlobalObjectKind::GlobalVar;
+                requiresFuncTypeCorrectionPass = true;
+                addressSpaceOfLocals = AddressSpace::Function;
+                hoistGlobalVarOptions = HoistGlobalVarOptions::PlainGlobal;
+                break;
+            case CodeGenTarget::CUDASource:
+                hoistableGlobalObjectKind = GlobalObjectKind::GlobalVar;
+
+                // One important exception is that CUDA *does* support
+                // global variables with the `__shared__` qualifer, with
+                // semantics that exactly match HLSL/Slang `groupshared`.
+                //
+                // We thus need to skip processing of global variables
+                // that were marked `groupshared`. In our current IR,
+                // this is represented as a variable with the `@GroupShared`
+                // rate on its type.
+                //
+                hoistGlobalVarOptions = HoistGlobalVarOptions(
+                    0 | (UInt)HoistGlobalVarOptions::PlainGlobal |
+                    (UInt)HoistGlobalVarOptions::RaytracingGlobal);
+                break;
+            }
+        }
+
+        bool canHoistType(GlobalObjectKind hoistable)
+        {
+            return (UInt)hoistableGlobalObjectKind & (UInt)hoistable;
+        }
+
+        bool canHoistGlobalVar(IRInst* inst)
+        {
+            if (!((UInt)hoistGlobalVarOptions & (UInt)HoistGlobalVarOptions::SharedGlobal) &&
+                as<IRGroupSharedRate>(inst->getRate()))
+                return false;
+
+            if (!((UInt)hoistGlobalVarOptions & (UInt)HoistGlobalVarOptions::RaytracingGlobal))
+            {
+                for (auto decoration : inst->getDecorations())
+                {
+                    switch (decoration->getOp())
+                    {
+                    case kIROp_VulkanRayPayloadDecoration:
+                    case kIROp_VulkanRayPayloadInDecoration:
+                    case kIROp_VulkanCallablePayloadDecoration:
+                    case kIROp_VulkanCallablePayloadInDecoration:
+                    case kIROp_VulkanHitObjectAttributesDecoration:
+                    case kIROp_VulkanHitAttributesDecoration:
+                        return false;
+                    default:
+                        continue;
+                    };
+                }
+            }
+
+            // Do not move specialization constants to context.
+            switch (target)
+            {
+            case CodeGenTarget::Metal:
+            case CodeGenTarget::MetalLib:
+            case CodeGenTarget::MetalLibAssembly:
+                {
+                    auto varLayout = findVarLayout(inst);
+                    if (varLayout &&
+                        varLayout->findOffsetAttr(LayoutResourceKind::SpecializationConstant))
+                        return false;
+                }
+            }
+            return true;
+        }
+
+        bool requiresFuncTypeCorrection() { return requiresFuncTypeCorrectionPass; }
+
+        AddressSpace getAddressSpaceOfLocal() { return addressSpaceOfLocals; }
+
+    private:
+        HoistGlobalVarOptions hoistGlobalVarOptions = HoistGlobalVarOptions::All;
+        GlobalObjectKind hoistableGlobalObjectKind = GlobalObjectKind::All;
+        bool requiresFuncTypeCorrectionPass = false;
+        AddressSpace addressSpaceOfLocals = AddressSpace::ThreadLocal;
+        CodeGenTarget target;
     };
+
+    IntroduceExplicitGlobalContextPass(IRModule* module, CodeGenTarget target)
+        : m_module(module), m_target(target), m_options(target)
+    {
+    }
+
+    IRModule* m_module = nullptr;
+    CodeGenTarget m_target = CodeGenTarget::Unknown;
+
+    IRStructType* m_contextStructType = nullptr;
+    IRPtrType* m_contextStructPtrType = nullptr;
+
+    struct GlobalParamInfo
+    {
+        // Original global param inst.
+        IRGlobalParam* globalParam = nullptr;
+
+        // New entry point param that is created by this pass.
+        IRParam* entryPointParam = nullptr;
+
+        // Orignating entry point obtained from entry point param decoration, if it exists.
+        IRFunc* originatingEntryPoint = nullptr;
+    };
+
+    List<GlobalParamInfo> m_globalParams;
+    List<IRGlobalVar*> m_globalVars;
+    List<IRFunc*> m_entryPoints;
+
+    ExplicitContextPolicy m_options;
+
+    AddressSpace getAddressSpaceOfLocal() { return m_options.getAddressSpaceOfLocal(); }
+
+    bool canHoistType(GlobalObjectKind hoistable) { return m_options.canHoistType(hoistable); }
+
+    bool canHoistGlobalVar(IRInst* inst) { return m_options.canHoistGlobalVar(inst); }
 
     void processModule()
     {
@@ -39,12 +174,14 @@ struct IntroduceExplicitGlobalContextPass
         // pass to collect these entities into explicit lists to simplify
         // looping over them later.
         //
-        for( auto inst : m_module->getGlobalInsts() )
+        for (auto inst : m_module->getGlobalInsts())
         {
-            switch( inst->getOp() )
+            switch (inst->getOp())
             {
             case kIROp_GlobalVar:
                 {
+                    if (!canHoistType(GlobalObjectKind::GlobalVar))
+                        continue;
                     // A "global variable" in HLSL (and thus Slang) is actually
                     // a weird kind of thread-local variable, and so it cannot
                     // actually be lowered to a global variable on targets where
@@ -58,20 +195,8 @@ struct IntroduceExplicitGlobalContextPass
                         continue;
                     }
 
-                    // One important exception is that CUDA *does* support
-                    // global variables with the `__shared__` qualifer, with
-                    // semantics that exactly match HLSL/Slang `groupshared`.
-                    //
-                    // We thus need to skip processing of global variables
-                    // that were marked `groupshared`. In our current IR,
-                    // this is represented as a variable with the `@GroupShared`
-                    // rate on its type.
-                    //
-                    if( m_target == CodeGenTarget::CUDASource )
-                    {
-                        if( as<IRGroupSharedRate>(globalVar->getRate()) )
-                            continue;
-                    }
+                    if (!canHoistGlobalVar(globalVar))
+                        continue;
 
                     m_globalVars.add(globalVar);
                 }
@@ -79,11 +204,15 @@ struct IntroduceExplicitGlobalContextPass
 
             case kIROp_GlobalParam:
                 {
+                    if (!canHoistType(GlobalObjectKind::GlobalParam))
+                        continue;
                     // Global parameters are another HLSL/Slang concept
                     // that doesn't have a parallel in langauges like C/C++.
                     //
                     auto globalParam = cast<IRGlobalParam>(inst);
 
+                    if (!canHoistGlobalVar(globalParam))
+                        continue;
 
                     // One detail we need to be careful about is that as a result
                     // of legalizing the varying parameters of compute kernels to
@@ -117,10 +246,25 @@ struct IntroduceExplicitGlobalContextPass
                     // For CUDA output, we want to leave the global uniform
                     // parameter where it is, because it will translate to
                     // a global `__constant__` variable.
-                    if(m_target == CodeGenTarget::CUDASource)
+                    if (m_target == CodeGenTarget::CUDASource)
                         continue;
 
-                    m_globalParams.add(globalParam);
+                    GlobalParamInfo globalParamInfo;
+                    globalParamInfo.globalParam = globalParam;
+
+                    // Entry point param decorations are not required anymore after this pass and
+                    // must be removed for entry point param emit. Remoeving it here prevents the
+                    // decoration from being cloned when creating struct keys and entry point
+                    // parameters.
+                    if (const auto entryPointParamDecoration =
+                            globalParam->findDecoration<IREntryPointParamDecoration>())
+                    {
+                        globalParamInfo.originatingEntryPoint =
+                            entryPointParamDecoration->getEntryPoint();
+                        entryPointParamDecoration->removeAndDeallocate();
+                    }
+
+                    m_globalParams.add(globalParamInfo);
                 }
                 break;
 
@@ -134,7 +278,7 @@ struct IntroduceExplicitGlobalContextPass
                     // that represent entry points.
                     //
                     auto func = cast<IRFunc>(inst);
-                    if(!func->findDecoration<IREntryPointDecoration>())
+                    if (!func->findDecoration<IREntryPointDecoration>())
                         continue;
 
                     m_entryPoints.add(func);
@@ -150,7 +294,7 @@ struct IntroduceExplicitGlobalContextPass
         // it is responsible for introducing the explicit entry-point
         // parameter that is used for passing in the global param(s).
         //
-        if( m_target != CodeGenTarget::CPPSource )
+        if (m_target != CodeGenTarget::CPPSource)
         {
             if (m_globalParams.getCount() == 0 && m_globalVars.getCount() == 0)
             {
@@ -165,12 +309,15 @@ struct IntroduceExplicitGlobalContextPass
         // type with a name hint of `KernelContext`.
         //
         m_contextStructType = builder.createStructType();
-        builder.addNameHintDecoration(m_contextStructType, UnownedTerminatedStringSlice("KernelContext"));
+        builder.addNameHintDecoration(
+            m_contextStructType,
+            UnownedTerminatedStringSlice("KernelContext"));
 
         // The context will usually be passed around by pointer,
         // so we get and cache that pointer type up front.
         //
-        m_contextStructPtrType = builder.getPtrType(kIROp_PtrType, m_contextStructType, (IRIntegerValue)AddressSpace::ThreadLocal);
+        m_contextStructPtrType =
+            builder.getPtrType(kIROp_PtrType, m_contextStructType, getAddressSpaceOfLocal());
 
 
         // The first step will be to create fields in the `KernelContext`
@@ -185,15 +332,20 @@ struct IntroduceExplicitGlobalContextPass
             // For the parameter representing all the global uniform shader
             // parameters, we create a field that exactly matches its type.
             //
-
-            createContextStructField(globalParam, GlobalObjectKind::GlobalParam, globalParam->getFullType());
+            createContextStructField(
+                globalParam.globalParam,
+                GlobalObjectKind::GlobalParam,
+                globalParam.globalParam->getFullType());
         }
-        for( auto globalVar : m_globalVars )
+        for (auto globalVar : m_globalVars)
         {
             // A `IRGlobalVar` represents a pointer to where the variable is stored,
             // so we need to create a field of the pointed-to type to represent it.
             //
-            createContextStructField(globalVar, GlobalObjectKind::GlobalVar, getGlobalVarPtrType(globalVar));
+            createContextStructField(
+                globalVar,
+                GlobalObjectKind::GlobalVar,
+                getGlobalVarPtrType(globalVar));
         }
 
         // Once all the fields have been created, we can process the entry points.
@@ -204,7 +356,7 @@ struct IntroduceExplicitGlobalContextPass
         // The local variable introduced here will be registered as the representation
         // of the context to be used in the body of the entry point.
         //
-        for( auto entryPoint : m_entryPoints )
+        for (auto entryPoint : m_entryPoints)
         {
             createContextForEntryPoint(entryPoint);
         }
@@ -221,11 +373,22 @@ struct IntroduceExplicitGlobalContextPass
         //
         for (auto globalParam : m_globalParams)
         {
-            replaceUsesOfGlobalParam(globalParam);
+            replaceUsesOfGlobalParam(globalParam.globalParam);
         }
-        for( auto globalVar : m_globalVars )
+        for (auto globalVar : m_globalVars)
         {
             replaceUsesOfGlobalVar(globalVar);
+        }
+
+        // SPIRV requires a correct IR func-type to emit properly
+        if (m_options.requiresFuncTypeCorrection())
+        {
+            for (auto pairOfFuncs : m_mapFuncToContextPtr)
+            {
+                if (pairOfFuncs.second->getOp() == kIROp_Var)
+                    continue;
+                fixUpFuncType(pairOfFuncs.first);
+            }
         }
     }
 
@@ -258,7 +421,7 @@ struct IntroduceExplicitGlobalContextPass
         if (kind == GlobalObjectKind::GlobalVar)
         {
             auto ptrType = as<IRPtrTypeBase>(type);
-            if (ptrType->getAddressSpace() == (IRIntegerValue)AddressSpace::GroupShared)
+            if (ptrType->getAddressSpace() == AddressSpace::GroupShared)
             {
                 fieldDataType = ptrType;
                 needDereference = true;
@@ -283,7 +446,7 @@ struct IntroduceExplicitGlobalContextPass
         // for the instruction, so that we can use the key
         // to access the field later.
         //
-        m_mapInstToContextFieldInfo.add(originalInst, ContextFieldInfo{ key, needDereference });
+        m_mapInstToContextFieldInfo.add(originalInst, ContextFieldInfo{key, needDereference});
     }
 
     void createContextForEntryPoint(IRFunc* entryPointFunc)
@@ -292,7 +455,7 @@ struct IntroduceExplicitGlobalContextPass
         // entry points that have definitions.
         //
         auto firstBlock = entryPointFunc->getFirstBlock();
-        if(!firstBlock)
+        if (!firstBlock)
             return;
 
         IRBuilder builder(m_module);
@@ -307,23 +470,32 @@ struct IntroduceExplicitGlobalContextPass
         // then we need to introduce an explicit parameter onto
         // each entry-point function to represent it.
         //
-        struct GlobalParamInfo
-        {
-            IRGlobalParam*  globalParam;
-            IRParam*        entryPointParam;
-        };
-        List<GlobalParamInfo> entryPointParams;
+
+        List<GlobalParamInfo> entryPointParamsToAdd;
         for (auto globalParam : m_globalParams)
         {
-            auto entryPointParam = builder.createParam(globalParam->getFullType());
+            // Do not add global param to current entry point if global param
+            // explicitly originates from a different entry point.
+            if (globalParam.originatingEntryPoint &&
+                globalParam.originatingEntryPoint != entryPointFunc)
+            {
+                continue;
+            }
+
+            globalParam.entryPointParam =
+                builder.createParam(globalParam.globalParam->getFullType());
             IRCloneEnv cloneEnv;
-            cloneInstDecorationsAndChildren(&cloneEnv, m_module, globalParam, entryPointParam);
-            entryPointParams.add({globalParam, entryPointParam});
+            cloneInstDecorationsAndChildren(
+                &cloneEnv,
+                m_module,
+                globalParam.globalParam,
+                globalParam.entryPointParam);
+            entryPointParamsToAdd.add(globalParam);
 
             // The new parameter will be the last one in the
             // parameter list of the entry point.
             //
-            entryPointParam->insertBefore(firstOrdinary);
+            globalParam.entryPointParam->insertBefore(firstOrdinary);
         }
 
         if (m_target == CodeGenTarget::CPPSource && m_globalParams.getCount() == 0)
@@ -348,7 +520,7 @@ struct IntroduceExplicitGlobalContextPass
         // to inialize the corresponding field of the `KernelContext`
         // before moving on with execution of the kernel body.
         //
-        for (auto entryPointParam : entryPointParams)
+        for (auto entryPointParam : entryPointParamsToAdd)
         {
             auto fieldInfo = m_mapInstToContextFieldInfo[entryPointParam.globalParam];
             auto fieldType = entryPointParam.globalParam->getFullType();
@@ -380,17 +552,19 @@ struct IntroduceExplicitGlobalContextPass
             auto fieldInfo = m_mapInstToContextFieldInfo[globalVar];
             if (fieldInfo.needDereference)
             {
-                auto var = builder.emitVar(globalVar->getDataType()->getValueType(), (IRIntegerValue)AddressSpace::GroupShared);
+                auto var = builder.emitVar(
+                    globalVar->getDataType()->getValueType(),
+                    AddressSpace::GroupShared);
                 if (auto nameDecor = globalVar->findDecoration<IRNameHintDecoration>())
                 {
                     builder.addNameHintDecoration(var, nameDecor->getName());
                 }
-                auto ptrPtrType = builder.getPtrType(getGlobalVarPtrType(globalVar), AddressSpace::ThreadLocal);
+                auto ptrPtrType =
+                    builder.getPtrType(getGlobalVarPtrType(globalVar), getAddressSpaceOfLocal());
                 auto fieldPtr = builder.emitFieldAddress(ptrPtrType, contextVarPtr, fieldInfo.key);
                 builder.emitStore(fieldPtr, var);
             }
         }
-
     }
 
     void replaceUsesOfGlobalParam(IRGlobalParam* globalParam)
@@ -410,7 +584,7 @@ struct IntroduceExplicitGlobalContextPass
         // being changed while we walk it.
         //
         IRUse* nextUse = nullptr;
-        for( IRUse* use = globalParam->firstUse; use; use = nextUse )
+        for (IRUse* use = globalParam->firstUse; use; use = nextUse)
         {
             nextUse = use->nextUse;
 
@@ -436,9 +610,13 @@ struct IntroduceExplicitGlobalContextPass
         IRBuilder builder(globalVar);
         if (as<IRGroupSharedRate>(globalVar->getRate()))
         {
-            return builder.getPtrType(globalVar->getDataType()->getValueType(), AddressSpace::GroupShared);
+            return builder.getPtrType(
+                globalVar->getDataType()->getValueType(),
+                AddressSpace::GroupShared);
         }
-        return builder.getPtrType(globalVar->getDataType()->getValueType(), AddressSpace::ThreadLocal);
+        return builder.getPtrType(
+            globalVar->getDataType()->getValueType(),
+            getAddressSpaceOfLocal());
     }
 
     void replaceUsesOfGlobalVar(IRGlobalVar* globalVar)
@@ -452,21 +630,25 @@ struct IntroduceExplicitGlobalContextPass
 
         auto ptrType = getGlobalVarPtrType(globalVar);
         if (fieldInfo.needDereference)
-            ptrType = builder.getPtrType(kIROp_PtrType, ptrType, AddressSpace::ThreadLocal);
+            ptrType = builder.getPtrType(kIROp_PtrType, ptrType, getAddressSpaceOfLocal());
 
         // We then iterate over the uses of the variable,
         // being careful to defend against the use/def information
         // being changed while we walk it.
         //
         IRUse* nextUse = nullptr;
-        for( IRUse* use = globalVar->firstUse; use; use = nextUse )
+        for (IRUse* use = globalVar->firstUse; use; use = nextUse)
         {
             nextUse = use->nextUse;
+            auto user = use->getUser();
+
+            // Ensure the use site checked actually requires a replacement
+            if (as<IRDecoration>(user))
+                continue;
 
             // At each use site, we need to look up the context
             // pointer that is appropriate for that use.
             //
-            auto user = use->getUser();
             auto contextParam = findOrCreateContextPtrForInst(user);
             builder.setInsertBefore(user);
 
@@ -487,9 +669,9 @@ struct IntroduceExplicitGlobalContextPass
         // an instruction, we need to find the enclosing
         // function and use whatever context pointer it uses.
         //
-        for( IRInst* i = inst; i; i = i->getParent() )
+        for (IRInst* i = inst; i; i = i->getParent())
         {
-            if( auto func = as<IRFunc>(i) )
+            if (auto func = as<IRFunc>(i))
             {
                 return findOrCreateContextPtrForFunc(func);
             }
@@ -511,7 +693,7 @@ struct IntroduceExplicitGlobalContextPass
         // If we already created such a pointer (perhaps because
         // `func` is an entry point), then we are home free.
         //
-        if( auto found = m_mapFuncToContextPtr.tryGetValue(func) )
+        if (auto found = m_mapFuncToContextPtr.tryGetValue(func))
         {
             return *found;
         }
@@ -575,14 +757,14 @@ struct IntroduceExplicitGlobalContextPass
         }
 
         // Fix up all of the call uses
-        for( auto call : callUses)
+        for (auto call : callUses)
         {
             // We are going to construct a new call to `func`
             // that has all of the arguments of the original call...
             //
             UInt originalArgCount = call->getArgCount();
             List<IRInst*> args;
-            for( UInt aa = 0; aa < originalArgCount; ++aa )
+            for (UInt aa = 0; aa < originalArgCount; ++aa)
             {
                 args.add(call->getArg(aa));
             }
@@ -619,15 +801,11 @@ struct IntroduceExplicitGlobalContextPass
     }
 };
 
-    /// Collect global-scope variables/paramters to form an explicit context that gets threaded through
-void introduceExplicitGlobalContext(
-    IRModule*       module,
-    CodeGenTarget   target)
+/// Collect global-scope variables/paramters to form an explicit context that gets threaded through
+void introduceExplicitGlobalContext(IRModule* module, CodeGenTarget target)
 {
-    IntroduceExplicitGlobalContextPass pass;
-    pass.m_module = module;
-    pass.m_target = target;
+    IntroduceExplicitGlobalContextPass pass(module, target);
     pass.processModule();
 }
 
-}
+} // namespace Slang

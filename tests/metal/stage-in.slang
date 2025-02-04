@@ -4,15 +4,15 @@
 // CHECK:     struct VOut{{.*}}
 // CHECK-NEXT:{
 // CHECK-NEXT:    float4 position{{.*}} {{\[\[}}position{{\]\]}};
-// CHECK-NEXT:    float4 vertexColor{{.*}} {{\[\[}}user(_slang_attr){{\]\]}};
-// CHECK-NEXT:    float2 vertexUV{{.*}} {{\[\[}}user(_slang_attr_1){{\]\]}};
+// CHECK-NEXT:    float4 vertexColor{{.*}} {{\[\[}}user(_SLANG_ATTR){{\]\]}};
+// CHECK-NEXT:    float2 vertexUV{{.*}} {{\[\[}}user(_SLANG_ATTR_1){{\]\]}};
 // CHECK-NEXT:    float3 vertexNormal{{.*}} {{\[\[}}user(NORMAL){{\]\]}};
 // CHECK-NEXT:};
 
 // CHECK:     struct vertexInput{{.*}}
 // CHECK-NEXT:{
-// CHECK-NEXT:    float4 position{{.*}} {{\[\[}}attribute(0){{\]\]}} {{\[\[}}user(POSITION){{\]\]}};
-// CHECK-NEXT:    float4 color{{.*}} {{\[\[}}attribute(1){{\]\]}} {{\[\[}}user(COLOR){{\]\]}};
+// CHECK-NEXT:    float4 position{{.*}} {{\[\[}}attribute(0){{\]\]}};
+// CHECK-NEXT:    float4 color{{.*}} {{\[\[}}attribute(1){{\]\]}};
 // CHECK-NEXT:};
 
 // CHECK: {{\[\[}}vertex{{\]\]}} VOut{{.*}} main_vertex(vertexInput{{.*}}{{\[\[}}stage_in{{\]\]}}, uint vid{{.*}}{{\[\[}}vertex_id{{\]\]}}, uint instanceID{{.*}} {{\[\[}}instance_id{{\]\]}})
@@ -24,8 +24,8 @@
 
 // CHECK:     struct pixelInput{{.*}}
 // CHECK-NEXT:{
-// CHECK-NEXT:    float4 vertexColor{{.*}}  {{\[\[}}user(_slang_attr){{\]\]}};
-// CHECK-NEXT:    float2 vertexUV{{.*}} {{\[\[}}user(_slang_attr_1){{\]\]}};
+// CHECK-NEXT:    float4 vertexColor{{.*}}  {{\[\[}}user(_SLANG_ATTR){{\]\]}};
+// CHECK-NEXT:    float2 vertexUV{{.*}} {{\[\[}}user(_SLANG_ATTR_1){{\]\]}};
 // CHECK-NEXT:    float3 vertexNormal{{.*}} {{\[\[}}user(NORMAL){{\]\]}};
 // CHECK-NEXT:};
 

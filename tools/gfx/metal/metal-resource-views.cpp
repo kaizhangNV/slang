@@ -9,35 +9,34 @@ using namespace Slang;
 namespace metal
 {
 
-TextureResourceViewImpl::~TextureResourceViewImpl()
-{
-}
+TextureResourceViewImpl::~TextureResourceViewImpl() {}
 
 Result TextureResourceViewImpl::getNativeHandle(InteropHandle* outHandle)
 {
-    return SLANG_E_NOT_IMPLEMENTED;
+    outHandle->api = InteropHandleAPI::Metal;
+    outHandle->handleValue = reinterpret_cast<uintptr_t>(m_textureView.get());
+    return SLANG_OK;
+}
+
+BufferResourceViewImpl::~BufferResourceViewImpl() {}
+
+Result BufferResourceViewImpl::getNativeHandle(InteropHandle* outHandle)
+{
+    outHandle->api = InteropHandleAPI::Metal;
+    outHandle->handleValue = reinterpret_cast<uintptr_t>(m_buffer->m_buffer.get());
+    return SLANG_OK;
 }
 
 TexelBufferResourceViewImpl::TexelBufferResourceViewImpl(DeviceImpl* device)
     : ResourceViewImpl(ViewType::TexelBuffer, device)
-{}
-
-TexelBufferResourceViewImpl::~TexelBufferResourceViewImpl()
 {
 }
+
+TexelBufferResourceViewImpl::~TexelBufferResourceViewImpl() {}
 
 Result TexelBufferResourceViewImpl::getNativeHandle(InteropHandle* outHandle)
 {
     return SLANG_E_NOT_IMPLEMENTED;
-}
-
-PlainBufferResourceViewImpl::PlainBufferResourceViewImpl(DeviceImpl* device)
-    : ResourceViewImpl(ViewType::PlainBuffer, device)
-{}
-
-Result PlainBufferResourceViewImpl::getNativeHandle(InteropHandle* outHandle)
-{
-    return m_buffer->getNativeResourceHandle(outHandle);
 }
 
 DeviceAddress AccelerationStructureImpl::getDeviceAddress()
@@ -50,9 +49,7 @@ Result AccelerationStructureImpl::getNativeHandle(InteropHandle* outHandle)
     return SLANG_E_NOT_IMPLEMENTED;
 }
 
-AccelerationStructureImpl::~AccelerationStructureImpl()
-{
-}
+AccelerationStructureImpl::~AccelerationStructureImpl() {}
 
 } // namespace metal
 } // namespace gfx

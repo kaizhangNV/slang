@@ -25,7 +25,7 @@ Why do we need `DeclRef`s?
 --------------------------
 
 In a compiler for a simple language, we might represent a reference to a declaration as simply a pointer to the AST node for the declaration, or some kind of handle/ID that references that AST node.
-A reprsentation like that will work in simple cases, for example:
+A representation like that will work in simple cases, for example:
 
 ```hlsl
 struct Cell { int value };
@@ -34,7 +34,7 @@ Cell a = { 3 };
 int b = a.value + 4;
 ```
 
-In this case, the expression node for `a.value` can directly reference the declaration of the field `Cell::value`, and from that we can conclude that the type of the field (and hence the expression) is `int.
+In this case, the expression node for `a.value` can directly reference the declaration of the field `Cell::value`, and from that we can conclude that the type of the field (and hence the expression) is `int`.
 
 In contrast, things get more complicated as soon as we have a language with generics:
 
@@ -158,7 +158,7 @@ There are many queries like "what is the return type of this function?" that typ
 The `syntax.h` file defines helpers for most of the existing declaration AST nodes for querying properties that should represent substitutions (the type of a variable, the return type of a function, etc.).
 If you are writing code that is working with a `DeclRef`, try to use these accessors and avoid being tempted to extract the bare declaration and start querying it.
 
-Some things like `Modifier`s aren't (currently) affected by substitutions, so it can make sense to query them on a bare declaration instead of a `DeclRef.
+Some things like `Modifier`s aren't (currently) affected by substitutions, so it can make sense to query them on a bare declaration instead of a `DeclRef`.
 
 Conclusion
 ----------

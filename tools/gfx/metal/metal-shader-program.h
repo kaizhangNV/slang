@@ -15,21 +15,25 @@ namespace metal
 class ShaderProgramImpl : public ShaderProgramBase
 {
 public:
-    ShaderProgramImpl(DeviceImpl* device);
+    DeviceImpl* m_device;
+    RefPtr<RootShaderObjectLayoutImpl> m_rootObjectLayout;
 
+    struct Module
+    {
+        SlangStage stage;
+        String entryPointName;
+        ComPtr<ISlangBlob> code;
+        NS::SharedPtr<MTL::Library> library;
+    };
+
+    List<Module> m_modules;
+
+    ShaderProgramImpl(DeviceImpl* device);
     ~ShaderProgramImpl();
 
-    virtual void comFree() override;
-
-    BreakableReference<DeviceImpl> m_device;
-
-    List<String> m_entryPointNames;
-    List<ComPtr<ISlangBlob>> m_codeBlobs; //< To keep storage of code in scope
-    List<MTL::Library*> m_modules;
-    RefPtr<RootShaderObjectLayout> m_rootObjectLayout;
-
     virtual Result createShaderModule(
-        slang::EntryPointReflection* entryPointInfo, ComPtr<ISlangBlob> kernelCode) override;
+        slang::EntryPointReflection* entryPointInfo,
+        ComPtr<ISlangBlob> kernelCode) override;
 };
 
 

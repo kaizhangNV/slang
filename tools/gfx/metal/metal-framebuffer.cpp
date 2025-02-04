@@ -1,8 +1,9 @@
 // metal-framebuffer.cpp
 #include "metal-framebuffer.h"
+
 #include "metal-device.h"
-#include "metal-resource-views.h"
 #include "metal-helper-functions.h"
+#include "metal-resource-views.h"
 
 namespace gfx
 {
@@ -12,60 +13,59 @@ using namespace Slang;
 namespace metal
 {
 
-FramebufferLayoutImpl::~FramebufferLayoutImpl()
+Result FramebufferLayoutImpl::init(const IFramebufferLayout::Desc& desc)
 {
-    //m_renderPass->release();
-}
-
-Result FramebufferLayoutImpl::init(DeviceImpl* renderer, const IFramebufferLayout::Desc& desc)
-{
-    // Metal doesn't have a notion of Framebuffers or FramebufferLayouts per se.
-    // We simply stash the desc and use it when creating the (convenience) Framebuffer
-    m_renderer = renderer;
-    m_desc = desc;
+    for (Index i = 0; i < desc.renderTargetCount; ++i)
+    {
+        m_renderTargets.add(desc.renderTargets[i]);
+    }
+    if (desc.depthStencil)
+    {
+        m_depthStencil = *desc.depthStencil;
+    }
+    else
+    {
+        m_depthStencil = {};
+    }
     return SLANG_OK;
 }
 
-FramebufferImpl::~FramebufferImpl()
+Result FramebufferImpl::init(DeviceImpl* device, const IFramebuffer::Desc& desc)
 {
-}
-
-Result FramebufferImpl::init(DeviceImpl* renderer, const IFramebuffer::Desc& desc)
-{
-    m_renderer = renderer;
+    m_device = device;
     m_layout = static_cast<FramebufferLayoutImpl*>(desc.layout);
-    m_width = m_height = 1;
-
-    TextureResourceViewImpl* dsv = static_cast<TextureResourceViewImpl*>(desc.depthStencilView);
-
-    // Get frame dimensions from attachments.
-    if (dsv)
+    m_renderTargetViews.setCount(desc.renderTargetCount);
+    for (Index i = 0; i < desc.renderTargetCount; ++i)
     {
-        // If we have a depth attachment, get frame size from there.
-        auto size = dsv->m_texture->getDesc()->size;
-        auto viewDesc = dsv->getViewDesc();
-        m_width = Math::Max(1u, uint32_t(size.width >> viewDesc->subresourceRange.mipLevel));
-        m_height = Math::Max(1u, uint32_t(size.height >> viewDesc->subresourceRange.mipLevel));
+        m_renderTargetViews[i] = static_cast<TextureResourceViewImpl*>(desc.renderTargetViews[i]);
     }
-    else if (desc.renderTargetCount > 0)
+    m_depthStencilView = static_cast<TextureResourceViewImpl*>(desc.depthStencilView);
+
+    // Determine framebuffer dimensions & sample count;
+    m_width = 1;
+    m_height = 1;
+    m_sampleCount = 1;
+
+    auto visitView = [this](TextureResourceViewImpl* view)
     {
-        // If we don't have a depth attachment, then we must have at least
-        // one color attachment. Get frame dimension from there.
-        auto viewImpl = static_cast<TextureResourceViewImpl*>(desc.renderTargetViews[0]);
-        auto resourceDesc = viewImpl->m_texture->getDesc();
-        auto viewDesc = viewImpl->getViewDesc();
-        auto size = resourceDesc->size;
-        m_width = Math::Max(1u, uint32_t(size.width >> viewDesc->subresourceRange.mipLevel));
-        m_height = Math::Max(1u, uint32_t(size.height >> viewDesc->subresourceRange.mipLevel));
+        const ITextureResource::Desc* textureDesc = view->m_texture->getDesc();
+        const IResourceView::Desc* viewDesc = view->getViewDesc();
+        m_width =
+            Math::Max(1u, uint32_t(textureDesc->size.width >> viewDesc->subresourceRange.mipLevel));
+        m_height = Math::Max(
+            1u,
+            uint32_t(textureDesc->size.height >> viewDesc->subresourceRange.mipLevel));
+        m_sampleCount = Math::Max(m_sampleCount, uint32_t(textureDesc->sampleDesc.numSamples));
+        return SLANG_OK;
+    };
+
+    for (auto view : m_renderTargetViews)
+    {
+        visitView(view);
     }
-
-    // Initialize depthstencil and render target views
-    depthStencilView = desc.depthStencilView;
-
-    renderTargetViews.setCount(desc.renderTargetCount);
-    for (int i = 0; i < desc.renderTargetCount; ++i)
+    if (m_depthStencilView)
     {
-        renderTargetViews[i] = desc.renderTargetViews[i];
+        visitView(m_depthStencilView);
     }
 
     return SLANG_OK;

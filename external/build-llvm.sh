@@ -20,7 +20,7 @@ EOF
 #
 # Some helper functions
 #
-msg(){
+msg() {
   printf "%s\n" "$1" >&2
 }
 
@@ -62,13 +62,35 @@ extra_arguments=()
 
 while [[ "$#" -gt 0 ]]; do
   case $1 in
-  -h | --help) help; exit ;;
-  --repo) repo=$2; shift;;
-  --branch) branch=$2; shift;;
-  --source-dir) source_dir=$2; shift;;
-  --config) config=$2; shift;;
-  --install-prefix) install_prefix=$2; shift;;
-  --) shift; extra_arguments+=("$@"); break;;
+  -h | --help)
+    help
+    exit
+    ;;
+  --repo)
+    repo=$2
+    shift
+    ;;
+  --branch)
+    branch=$2
+    shift
+    ;;
+  --source-dir)
+    source_dir=$2
+    shift
+    ;;
+  --config)
+    config=$2
+    shift
+    ;;
+  --install-prefix)
+    install_prefix=$2
+    shift
+    ;;
+  --)
+    shift
+    extra_arguments+=("$@")
+    break
+    ;;
   *)
     msg "Unknown parameter passed: $1"
     help >&2
@@ -108,7 +130,11 @@ cmake_arguments_for_slang=(
   # Requirements for Slang
   -DLLVM_ENABLE_PROJECTS=clang
   "-DLLVM_TARGETS_TO_BUILD=X86;ARM;AArch64"
-  -DLLVM_BUILD_TOOLS=1
+  -DLLVM_BUILD_TOOLS=0
+  # Get LLVM to use the static linked version of the msvc runtime
+  "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded$<$<CONFIG:Debug>:Debug>"
+  "-DLLVM_USE_CRT_RELEASE=MT"
+  "-DLLVM_USE_CRT_DEBUG=MTd"
 )
 build_dir=$source_dir/build
 mkdir -p "$build_dir"

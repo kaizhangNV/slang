@@ -2,14 +2,14 @@
 #include "slang-emit-metal.h"
 
 #include "../core/slang-writer.h"
-
-#include "slang-ir-util.h"
 #include "slang-emit-source-writer.h"
+#include "slang-ir-util.h"
 #include "slang-mangled-lexer.h"
 
 #include <assert.h>
 
-namespace Slang {
+namespace Slang
+{
 
 static const char* kMetalBuiltinPreludeMatrixCompMult = R"(
 template<typename T, int A, int B>
@@ -45,7 +45,10 @@ vec<T,A> _slang_vectorReshape(vec<T,N> v)
 }
 )";
 
-void MetalSourceEmitter::_emitHLSLDecorationSingleString(const char* name, IRFunc* entryPoint, IRStringLit* val)
+void MetalSourceEmitter::_emitHLSLDecorationSingleString(
+    const char* name,
+    IRFunc* entryPoint,
+    IRStringLit* val)
 {
     SLANG_UNUSED(entryPoint);
     assert(val);
@@ -57,7 +60,10 @@ void MetalSourceEmitter::_emitHLSLDecorationSingleString(const char* name, IRFun
     m_writer->emit("\")]]\n");
 }
 
-void MetalSourceEmitter::_emitHLSLDecorationSingleInt(const char* name, IRFunc* entryPoint, IRIntLit* val)
+void MetalSourceEmitter::_emitHLSLDecorationSingleInt(
+    const char* name,
+    IRFunc* entryPoint,
+    IRIntLit* val)
 {
     SLANG_UNUSED(entryPoint);
     SLANG_ASSERT(val);
@@ -71,9 +77,12 @@ void MetalSourceEmitter::_emitHLSLDecorationSingleInt(const char* name, IRFunc* 
     m_writer->emit(")]]\n");
 }
 
-void MetalSourceEmitter::_emitHLSLParameterGroup(IRGlobalParam* varDecl, IRUniformParameterGroupType* type)
+void MetalSourceEmitter::_emitHLSLParameterGroup(
+    IRGlobalParam* varDecl,
+    IRUniformParameterGroupType* type)
 {
-    // Metal does not allow shader parameters declared as global variables, so we shouldn't see this.
+    // Metal does not allow shader parameters declared as global variables, so we shouldn't see
+    // this.
     SLANG_UNUSED(varDecl);
     SLANG_UNUSED(type);
     SLANG_ASSERT(!"Metal does not allow shader parameters declared as global variables.");
@@ -92,14 +101,24 @@ void MetalSourceEmitter::_emitHLSLTextureType(IRTextureTypeBase* texType)
 
     switch (texType->GetBaseShape())
     {
-        case SLANG_TEXTURE_1D:		m_writer->emit("1d");		break;
-        case SLANG_TEXTURE_2D:		m_writer->emit("2d");		break;
-        case SLANG_TEXTURE_3D:		m_writer->emit("3d");		break;
-        case SLANG_TEXTURE_CUBE:	m_writer->emit("cube");	    break;
-        case SLANG_TEXTURE_BUFFER:  m_writer->emit("_buffer");           break;
-        default:
-            SLANG_DIAGNOSE_UNEXPECTED(getSink(), SourceLoc(), "unhandled resource shape");
-            break;
+    case SLANG_TEXTURE_1D:
+        m_writer->emit("1d");
+        break;
+    case SLANG_TEXTURE_2D:
+        m_writer->emit("2d");
+        break;
+    case SLANG_TEXTURE_3D:
+        m_writer->emit("3d");
+        break;
+    case SLANG_TEXTURE_CUBE:
+        m_writer->emit("cube");
+        break;
+    case SLANG_TEXTURE_BUFFER:
+        m_writer->emit("_buffer");
+        break;
+    default:
+        SLANG_DIAGNOSE_UNEXPECTED(getSink(), SourceLoc(), "unhandled resource shape");
+        break;
     }
 
     if (texType->isMultisample())
@@ -113,11 +132,15 @@ void MetalSourceEmitter::_emitHLSLTextureType(IRTextureTypeBase* texType)
     m_writer->emit("<");
     emitType(getVectorElementType(texType->getElementType()));
     m_writer->emit(", ");
-    
+
     switch (texType->getAccess())
     {
     case SLANG_RESOURCE_ACCESS_READ:
         m_writer->emit("access::sample");
+        break;
+
+    case SLANG_RESOURCE_ACCESS_WRITE:
+        m_writer->emit("access::write");
         break;
 
     case SLANG_RESOURCE_ACCESS_READ_WRITE:
@@ -143,24 +166,38 @@ void MetalSourceEmitter::emitFuncParamLayoutImpl(IRInst* param)
     auto layout = as<IRVarLayout>(layoutDecoration->getLayout());
     if (!layout)
         return;
+
     for (auto rr : layout->getOffsetAttrs())
     {
         switch (rr->getResourceKind())
         {
         case LayoutResourceKind::MetalTexture:
-            m_writer->emit(" [[texture(");
-            m_writer->emit(rr->getOffset());
-            m_writer->emit(")]]");
+            if (as<IRTextureTypeBase>(param->getDataType()) ||
+                as<IRTextureBufferType>(param->getDataType()))
+            {
+                m_writer->emit(" [[texture(");
+                m_writer->emit(rr->getOffset());
+                m_writer->emit(")]]");
+            }
             break;
         case LayoutResourceKind::MetalBuffer:
-            m_writer->emit(" [[buffer(");
-            m_writer->emit(rr->getOffset());
-            m_writer->emit(")]]");
+            if (as<IRPtrTypeBase>(param->getDataType()) ||
+                as<IRHLSLStructuredBufferTypeBase>(param->getDataType()) ||
+                as<IRByteAddressBufferTypeBase>(param->getDataType()) ||
+                as<IRUniformParameterGroupType>(param->getDataType()))
+            {
+                m_writer->emit(" [[buffer(");
+                m_writer->emit(rr->getOffset());
+                m_writer->emit(")]]");
+            }
             break;
         case LayoutResourceKind::SamplerState:
-            m_writer->emit(" [[sampler(");
-            m_writer->emit(rr->getOffset());
-            m_writer->emit(")]]");
+            if (as<IRSamplerStateTypeBase>(param->getDataType()))
+            {
+                m_writer->emit(" [[sampler(");
+                m_writer->emit(rr->getOffset());
+                m_writer->emit(")]]");
+            }
             break;
         case LayoutResourceKind::VaryingInput:
             m_writer->emit(" [[stage_in]]");
@@ -170,16 +207,23 @@ void MetalSourceEmitter::emitFuncParamLayoutImpl(IRInst* param)
             break;
         }
     }
-    if (auto sysSemanticAttr = layout->findSystemValueSemanticAttr())
-       _emitSystemSemantic(sysSemanticAttr->getName(), sysSemanticAttr->getIndex());
+    if (!maybeEmitSystemSemantic(param))
+    {
+        if (auto sysSemanticAttr = layout->findSystemValueSemanticAttr())
+            _emitUserSemantic(sysSemanticAttr->getName(), sysSemanticAttr->getIndex());
+    }
 }
 
-void MetalSourceEmitter::emitParameterGroupImpl(IRGlobalParam* varDecl, IRUniformParameterGroupType* type)
+void MetalSourceEmitter::emitParameterGroupImpl(
+    IRGlobalParam* varDecl,
+    IRUniformParameterGroupType* type)
 {
     _emitHLSLParameterGroup(varDecl, type);
 }
 
-void MetalSourceEmitter::emitEntryPointAttributesImpl(IRFunc* irFunc, IREntryPointDecoration* entryPointDecor)
+void MetalSourceEmitter::emitEntryPointAttributesImpl(
+    IRFunc* irFunc,
+    IREntryPointDecoration* entryPointDecor)
 {
     auto stage = entryPointDecor->getProfile().getStage();
 
@@ -214,30 +258,400 @@ void MetalSourceEmitter::emitEntryPointAttributesImpl(IRFunc* irFunc, IREntryPoi
             }
             break;
         }
-        default:
-            break;
+    default:
+        break;
     }
 }
 
-void MetalSourceEmitter::ensurePrelude(const char* preludeText)
+void MetalSourceEmitter::emitMemoryOrderOperand(IRInst* inst)
 {
-    IRStringLit* stringLit;
-    if (!m_builtinPreludes.tryGetValue(preludeText, stringLit))
+    auto memoryOrder = (IRMemoryOrder)getIntVal(inst);
+    switch (memoryOrder)
     {
-        IRBuilder builder(m_irModule);
-        stringLit = builder.getStringValue(UnownedStringSlice(preludeText));
-        m_builtinPreludes[preludeText] = stringLit;
+    case kIRMemoryOrder_Relaxed:
+        m_writer->emit("memory_order_relaxed");
+        break;
+    default:
+        m_writer->emit("memory_order_seq_cst");
+        break;
     }
-    m_requiredPreludes.add(stringLit);
+}
+
+static IRImageSubscript* isTextureAccess(IRInst* inst)
+{
+    return as<IRImageSubscript>(getRootAddr(inst->getOperand(0)));
+}
+
+void MetalSourceEmitter::emitAtomicImageCoord(IRImageSubscript* inst)
+{
+    auto resourceType = as<IRResourceTypeBase>(inst->getImage()->getDataType());
+    if (auto textureType = as<IRTextureType>(resourceType))
+    {
+        if (as<IRVectorType>(textureType->getElementType()))
+        {
+            getSink()->diagnose(
+                inst,
+                Diagnostics::unsupportedTargetIntrinsic,
+                "atomic operation on non-scalar texture");
+        }
+    }
+    bool isArray = getIntVal(resourceType->getIsArrayInst()) != 0;
+    if (isArray)
+    {
+        emitOperand(inst->getCoord(), getInfo(EmitOp::Postfix));
+        if (auto coordType = as<IRVectorType>(inst->getCoord()->getDataType()))
+        {
+            m_writer->emit(".");
+            const char* elements[] = {"x", "y", "z", "w"};
+            for (IRIntegerValue i = 0; i < getIntVal(coordType->getElementCount()) - 1; i++)
+                m_writer->emit(elements[Math::Min(3, (int)i)]);
+            m_writer->emit(", ");
+            emitOperand(inst->getCoord(), getInfo(EmitOp::Postfix));
+            m_writer->emit(".");
+            m_writer->emit(
+                elements[Math::Min(3, (int)getIntVal(coordType->getElementCount()) - 1)]);
+        }
+        else
+        {
+            getSink()->diagnose(
+                inst,
+                Diagnostics::unsupportedTargetIntrinsic,
+                "invalid image coordinate for atomic operation");
+        }
+    }
+    else
+    {
+        emitOperand(inst->getCoord(), getInfo(EmitOp::General));
+    }
+}
+
+void MetalSourceEmitter::emitAtomicDestOperand(IRInst* inst)
+{
+    // If operand is already an atomic type, we can emit it
+    // as is.
+    auto ptrType = as<IRPtrTypeBase>(inst->getDataType());
+    if (ptrType && as<IRAtomicType>(ptrType->getValueType()))
+    {
+        emitOperand(inst, getInfo(EmitOp::General));
+        return;
+    }
+    // Otherwise, we need to emit a cast.
+    m_writer->emit("((atomic_");
+    emitType(inst->getDataType());
+    m_writer->emit(")(");
+    emitOperand(inst, getInfo(EmitOp::General));
+    m_writer->emit("))");
+}
+
+void MetalSourceEmitter::emitAtomicSrcOperand(bool isImage, IRInst* inst)
+{
+    if (!isImage)
+    {
+        emitOperand(inst, getInfo(EmitOp::General));
+        return;
+    }
+    // If we are emitting a source operand for an atomic image operation,
+    // we need to convert it into a 4-vector.
+    m_writer->emit("vec<");
+    emitType(inst->getDataType());
+    m_writer->emit(", 4>(");
+    emitOperand(inst, getInfo(EmitOp::General));
+    m_writer->emit(")");
 }
 
 bool MetalSourceEmitter::tryEmitInstStmtImpl(IRInst* inst)
 {
+    auto emitAtomicOp = [&](const char* imageFunc, const char* bufferFunc)
+    {
+        emitInstResultDecl(inst);
+        bool isImageOp = false;
+        if (auto imageSubscript = isTextureAccess(inst))
+        {
+            emitOperand(imageSubscript->getImage(), getInfo(EmitOp::Postfix));
+            m_writer->emit(".");
+            m_writer->emit(imageFunc);
+            m_writer->emit("(");
+            emitAtomicImageCoord(imageSubscript);
+            isImageOp = true;
+        }
+        else
+        {
+            m_writer->emit(bufferFunc);
+            m_writer->emit("(");
+            emitAtomicDestOperand(inst->getOperand(0));
+        }
+        m_writer->emit(", ");
+        emitAtomicSrcOperand(isImageOp, inst->getOperand(1));
+        if (!isImageOp)
+        {
+            m_writer->emit(", ");
+            emitMemoryOrderOperand(inst->getOperand(inst->getOperandCount() - 1));
+        }
+        if (isImageOp)
+            m_writer->emit(").x;\n");
+        else
+            m_writer->emit(");\n");
+    };
+    auto diagnoseFloatAtommic = [&]()
+    {
+        getSink()->diagnose(
+            inst,
+            Diagnostics::unsupportedTargetIntrinsic,
+            "floating point atomic operation");
+    };
     switch (inst->getOp())
     {
     case kIROp_discard:
         m_writer->emit("discard_fragment();\n");
         return true;
+    case kIROp_MetalAtomicCast:
+        {
+            auto oldValName = getName(inst);
+            auto op0 = inst->getOperand(0);
+
+            m_writer->emit("atomic_");
+            emitType(op0->getDataType());
+            m_writer->emit(" ");
+            m_writer->emit(oldValName);
+            m_writer->emit(" = ");
+
+            m_writer->emit("((atomic_");
+            emitType(op0->getDataType());
+            m_writer->emit(")(");
+            emitOperand(op0, getInfo(EmitOp::General));
+            m_writer->emit("));\n");
+            return true;
+        }
+    case kIROp_AtomicLoad:
+        {
+            if (isFloatingType(inst->getDataType()))
+                diagnoseFloatAtommic();
+
+            emitInstResultDecl(inst);
+            bool isImageOp = false;
+            if (auto imageSubscript = isTextureAccess(inst))
+            {
+                emitOperand(imageSubscript->getImage(), getInfo(EmitOp::Postfix));
+                m_writer->emit(".atomic_load(");
+                emitAtomicImageCoord(imageSubscript);
+                isImageOp = true;
+            }
+            else
+            {
+                m_writer->emit("atomic_load_explicit(");
+                emitAtomicDestOperand(inst->getOperand(0));
+            }
+            if (!isImageOp)
+            {
+                m_writer->emit(", ");
+                emitMemoryOrderOperand(inst->getOperand(1));
+            }
+            if (isImageOp)
+                m_writer->emit(").x;\n");
+            else
+                m_writer->emit(");\n");
+            return true;
+        }
+    case kIROp_AtomicStore:
+        {
+            bool isImageOp = false;
+            if (auto imageSubscript = isTextureAccess(inst))
+            {
+                emitOperand(imageSubscript->getImage(), getInfo(EmitOp::Postfix));
+                m_writer->emit(".atomic_store(");
+                emitAtomicImageCoord(imageSubscript);
+                isImageOp = true;
+            }
+            else
+            {
+                m_writer->emit("atomic_store_explicit(");
+                emitAtomicDestOperand(inst->getOperand(0));
+            }
+            m_writer->emit(", ");
+            emitAtomicSrcOperand(isImageOp, inst->getOperand(1));
+            if (!isImageOp)
+            {
+                m_writer->emit(", ");
+                emitMemoryOrderOperand(inst->getOperand(2));
+            }
+            m_writer->emit(");\n");
+            return true;
+        }
+    case kIROp_AtomicExchange:
+        {
+            if (isFloatingType(inst->getDataType()))
+                diagnoseFloatAtommic();
+
+            emitAtomicOp("atomic_exchange", "atomic_exchange_explicit");
+            return true;
+        }
+    case kIROp_AtomicCompareExchange:
+        {
+            if (isFloatingType(inst->getDataType()))
+                diagnoseFloatAtommic();
+
+            bool isImageOp = false;
+            auto imageSubscript = isTextureAccess(inst);
+            isImageOp = (imageSubscript != nullptr);
+
+            emitType(inst->getDataType(), getName(inst));
+            m_writer->emit(";\n{\n");
+            if (isImageOp)
+                m_writer->emit("vec<");
+            emitType(inst->getDataType());
+            if (isImageOp)
+                m_writer->emit(", 4>");
+            m_writer->emit(" _metal_cas_comparand");
+            m_writer->emit(" = ");
+            emitOperand(inst->getOperand(1), getInfo(EmitOp::General));
+            m_writer->emit(";\n");
+            if (imageSubscript)
+            {
+                emitOperand(imageSubscript->getImage(), getInfo(EmitOp::Postfix));
+                m_writer->emit(".atomic_compare_exchange_weak(");
+                emitAtomicImageCoord(imageSubscript);
+            }
+            else
+            {
+                m_writer->emit("atomic_compare_exchange_weak_explicit(");
+                emitAtomicDestOperand(inst->getOperand(0));
+            }
+            m_writer->emit(", &_metal_cas_comparand, ");
+            emitAtomicSrcOperand(isImageOp, inst->getOperand(2));
+            if (!isImageOp)
+            {
+                m_writer->emit(", ");
+                emitMemoryOrderOperand(inst->getOperand(3));
+                m_writer->emit(", ");
+                emitMemoryOrderOperand(inst->getOperand(4));
+            }
+            m_writer->emit(");\n");
+            m_writer->emit(getName(inst));
+            m_writer->emit(" = _metal_cas_comparand");
+            if (isImageOp)
+                m_writer->emit(".x");
+            m_writer->emit(";\n}\n");
+            return true;
+        }
+    case kIROp_AtomicAdd:
+        {
+            if (isFloatingType(inst->getDataType()))
+                diagnoseFloatAtommic();
+
+            emitAtomicOp("atomic_fetch_add", "atomic_fetch_add_explicit");
+            return true;
+        }
+    case kIROp_AtomicSub:
+        {
+            if (isFloatingType(inst->getDataType()))
+                diagnoseFloatAtommic();
+
+            emitAtomicOp("atomic_fetch_sub", "atomic_fetch_sub_explicit");
+            return true;
+        }
+    case kIROp_AtomicAnd:
+        {
+            emitAtomicOp("atomic_fetch_and", "atomic_fetch_and_explicit");
+            return true;
+        }
+    case kIROp_AtomicOr:
+        {
+            emitAtomicOp("atomic_fetch_or", "atomic_fetch_or_explicit");
+            return true;
+        }
+    case kIROp_AtomicXor:
+        {
+            emitAtomicOp("atomic_fetch_xor", "atomic_fetch_xor_explicit");
+            return true;
+        }
+    case kIROp_AtomicMin:
+        {
+            if (isFloatingType(inst->getDataType()))
+                diagnoseFloatAtommic();
+
+            emitAtomicOp("atomic_fetch_min", "atomic_fetch_min_explicit");
+            return true;
+        }
+    case kIROp_AtomicMax:
+        {
+            if (isFloatingType(inst->getDataType()))
+                diagnoseFloatAtommic();
+
+            emitAtomicOp("atomic_fetch_max", "atomic_fetch_max_explicit");
+            return true;
+        }
+    case kIROp_AtomicInc:
+        {
+            emitInstResultDecl(inst);
+            bool isImageOp = false;
+            if (auto imageSubscript = isTextureAccess(inst))
+            {
+                emitOperand(imageSubscript->getImage(), getInfo(EmitOp::Postfix));
+                m_writer->emit(".atomic_fetch_add(");
+                emitAtomicImageCoord(imageSubscript);
+                isImageOp = true;
+            }
+            else
+            {
+                m_writer->emit("atomic_fetch_add_explicit(");
+                emitAtomicDestOperand(inst->getOperand(0));
+            }
+            m_writer->emit(", 1");
+            if (!isImageOp)
+            {
+                m_writer->emit(", ");
+                emitMemoryOrderOperand(inst->getOperand(1));
+            }
+            if (isImageOp)
+                m_writer->emit(").x;\n");
+            else
+                m_writer->emit(");\n");
+            return true;
+        }
+    case kIROp_AtomicDec:
+        {
+            emitInstResultDecl(inst);
+            bool isImageOp = false;
+            if (auto imageSubscript = isTextureAccess(inst))
+            {
+                emitOperand(imageSubscript->getImage(), getInfo(EmitOp::Postfix));
+                m_writer->emit(".atomic_fetch_sub(");
+                emitAtomicImageCoord(imageSubscript);
+                isImageOp = true;
+            }
+            else
+            {
+                m_writer->emit("atomic_fetch_sub_explicit(");
+                emitAtomicDestOperand(inst->getOperand(0));
+            }
+            m_writer->emit(", 1");
+            if (!isImageOp)
+            {
+                m_writer->emit(", ");
+                emitMemoryOrderOperand(inst->getOperand(1));
+            }
+            if (isImageOp)
+                m_writer->emit(").x;\n");
+            else
+                m_writer->emit(");\n");
+            return true;
+        }
+    case kIROp_MetalCastToDepthTexture:
+        {
+            emitType(inst->getDataType(), getName(inst));
+            m_writer->emit(";\n{\n");
+            m_writer->indent();
+            m_writer->emit("auto _slang_ordinary_texture = ");
+            emitOperand(inst->getOperand(0), getInfo(EmitOp::General));
+            m_writer->emit(";\n");
+            m_writer->emit(getName(inst));
+            m_writer->emit(" = *(");
+            emitType(inst->getDataType());
+            m_writer->emit(" thread*)(&_slang_ordinary_texture);\n");
+            m_writer->dedent();
+            m_writer->emit("}\n");
+            return true;
+        }
     }
     return false;
 }
@@ -246,9 +660,9 @@ bool MetalSourceEmitter::tryEmitInstExprImpl(IRInst* inst, const EmitOpInfo& inO
 {
     switch (inst->getOp())
     {
-        case kIROp_MakeVector:
-        case kIROp_MakeMatrix:
-        case kIROp_MakeVectorFromScalar:
+    case kIROp_MakeVector:
+    case kIROp_MakeMatrix:
+    case kIROp_MakeVectorFromScalar:
         {
             if (inst->getOperandCount() == 1)
             {
@@ -267,7 +681,7 @@ bool MetalSourceEmitter::tryEmitInstExprImpl(IRInst* inst, const EmitOpInfo& inO
             }
             break;
         }
-        case kIROp_MatrixReshape:
+    case kIROp_MatrixReshape:
         {
             ensurePrelude(kMetalBuiltinPreludeMatrixReshape);
             m_writer->emit("_slang_matrixReshape<");
@@ -280,7 +694,7 @@ bool MetalSourceEmitter::tryEmitInstExprImpl(IRInst* inst, const EmitOpInfo& inO
             m_writer->emit(")");
             return true;
         }
-        case kIROp_VectorReshape:
+    case kIROp_VectorReshape:
         {
             ensurePrelude(kMetalBuiltinPreludeVectorReshape);
             m_writer->emit("_slang_vectorReshape<");
@@ -291,15 +705,30 @@ bool MetalSourceEmitter::tryEmitInstExprImpl(IRInst* inst, const EmitOpInfo& inO
             m_writer->emit(")");
             return true;
         }
-        case kIROp_Mul:
+    case kIROp_Neg:
+        {
+            if (as<IRMatrixType>(inst->getOperand(0)->getDataType()))
+            {
+                // Metal does not support negate operator on matrices,
+                // we should emit "(matrix(0) - op0)" instead.
+                m_writer->emit("(");
+                emitType(inst->getDataType());
+                m_writer->emit("(0) - ");
+                emitOperand(inst->getOperand(0), getInfo(EmitOp::General));
+                m_writer->emit(")");
+                return true;
+            }
+            break;
+        }
+    case kIROp_Mul:
         {
             // Component-wise multiplication needs to be special cased,
             // because Metal uses infix `*` to express inner product
             // when working with matrices.
 
             // Are both operands matrices?
-            if (as<IRMatrixType>(inst->getOperand(0)->getDataType())
-                && as<IRMatrixType>(inst->getOperand(1)->getDataType()))
+            if (as<IRMatrixType>(inst->getOperand(0)->getDataType()) &&
+                as<IRMatrixType>(inst->getOperand(1)->getDataType()))
             {
                 ensurePrelude(kMetalBuiltinPreludeMatrixCompMult);
                 m_writer->emit("_slang_matrixCompMult(");
@@ -311,21 +740,36 @@ bool MetalSourceEmitter::tryEmitInstExprImpl(IRInst* inst, const EmitOpInfo& inO
             }
             break;
         }
-        case kIROp_Select:
+    case kIROp_FRem:
         {
-            m_writer->emit("select(");
-            emitOperand(inst->getOperand(2), leftSide(getInfo(EmitOp::General), getInfo(EmitOp::General)));
+            m_writer->emit("fmod(");
+            emitOperand(inst->getOperand(0), getInfo(EmitOp::General));
             m_writer->emit(", ");
-            emitOperand(inst->getOperand(1), leftSide(getInfo(EmitOp::General), getInfo(EmitOp::General)));
-            m_writer->emit(", ");
-            emitOperand(inst->getOperand(0), leftSide(getInfo(EmitOp::General), getInfo(EmitOp::General)));
+            emitOperand(inst->getOperand(1), getInfo(EmitOp::General));
             m_writer->emit(")");
             return true;
         }
-        case kIROp_BitCast:
+    case kIROp_Select:
+        {
+            m_writer->emit("select(");
+            emitOperand(
+                inst->getOperand(2),
+                leftSide(getInfo(EmitOp::General), getInfo(EmitOp::General)));
+            m_writer->emit(", ");
+            emitOperand(
+                inst->getOperand(1),
+                leftSide(getInfo(EmitOp::General), getInfo(EmitOp::General)));
+            m_writer->emit(", ");
+            emitOperand(
+                inst->getOperand(0),
+                leftSide(getInfo(EmitOp::General), getInfo(EmitOp::General)));
+            m_writer->emit(")");
+            return true;
+        }
+    case kIROp_BitCast:
         {
             auto toType = inst->getDataType();
-            
+
             m_writer->emit("as_type<");
             emitType(toType);
             m_writer->emit(">(");
@@ -333,7 +777,7 @@ bool MetalSourceEmitter::tryEmitInstExprImpl(IRInst* inst, const EmitOpInfo& inO
             m_writer->emit(")");
             return true;
         }
-        case kIROp_StringLit:
+    case kIROp_StringLit:
         {
             const auto handler = StringEscapeUtil::getHandler(StringEscapeUtil::Style::Slang);
 
@@ -345,7 +789,7 @@ bool MetalSourceEmitter::tryEmitInstExprImpl(IRInst* inst, const EmitOpInfo& inO
 
             return true;
         }
-        case kIROp_ByteAddressBufferLoad:
+    case kIROp_ByteAddressBufferLoad:
         {
             // This only works for loads of 4-byte values.
             // Other element types should have been lowered by previous legalization passes.
@@ -361,7 +805,7 @@ bool MetalSourceEmitter::tryEmitInstExprImpl(IRInst* inst, const EmitOpInfo& inO
             m_writer->emit(")>>2])");
             return true;
         }
-        case kIROp_ByteAddressBufferStore:
+    case kIROp_ByteAddressBufferStore:
         {
             // This only works for loads of 4-byte values.
             // Other element types should have been lowered by previous legalization passes.
@@ -371,12 +815,12 @@ bool MetalSourceEmitter::tryEmitInstExprImpl(IRInst* inst, const EmitOpInfo& inO
             m_writer->emit("[(");
             emitOperand(offset, getInfo(EmitOp::General));
             m_writer->emit(")>>2] = as_type<uint32_t>(");
-            emitOperand(inst->getOperand(2), getInfo(EmitOp::General));
+            emitOperand(inst->getOperand(inst->getOperandCount() - 1), getInfo(EmitOp::General));
             m_writer->emit(")");
             return true;
         }
         break;
-        case kIROp_RWStructuredBufferGetElementPtr:
+    case kIROp_RWStructuredBufferGetElementPtr:
         {
             EmitOpInfo outerPrec = inOuterPrec;
             bool needClose = false;
@@ -389,8 +833,8 @@ bool MetalSourceEmitter::tryEmitInstExprImpl(IRInst* inst, const EmitOpInfo& inO
             maybeCloseParens(needClose);
             return true;
         }
-        case kIROp_StructuredBufferLoad:
-        case kIROp_RWStructuredBufferLoad:
+    case kIROp_StructuredBufferLoad:
+    case kIROp_RWStructuredBufferLoad:
         {
             auto prec = getInfo(EmitOp::Postfix);
             emitOperand(inst->getOperand(0), leftSide(inOuterPrec, prec));
@@ -399,7 +843,7 @@ bool MetalSourceEmitter::tryEmitInstExprImpl(IRInst* inst, const EmitOpInfo& inO
             m_writer->emit("]");
             return true;
         }
-        case kIROp_RWStructuredBufferStore:
+    case kIROp_RWStructuredBufferStore:
         {
             auto prec = getInfo(EmitOp::Postfix);
             emitOperand(inst->getOperand(0), leftSide(inOuterPrec, prec));
@@ -409,7 +853,84 @@ bool MetalSourceEmitter::tryEmitInstExprImpl(IRInst* inst, const EmitOpInfo& inO
             emitOperand(inst->getOperand(2), getInfo(EmitOp::General));
             return true;
         }
-        default: break;
+    case kIROp_ImageLoad:
+        {
+            auto imageOp = as<IRImageLoad>(inst);
+            emitOperand(imageOp->getImage(), getInfo(EmitOp::General));
+            m_writer->emit(".read(");
+            emitOperand(imageOp->getCoord(), getInfo(EmitOp::General));
+            if (imageOp->hasAuxCoord1())
+            {
+                m_writer->emit(",");
+                emitOperand(imageOp->getAuxCoord1(), getInfo(EmitOp::General));
+            }
+            if (imageOp->hasAuxCoord2())
+            {
+                m_writer->emit(",");
+                emitOperand(imageOp->getAuxCoord2(), getInfo(EmitOp::General));
+            }
+            m_writer->emit(")");
+            return true;
+        }
+    case kIROp_ImageStore:
+        {
+            auto imageOp = as<IRImageStore>(inst);
+            emitOperand(imageOp->getImage(), getInfo(EmitOp::General));
+            m_writer->emit(".write(");
+            emitOperand(imageOp->getValue(), getInfo(EmitOp::General));
+            m_writer->emit(",");
+            emitOperand(imageOp->getCoord(), getInfo(EmitOp::General));
+            if (imageOp->hasAuxCoord1())
+            {
+                m_writer->emit(",");
+                emitOperand(imageOp->getAuxCoord1(), getInfo(EmitOp::General));
+            }
+            m_writer->emit(")");
+            return true;
+        }
+    case kIROp_MetalSetVertex:
+        {
+            auto setVertex = as<IRMetalSetVertex>(inst);
+            m_writer->emit("_slang_mesh.set_vertex(");
+            emitOperand(setVertex->getIndex(), getInfo(EmitOp::General));
+            m_writer->emit(",");
+            emitOperand(setVertex->getElementValue(), getInfo(EmitOp::General));
+            m_writer->emit(")");
+            return true;
+        }
+    case kIROp_MetalSetPrimitive:
+        {
+            auto setPrimitive = as<IRMetalSetPrimitive>(inst);
+            m_writer->emit("_slang_mesh.set_primitive(");
+            emitOperand(setPrimitive->getIndex(), getInfo(EmitOp::General));
+            m_writer->emit(",");
+            emitOperand(setPrimitive->getElementValue(), getInfo(EmitOp::General));
+            m_writer->emit(")");
+            return true;
+        }
+    case kIROp_MetalSetIndices:
+        {
+            auto setIndices = as<IRMetalSetIndices>(inst);
+            const auto indices = as<IRVectorType>(setIndices->getElementValue()->getDataType());
+            UInt numIndices = as<IRIntLit>(indices->getElementCount())->getValue();
+            for (UInt i = 0; i < numIndices; ++i)
+            {
+                m_writer->emit("_slang_mesh.set_index(");
+                emitOperand(setIndices->getIndex(), getInfo(EmitOp::General));
+                m_writer->emit("*");
+                m_writer->emitUInt64(numIndices);
+                m_writer->emit("+");
+                m_writer->emitUInt64(i);
+                m_writer->emit(",(");
+                emitOperand(setIndices->getElementValue(), getInfo(EmitOp::General));
+                m_writer->emit(")[");
+                m_writer->emitUInt64(i);
+                m_writer->emit("]);\n");
+            }
+            return true;
+        }
+    default:
+        break;
     }
     // Not handled
     return false;
@@ -454,17 +975,17 @@ static bool _canEmitExport(const Profile& profile)
     return (family == ProfileFamily::DX && version >= ProfileVersion::DX_6_1);
 }
 
-/* virtual */void MetalSourceEmitter::emitFuncDecorationsImpl(IRFunc* func)
+/* virtual */ void MetalSourceEmitter::emitFuncDecorationsImpl(IRFunc* func)
 {
     // Specially handle export, as we don't want to emit it multiple times
-    if (getTargetProgram()->getOptionSet().getBoolOption(CompilerOptionName::GenerateWholeProgram) && 
+    if (getTargetProgram()->getOptionSet().getBoolOption(
+            CompilerOptionName::GenerateWholeProgram) &&
         _canEmitExport(m_effectiveProfile))
     {
         for (auto decoration : func->getDecorations())
         {
             const auto op = decoration->getOp();
-            if (op == kIROp_PublicDecoration ||
-                op == kIROp_HLSLExportDecoration)
+            if (op == kIROp_PublicDecoration || op == kIROp_HLSLExportDecoration)
             {
                 m_writer->emit("export\n");
                 break;
@@ -498,33 +1019,35 @@ void MetalSourceEmitter::emitSimpleValueImpl(IRInst* inst)
 {
     switch (inst->getOp())
     {
-        case kIROp_FloatLit:
+    case kIROp_FloatLit:
         {
             IRConstant* constantInst = static_cast<IRConstant*>(inst);
             IRConstant::FloatKind kind = constantInst->getFloatKind();
             switch (kind)
             {
-                case IRConstant::FloatKind::Nan:
+            case IRConstant::FloatKind::Nan:
                 {
                     m_writer->emit("(0.0 / 0.0)");
                     return;
                 }
-                case IRConstant::FloatKind::PositiveInfinity:
+            case IRConstant::FloatKind::PositiveInfinity:
                 {
                     m_writer->emit("(1.0 / 0.0)");
                     return;
                 }
-                case IRConstant::FloatKind::NegativeInfinity:
+            case IRConstant::FloatKind::NegativeInfinity:
                 {
                     m_writer->emit("(-1.0 / 0.0)");
                     return;
                 }
-                default: break;
+            default:
+                break;
             }
             break;
         }
 
-        default: break;
+    default:
+        break;
     }
 
     Super::emitSimpleValueImpl(inst);
@@ -539,40 +1062,56 @@ void MetalSourceEmitter::emitSimpleTypeImpl(IRType* type)
 {
     switch (type->getOp())
     {
-        case kIROp_VoidType:
-        case kIROp_BoolType:
-        case kIROp_Int8Type:
-        case kIROp_IntType:
-        case kIROp_Int64Type:
-        case kIROp_UInt8Type:
-        case kIROp_UIntType:
-        case kIROp_UInt64Type:
-        case kIROp_FloatType:
-        case kIROp_DoubleType:
-        case kIROp_Int16Type:
-        case kIROp_UInt16Type:
-        case kIROp_HalfType:
+    case kIROp_VoidType:
+    case kIROp_BoolType:
+    case kIROp_Int8Type:
+    case kIROp_IntType:
+    case kIROp_UInt8Type:
+    case kIROp_UIntType:
+    case kIROp_FloatType:
+    case kIROp_HalfType:
         {
             m_writer->emit(getDefaultBuiltinTypeName(type->getOp()));
             return;
         }
-        case kIROp_IntPtrType:
-            m_writer->emit("int64_t");
-            return;
-        case kIROp_UIntPtrType:
-            m_writer->emit("uint64_t");
-            return;
-        case kIROp_StructType:
-            m_writer->emit(getName(type));
-            return;
+    case kIROp_Int64Type:
+        m_writer->emit("long");
+        return;
+    case kIROp_UInt64Type:
+        m_writer->emit("ulong");
+        return;
+    case kIROp_Int16Type:
+        m_writer->emit("short");
+        return;
+    case kIROp_UInt16Type:
+        m_writer->emit("ushort");
+        return;
+    case kIROp_IntPtrType:
+        m_writer->emit("long");
+        return;
+    case kIROp_UIntPtrType:
+        m_writer->emit("ulong");
+        return;
+    case kIROp_Int8x4PackedType:
+    case kIROp_UInt8x4PackedType:
+        m_writer->emit("uint");
+        return;
+    case kIROp_StructType:
+        m_writer->emit(getName(type));
+        return;
 
-        case kIROp_VectorType:
+    case kIROp_DoubleType:
+        SLANG_UNEXPECTED("'double' type emitted");
+        return;
+    case kIROp_VectorType:
         {
             auto vecType = (IRVectorType*)type;
-            emitVectorTypeNameImpl(vecType->getElementType(), getIntVal(vecType->getElementCount()));
+            emitVectorTypeNameImpl(
+                vecType->getElementType(),
+                getIntVal(vecType->getElementCount()));
             return;
         }
-        case kIROp_MatrixType:
+    case kIROp_MatrixType:
         {
             auto matType = (IRMatrixType*)type;
 
@@ -580,40 +1119,44 @@ void MetalSourceEmitter::emitSimpleTypeImpl(IRType* type)
             m_writer->emit("matrix<");
             emitType(matType->getElementType());
             m_writer->emit(",");
-            emitVal(matType->getColumnCount(), getInfo(EmitOp::General));
-            m_writer->emit(",");
             emitVal(matType->getRowCount(), getInfo(EmitOp::General));
-            m_writer->emit("> ");           
+            m_writer->emit(",");
+            emitVal(matType->getColumnCount(), getInfo(EmitOp::General));
+            m_writer->emit("> ");
             return;
         }
-        case kIROp_SamplerStateType:
-        case kIROp_SamplerComparisonStateType:
+    case kIROp_SamplerStateType:
+    case kIROp_SamplerComparisonStateType:
         {
             m_writer->emit("sampler");
             return;
         }
-        case kIROp_NativeStringType:
-        case kIROp_StringType: 
+    case kIROp_NativeStringType:
+    case kIROp_StringType:
         {
-            m_writer->emit("int"); 
+            m_writer->emit("int");
             return;
         }
-        case kIROp_ParameterBlockType:
-        case kIROp_ConstantBufferType:
+    case kIROp_ParameterBlockType:
+    case kIROp_ConstantBufferType:
         {
             emitSimpleTypeImpl((IRType*)type->getOperand(0));
             m_writer->emit(" constant*");
             return;
         }
-        case kIROp_PtrType:
-        case kIROp_InOutType:
-        case kIROp_OutType:
-        case kIROp_RefType:
-        case kIROp_ConstRefType:
+    case kIROp_PtrType:
+    case kIROp_InOutType:
+    case kIROp_OutType:
+    case kIROp_RefType:
+    case kIROp_ConstRefType:
         {
             auto ptrType = cast<IRPtrTypeBase>(type);
+            if (type->getOp() == kIROp_ConstRefType)
+            {
+                m_writer->emit("const ");
+            }
             emitType((IRType*)ptrType->getValueType());
-            switch ((AddressSpace)ptrType->getAddressSpace())
+            switch (ptrType->getAddressSpace())
             {
             case AddressSpace::Global:
                 m_writer->emit(" device");
@@ -633,13 +1176,12 @@ void MetalSourceEmitter::emitSimpleTypeImpl(IRType* type)
                 break;
             case AddressSpace::MetalObjectData:
                 m_writer->emit(" object_data");
-                // object data is passed by reference
-                m_writer->emit("&");
+                m_writer->emit("*");
                 break;
             }
             return;
         }
-        case kIROp_ArrayType:
+    case kIROp_ArrayType:
         {
             m_writer->emit("array<");
             emitType((IRType*)type->getOperand(0));
@@ -648,18 +1190,32 @@ void MetalSourceEmitter::emitSimpleTypeImpl(IRType* type)
             m_writer->emit(">");
             return;
         }
-        case kIROp_MetalMeshGridPropertiesType:
+    case kIROp_MetalMeshGridPropertiesType:
         {
             m_writer->emit("mesh_grid_properties ");
             return;
         }
-        default:
-            break;
+    case kIROp_AtomicType:
+        {
+            m_writer->emit("atomic<");
+            emitSimpleTypeImpl(cast<IRAtomicType>(type)->getElementType());
+            m_writer->emit(">");
+            return;
+        }
+    default:
+        break;
     }
 
     if (auto texType = as<IRTextureType>(type))
     {
         _emitHLSLTextureType(texType);
+        return;
+    }
+    else if (as<IRTextureBufferType>(type))
+    {
+        m_writer->emit("texture_buffer<");
+        emitVal(type->getOperand(0), getInfo(EmitOp::General));
+        m_writer->emit(">");
         return;
     }
     else if (auto imageType = as<IRGLSLImageType>(type))
@@ -677,31 +1233,58 @@ void MetalSourceEmitter::emitSimpleTypeImpl(IRType* type)
     {
         switch (type->getOp())
         {
-            case kIROp_HLSLByteAddressBufferType:
-            case kIROp_HLSLRWByteAddressBufferType:
-            case kIROp_HLSLRasterizerOrderedByteAddressBufferType:
-                m_writer->emit("uint32_t device*");
-                break;
-            case kIROp_RaytracingAccelerationStructureType:
-                m_writer->emit("acceleration_structure<instancing>");
-                break;
-            default:
-                SLANG_DIAGNOSE_UNEXPECTED(getSink(), SourceLoc(), "unhandled buffer type");
-                break;
+        case kIROp_HLSLByteAddressBufferType:
+        case kIROp_HLSLRWByteAddressBufferType:
+        case kIROp_HLSLRasterizerOrderedByteAddressBufferType:
+            m_writer->emit("uint32_t device*");
+            break;
+        case kIROp_RaytracingAccelerationStructureType:
+            m_writer->emit("acceleration_structure<instancing>");
+            break;
+        default:
+            SLANG_DIAGNOSE_UNEXPECTED(getSink(), SourceLoc(), "unhandled buffer type");
+            break;
         }
         return;
     }
-    else if(auto specializedType = as<IRSpecialize>(type))
+    else if (const auto meshType = as<IRMetalMeshType>(type))
+    {
+        m_writer->emit("metal::mesh<");
+        emitType(meshType->getVerticesType());
+        m_writer->emit(", ");
+        emitType(meshType->getPrimitivesType());
+        m_writer->emit(", ");
+        emitOperand(meshType->getNumVertices(), getInfo(EmitOp::General));
+        m_writer->emit(", ");
+        emitOperand(meshType->getNumPrimitives(), getInfo(EmitOp::General));
+        m_writer->emit(", metal::topology::");
+        switch (meshType->getTopology()->getValue())
+        {
+        case 1:
+            m_writer->emit("point");
+            break;
+        case 2:
+            m_writer->emit("line");
+            break;
+        case 3:
+            m_writer->emit("triangle");
+            break;
+        }
+        m_writer->emit(">");
+        return;
+    }
+    else if (auto specializedType = as<IRSpecialize>(type))
     {
         // If a `specialize` instruction made it this far, then
         // it represents an intrinsic generic type.
         //
-        emitSimpleType((IRType*) getSpecializedValue(specializedType));
+        emitSimpleType((IRType*)getSpecializedValue(specializedType));
         m_writer->emit("<");
         UInt argCount = specializedType->getArgCount();
         for (UInt ii = 0; ii < argCount; ++ii)
         {
-            if (ii != 0) m_writer->emit(", ");
+            if (ii != 0)
+                m_writer->emit(", ");
             emitVal(specializedType->getArg(ii), getInfo(EmitOp::General));
         }
         m_writer->emit(" >");
@@ -719,7 +1302,8 @@ void MetalSourceEmitter::emitSimpleTypeImpl(IRType* type)
             m_writer->emit("<");
             for (UInt ii = 0; ii < operandCount; ++ii)
             {
-                if (ii != 0) m_writer->emit(", ");
+                if (ii != 0)
+                    m_writer->emit(", ");
                 emitVal(type->getOperand(ii), getInfo(EmitOp::General));
             }
             m_writer->emit(" >");
@@ -741,101 +1325,94 @@ void MetalSourceEmitter::_emitType(IRType* type, DeclaratorInfo* declarator)
     }
 }
 
-void MetalSourceEmitter::_emitSystemSemantic(UnownedStringSlice semanticName, IRIntegerValue semanticIndex)
+bool MetalSourceEmitter::maybeEmitSystemSemantic(IRInst* inst)
 {
-    if (semanticName.caseInsensitiveEquals(toSlice("SV_POSITION")))
+    if (auto sysSemanticDecor = inst->findDecoration<IRTargetSystemValueDecoration>())
     {
-        m_writer->emit(" [[position]]");
+        m_writer->emit(" [[");
+        m_writer->emit(sysSemanticDecor->getSemantic());
+        m_writer->emit("]]");
+        return true;
     }
-    else if (semanticName.caseInsensitiveEquals(toSlice("SV_VERTEXID")))
-    {
-        m_writer->emit(" [[vertex_id]]");
-    }
-    else if (semanticName.caseInsensitiveEquals(toSlice("SV_INSTANCEID")))
-    {
-        m_writer->emit(" [[instance_id]]");
-    }
-    else if (semanticName.caseInsensitiveEquals(toSlice("SV_Target")))
-    {
-        m_writer->emit(" [[color(");
-        m_writer->emit(semanticIndex);
-        m_writer->emit(")]]");
-    }
-    else if (semanticName.caseInsensitiveEquals(toSlice("SV_PRIMITIVEID")))
-    {
-        m_writer->emit(" [[primitive_id]]");
-    }
-    else if (semanticName.caseInsensitiveEquals(toSlice("SV_GROUPID")))
-    {
-        // TODO: not supported by metal.
-        // We need to implement the transformation logic in slang-ir-metal-legalize.cpp
-        // to convert SV_GroupID to something like METAL_threadgroup_position_in_grid.
-    }
-    else if (semanticName.caseInsensitiveEquals(toSlice("SV_GROUPINDEX")))
-    {
-        // TODO: not supported by metal.
-    }
-    else if (semanticName.caseInsensitiveEquals(toSlice("SV_DISPATCHTHREADID")))
-    {
-        m_writer->emit(" [[thread_position_in_grid]]");
-    }
-    else if (semanticName.caseInsensitiveEquals(toSlice("SV_GROUPTHREADID")))
-    {
-        m_writer->emit(" [[thread_position_in_threadgroup]]");
-    }
-    else if (semanticName.caseInsensitiveEquals(toSlice("SV_CLIPDISTANCE")))
-    {
-        m_writer->emit(" [[clip_distance]]");
-    }
-    else if (semanticName.caseInsensitiveEquals(toSlice("SV_RENDERTARGETARRAYINDEX")))
-    {
-        m_writer->emit(" [[render_target_array_index]]");
-    }
-    else if (semanticName.caseInsensitiveEquals(toSlice("SV_VIEWPORTARRAYINDEX")))
-    {
-        m_writer->emit(" [[viewport_array_index]]");
-    }
-    else if (semanticName.caseInsensitiveEquals(toSlice("SV_Depth")))
-    {
-        m_writer->emit(" [[depth(any)]]");
-    }
-    else if (semanticName.caseInsensitiveEquals(toSlice("SV_DepthGreaterEqual")))
-    {
-        m_writer->emit(" [[depth(greater)]]");
-    }
-    else if (semanticName.caseInsensitiveEquals(toSlice("SV_DepthLessEqual")))
-    {
-        m_writer->emit(" [[depth(less)]]");
-    }
-    else if (semanticName.caseInsensitiveEquals(toSlice("SV_Coverage")))
-    {
-        m_writer->emit(" [[sample_mask]]");
-    }
-    else if (semanticName.caseInsensitiveEquals(toSlice("SV_StencilRef")))
-    {
-        m_writer->emit(" [[stencil]]");
-    }
-    else
+    return false;
+}
+
+bool MetalSourceEmitter::_emitUserSemantic(
+    UnownedStringSlice semanticName,
+    IRIntegerValue semanticIndex)
+{
+    if (!semanticName.startsWithCaseInsensitive(toSlice("SV_")))
     {
         m_writer->emit(" [[user(");
-        m_writer->emit(semanticName);
+        m_writer->emit(String(semanticName).toUpper());
         if (semanticIndex != 0)
         {
             m_writer->emit("_");
             m_writer->emit(semanticIndex);
         }
         m_writer->emit(")]]");
+        return true;
     }
+    return false;
+}
+
+bool MetalSourceEmitter::tryEmitGlobalParamImpl(IRGlobalParam* varDecl, IRType* varType)
+{
+    auto layout = getVarLayout(varDecl);
+    if (!layout)
+        return false;
+    if (auto specConstLayout = layout->findOffsetAttr(LayoutResourceKind::SpecializationConstant))
+    {
+        // Emit specialization constant.
+        auto name = getName(varDecl);
+        auto prefixName = "fc_" + name;
+        auto defaultVal = varDecl->findDecoration<IRDefaultValueDecoration>();
+
+        m_writer->emit("constant ");
+        emitType(varType, prefixName);
+        m_writer->emit(" ");
+        m_writer->emit("[[function_constant(");
+        m_writer->emit(specConstLayout->getOffset());
+        m_writer->emit(")]];\n");
+
+        m_writer->emit("constant ");
+        emitType(varType, name);
+        m_writer->emit(" = ");
+        if (defaultVal)
+        {
+            m_writer->emit("is_function_constant_defined(");
+            m_writer->emit(prefixName);
+            m_writer->emit(") ? ");
+            m_writer->emit(prefixName);
+            m_writer->emit(" : ");
+            emitVal(defaultVal->getOperand(0), getInfo(EmitOp::General));
+        }
+        else
+        {
+            m_writer->emit(prefixName);
+        }
+        m_writer->emit(";\n");
+        return true;
+    }
+    return false;
 }
 
 void MetalSourceEmitter::emitSemanticsImpl(IRInst* inst, bool allowOffsets)
 {
     SLANG_UNUSED(allowOffsets);
+
+    auto varLayout = findVarLayout(inst);
+
     if (inst->getOp() == kIROp_StructKey)
     {
         // Only emit [[attribute(n)]] on struct keys.
-        bool hasSemanticFromLayout = false;
-        if (auto varLayout = findVarLayout(inst))
+
+        if (maybeEmitSystemSemantic(inst))
+            return;
+
+        bool hasSemantic = false;
+
+        if (varLayout)
         {
             for (auto attr : varLayout->getAllAttrs())
             {
@@ -846,28 +1423,36 @@ void MetalSourceEmitter::emitSemanticsImpl(IRInst* inst, bool allowOffsets)
                         m_writer->emit(" [[attribute(");
                         m_writer->emit(offsetAttr->getOffset());
                         m_writer->emit(")]]");
+                        return;
                     }
                 }
-                else if (auto semanticAttr = as<IRSemanticAttr>(attr))
+            }
+            for (auto attr : varLayout->getAllAttrs())
+            {
+                if (auto semanticAttr = as<IRSemanticAttr>(attr))
                 {
                     auto semanticName = String(semanticAttr->getName()).toUpper();
-                    _emitSystemSemantic(semanticAttr->getName(), semanticAttr->getIndex());
-                    hasSemanticFromLayout = true;
+                    hasSemantic =
+                        _emitUserSemantic(semanticAttr->getName(), semanticAttr->getIndex());
                 }
             }
-
         }
-        if (!hasSemanticFromLayout)
+        if (!hasSemantic)
         {
             if (auto semanticDecor = inst->findDecoration<IRSemanticDecoration>())
             {
-                _emitSystemSemantic(semanticDecor->getSemanticName(), semanticDecor->getSemanticIndex());
+                _emitUserSemantic(
+                    semanticDecor->getSemanticName(),
+                    semanticDecor->getSemanticIndex());
             }
         }
+        return;
     }
 }
 
-void MetalSourceEmitter::_emitStageAccessSemantic(IRStageAccessDecoration* decoration, const char* name)
+void MetalSourceEmitter::_emitStageAccessSemantic(
+    IRStageAccessDecoration* decoration,
+    const char* name)
 {
     SLANG_UNUSED(decoration);
     SLANG_UNUSED(name);
@@ -889,7 +1474,8 @@ void MetalSourceEmitter::emitPostDeclarationAttributesForType(IRInst* type)
             m_writer->emit(" [[raster_order_group(0)]]");
         }
     }
-    else if (as<IRHLSLRasterizerOrderedByteAddressBufferType>(type) ||
+    else if (
+        as<IRHLSLRasterizerOrderedByteAddressBufferType>(type) ||
         as<IRHLSLRasterizerOrderedStructuredBufferType>(type))
     {
         m_writer->emit(" [[raster_order_group(0)]]");
@@ -900,17 +1486,26 @@ static UnownedStringSlice _getInterpolationModifierText(IRInterpolationMode mode
 {
     switch (mode)
     {
-        case IRInterpolationMode::PerVertex:
-        case IRInterpolationMode::NoInterpolation:      return UnownedStringSlice::fromLiteral("[[flat]]");
-        case IRInterpolationMode::NoPerspective:        return UnownedStringSlice::fromLiteral("[[center_no_perspective]]");
-        case IRInterpolationMode::Linear:               return UnownedStringSlice::fromLiteral("[[sample_no_perspective]]");
-        case IRInterpolationMode::Sample:               return UnownedStringSlice::fromLiteral("[[sample_perspective]]");
-        case IRInterpolationMode::Centroid:             return UnownedStringSlice::fromLiteral("[[center_perspective]]");
-        default:                                        return UnownedStringSlice();
+    case IRInterpolationMode::PerVertex:
+    case IRInterpolationMode::NoInterpolation:
+        return UnownedStringSlice::fromLiteral("[[flat]]");
+    case IRInterpolationMode::NoPerspective:
+        return UnownedStringSlice::fromLiteral("[[center_no_perspective]]");
+    case IRInterpolationMode::Linear:
+        return UnownedStringSlice::fromLiteral("[[sample_no_perspective]]");
+    case IRInterpolationMode::Sample:
+        return UnownedStringSlice::fromLiteral("[[sample_perspective]]");
+    case IRInterpolationMode::Centroid:
+        return UnownedStringSlice::fromLiteral("[[center_perspective]]");
+    default:
+        return UnownedStringSlice();
     }
 }
 
-void MetalSourceEmitter::emitInterpolationModifiersImpl(IRInst* varInst, IRType* valueType, IRVarLayout* layout)
+void MetalSourceEmitter::emitInterpolationModifiersImpl(
+    IRInst* varInst,
+    IRType* valueType,
+    IRVarLayout* layout)
 {
     SLANG_UNUSED(layout);
     SLANG_UNUSED(valueType);
@@ -921,7 +1516,7 @@ void MetalSourceEmitter::emitInterpolationModifiersImpl(IRInst* varInst, IRType*
             continue;
 
         auto decoration = (IRInterpolationModeDecoration*)dd;
-  
+
         UnownedStringSlice modeText = _getInterpolationModifierText(decoration->getMode());
         if (modeText.getLength() > 0)
         {
@@ -931,7 +1526,10 @@ void MetalSourceEmitter::emitInterpolationModifiersImpl(IRInst* varInst, IRType*
     }
 }
 
-void MetalSourceEmitter::emitPackOffsetModifier(IRInst* varInst, IRType* valueType, IRPackOffsetDecoration* layout)
+void MetalSourceEmitter::emitPackOffsetModifier(
+    IRInst* varInst,
+    IRType* valueType,
+    IRPackOffsetDecoration* layout)
 {
     SLANG_UNUSED(varInst);
     SLANG_UNUSED(valueType);
@@ -939,7 +1537,9 @@ void MetalSourceEmitter::emitPackOffsetModifier(IRInst* varInst, IRType* valueTy
     // We emit packoffset as a semantic in `emitSemantic`, so nothing to do here.
 }
 
-void MetalSourceEmitter::emitRateQualifiersAndAddressSpaceImpl(IRRate* rate, IRIntegerValue addressSpace)
+void MetalSourceEmitter::emitRateQualifiersAndAddressSpaceImpl(
+    IRRate* rate,
+    AddressSpace addressSpace)
 {
     if (as<IRGroupSharedRate>(rate))
     {
@@ -947,7 +1547,7 @@ void MetalSourceEmitter::emitRateQualifiersAndAddressSpaceImpl(IRRate* rate, IRI
         return;
     }
 
-    switch ((AddressSpace)addressSpace)
+    switch (addressSpace)
     {
     case AddressSpace::GroupShared:
         m_writer->emit("threadgroup ");
@@ -980,7 +1580,7 @@ void MetalSourceEmitter::emitVarDecorationsImpl(IRInst* varInst)
     SLANG_UNUSED(varInst);
 }
 
-void MetalSourceEmitter::emitMatrixLayoutModifiersImpl(IRVarLayout*)
+void MetalSourceEmitter::emitMatrixLayoutModifiersImpl(IRType*)
 {
     // Metal only supports column major layout, and we must have
     // already translated all matrix ops to assume column-major

@@ -12,20 +12,17 @@ using namespace Slang;
 namespace metal
 {
 
-class RenderPassLayoutImpl
-    : public IRenderPassLayout
-    , public ComObject
+class RenderPassLayoutImpl : public IRenderPassLayout, public ComObject
 {
 public:
     SLANG_COM_OBJECT_IUNKNOWN_ALL
     IRenderPassLayout* getInterface(const Guid& guid);
 
 public:
-    MTL::RenderPassDescriptor* m_renderPassDesc = nullptr;
-    RefPtr<DeviceImpl> m_renderer;
-    ~RenderPassLayoutImpl();
+    RefPtr<DeviceImpl> m_device;
+    NS::SharedPtr<MTL::RenderPassDescriptor> m_renderPassDesc;
 
-    Result init(DeviceImpl* renderer, const IRenderPassLayout::Desc& desc);
+    Result init(DeviceImpl* device, const IRenderPassLayout::Desc& desc);
 };
 
 } // namespace metal

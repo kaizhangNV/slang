@@ -14,8 +14,12 @@ namespace metal
 class InputLayoutImpl : public InputLayoutBase
 {
 public:
-    List<MTL::VertexDescriptor*> m_vertexDescs;
-    List<MTL::VertexBufferLayoutDescriptor*> m_bufferLayoutDescs;
+    List<InputElementDesc> m_inputElements;
+    List<VertexStreamDesc> m_vertexStreams;
+
+    Result init(const IInputLayout::Desc& desc);
+    NS::SharedPtr<MTL::VertexDescriptor> createVertexDescriptor(
+        NS::UInteger vertexBufferIndexOffset);
 };
 
 } // namespace metal

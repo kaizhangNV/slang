@@ -1,5 +1,6 @@
 //TEST(compute):COMPARE_RENDER_COMPUTE: -shaderobj -output-using-type
 //TEST(compute):COMPARE_RENDER_COMPUTE: -shaderobj -output-using-type -vk
+//TEST(compute):COMPARE_RENDER_COMPUTE: -shaderobj -output-using-type -mtl
 
 
 //TEST_INPUT: Texture1D(size=4, content = one):name=t1D
@@ -11,6 +12,9 @@
 //TEST_INPUT: TextureCube(size=4, content = one, arrayLength=2):name=tCubeArray
 //TEST_INPUT: Sampler:name=samplerState
 //TEST_INPUT: ubuffer(data=[0 0 0 0], stride=4):out,name=outputBuffer
+// There is no texture_1d_array type in WGSL https://github.com/shader-slang/slang/issues/5223
+// Not supported in WGSL: 1D array texture not supported in WGSL
+//DISABLE_TEST(compute):COMPARE_COMPUTE:-slang -shaderobj -wgpu
 
 Texture1D t1D;
 Texture2D t2D;
@@ -103,7 +107,7 @@ FragmentStageOutput fragmentMain(FragmentStageInput input)
     val += tCubeArray.Sample(samplerState, float4(uv, 0.5, 0.0));
     val += tCube.Sample(samplerState, float3(uv, 0.5));
 
-    val += t2D.Load(int3(0), int2(0));
+    val += t2D.Load(int3(0));
     val += t2dArray.Load(int4(0));
 
     val += t3D[int3(0)];

@@ -1,9 +1,10 @@
 #include "slang-ir-peephole.h"
-#include "slang-ir-inst-pass-base.h"
-#include "slang-ir-sccp.h"
+
 #include "slang-ir-dominators.h"
-#include "slang-ir-util.h"
+#include "slang-ir-inst-pass-base.h"
 #include "slang-ir-layout.h"
+#include "slang-ir-sccp.h"
+#include "slang-ir-util.h"
 
 namespace Slang
 {
@@ -98,7 +99,8 @@ struct PeepholeContext : InstPassBase
                 {
                     IRBuilder builder(module);
                     builder.setInsertBefore(inst);
-                    auto newValue = builder.emitElementExtract(updateInst->getElementValue(), remainingKeys);
+                    auto newValue =
+                        builder.emitElementExtract(updateInst->getElementValue(), remainingKeys);
                     inst->replaceUsesWith(newValue);
                     maybeRemoveOldInst(inst);
                     return true;
@@ -106,11 +108,13 @@ struct PeepholeContext : InstPassBase
             }
             else if (isAccessChainNotEqual)
             {
-                // If we see an extract(updateElement(x, accessChain, val), accessChain2), where accessChain!=accessChain2,
-                // then we can replace the inst with extract(x, accessChain2).
+                // If we see an extract(updateElement(x, accessChain, val), accessChain2), where
+                // accessChain!=accessChain2, then we can replace the inst with extract(x,
+                // accessChain2).
                 IRBuilder builder(module);
                 builder.setInsertBefore(inst);
-                auto newInst = builder.emitElementExtract(updateInst->getOldValue(), chainKey.getArrayView());
+                auto newInst =
+                    builder.emitElementExtract(updateInst->getOldValue(), chainKey.getArrayView());
                 inst->replaceUsesWith(newInst);
                 maybeRemoveOldInst(inst);
                 return true;
@@ -137,7 +141,8 @@ struct PeepholeContext : InstPassBase
                         return false;
                     IRBuilder builder(module);
                     builder.setInsertBefore(inst);
-                    replacement = builder.emitMakeVectorFromScalar(inst->getFullType(), replacement);
+                    replacement =
+                        builder.emitMakeVectorFromScalar(inst->getFullType(), replacement);
                 }
                 else
                 {
@@ -266,7 +271,10 @@ struct PeepholeContext : InstPassBase
                 else
                     baseType = inst->getOperand(0)->getDataType();
 
-                if (SLANG_FAILED(getNaturalSizeAndAlignment(targetProgram->getOptionSet(), baseType, &sizeAlignment)))
+                if (SLANG_FAILED(getNaturalSizeAndAlignment(
+                        targetProgram->getOptionSet(),
+                        baseType,
+                        &sizeAlignment)))
                     break;
                 if (sizeAlignment.size == 0)
                     break;
@@ -279,6 +287,14 @@ struct PeepholeContext : InstPassBase
                 else
                     resultVal = builder.getIntValue(inst->getDataType(), sizeAlignment.size);
                 inst->replaceUsesWith(resultVal);
+                maybeRemoveOldInst(inst);
+                changed = true;
+            }
+            break;
+        case kIROp_GetArrayLength:
+            if (auto arrayType = as<IRArrayType>(inst->getOperand(0)->getDataType()))
+            {
+                inst->replaceUsesWith(arrayType->getElementCount());
                 maybeRemoveOldInst(inst);
                 changed = true;
             }
@@ -316,14 +332,49 @@ struct PeepholeContext : InstPassBase
             }
             break;
         case kIROp_GetTupleElement:
-            if (inst->getOperand(0)->getOp() == kIROp_MakeTuple)
+            switch (inst->getOperand(0)->getOp())
             {
-                auto element = inst->getOperand(1);
-                if (auto intLit = as<IRIntLit>(element))
+            case kIROp_MakeTuple:
+            case kIROp_MakeValuePack:
+            case kIROp_MakeWitnessPack:
+            case kIROp_TypePack:
                 {
-                    inst->replaceUsesWith(inst->getOperand(0)->getOperand((UInt)intLit->value.intVal));
-                    maybeRemoveOldInst(inst);
-                    changed = true;
+                    auto element = inst->getOperand(1);
+                    if (auto intLit = as<IRIntLit>(element))
+                    {
+                        inst->replaceUsesWith(
+                            inst->getOperand(0)->getOperand((UInt)intLit->value.intVal));
+                        maybeRemoveOldInst(inst);
+                        changed = true;
+                    }
+                    break;
+                }
+            default:
+                break;
+            }
+            break;
+        case kIROp_MakeCoopVectorFromValuePack:
+            {
+                const auto pack = inst->getOperand(0);
+                if (const auto packType = as<IRTypePack>(pack->getDataType()))
+                {
+                    IRBuilder builder(inst);
+                    builder.setInsertBefore(inst);
+                    List<IRInst*> args;
+                    for (UInt j = 0; j < packType->getOperandCount(); ++j)
+                    {
+                        const auto e = builder.emitGetTupleElement(
+                            cast<IRType>(packType->getOperand(j)),
+                            pack,
+                            j);
+                        args.add(e);
+                    }
+                    const auto cvt = builder.getCoopVectorType(
+                        args[0]->getDataType(),
+                        builder.getIntValue(builder.getIntType(), args.getCount()));
+                    const auto v = builder.emitMakeCoopVector(cvt, args.getCount(), args.begin());
+                    inst->replaceUsesWith(v);
+                    inst->removeAndDeallocate();
                 }
             }
             break;
@@ -345,7 +396,8 @@ struct PeepholeContext : InstPassBase
                         }
                         i++;
                     }
-                    if (fieldIndex != -1 && fieldIndex < (Index)inst->getOperand(0)->getOperandCount())
+                    if (fieldIndex != -1 &&
+                        fieldIndex < (Index)inst->getOperand(0)->getOperandCount())
                     {
                         inst->replaceUsesWith(inst->getOperand(0)->getOperand((UInt)fieldIndex));
                         maybeRemoveOldInst(inst);
@@ -387,11 +439,16 @@ struct PeepholeContext : InstPassBase
                         auto vecSize = as<IRIntLit>(elementVecType->getElementCount());
                         if (!vecSize)
                             break;
-                        if (index->getValue() >= startIndex && index->getValue() < startIndex + vecSize->getValue())
+                        if (index->getValue() >= startIndex &&
+                            index->getValue() < startIndex + vecSize->getValue())
                         {
                             IRBuilder builder(module);
                             builder.setInsertBefore(inst);
-                            auto newElement = builder.emitElementExtract(element, builder.getIntValue(builder.getIntType(), index->getValue() - startIndex));
+                            auto newElement = builder.emitElementExtract(
+                                element,
+                                builder.getIntValue(
+                                    builder.getIntType(),
+                                    index->getValue() - startIndex));
                             inst->replaceUsesWith(newElement);
                             maybeRemoveOldInst(inst);
                             changed = true;
@@ -412,7 +469,9 @@ struct PeepholeContext : InstPassBase
                     }
                 }
             }
-            else if (inst->getOperand(0)->getOp() == kIROp_MakeArrayFromElement || inst->getOperand(0)->getOp() == kIROp_MakeVectorFromScalar)
+            else if (
+                inst->getOperand(0)->getOp() == kIROp_MakeArrayFromElement ||
+                inst->getOperand(0)->getOp() == kIROp_MakeVectorFromScalar)
             {
                 inst->replaceUsesWith(inst->getOperand(0)->getOperand(0));
                 maybeRemoveOldInst(inst);
@@ -436,9 +495,11 @@ struct PeepholeContext : InstPassBase
                         oldVal->getOp() == kIROp_MakeArrayFromElement)
                     {
                         auto arrayType = as<IRArrayType>(inst->getDataType());
-                        if (!arrayType) break;
+                        if (!arrayType)
+                            break;
                         auto arraySize = as<IRIntLit>(arrayType->getElementCount());
-                        if (!arraySize) break;
+                        if (!arraySize)
+                            break;
                         List<IRInst*> args;
                         for (IRIntegerValue i = 0; i < arraySize->getValue(); i++)
                         {
@@ -457,7 +518,10 @@ struct PeepholeContext : InstPassBase
                         {
                             IRBuilder builder(module);
                             builder.setInsertBefore(inst);
-                            auto makeArray = builder.emitMakeArray(arrayType, (UInt)args.getCount(), args.getBuffer());
+                            auto makeArray = builder.emitMakeArray(
+                                arrayType,
+                                (UInt)args.getCount(),
+                                args.getBuffer());
                             inst->replaceUsesWith(makeArray);
                             maybeRemoveOldInst(inst);
                             changed = true;
@@ -465,14 +529,16 @@ struct PeepholeContext : InstPassBase
                     }
                     else
                     {
-                        // Check if the updated value is a chain of `updateElement` instructions that
-                        // updates every element in the same array, and if so we can replace the
-                        // whole chain with a single `makeArray` instruction.
+                        // Check if the updated value is a chain of `updateElement` instructions
+                        // that updates every element in the same array, and if so we can replace
+                        // the whole chain with a single `makeArray` instruction.
                         auto arrayType = as<IRArrayType>(inst->getDataType());
-                        if (!arrayType) break;
+                        if (!arrayType)
+                            break;
                         auto arraySize = as<IRIntLit>(arrayType->getElementCount());
-                        if (!arraySize) break;
-                        
+                        if (!arraySize)
+                            break;
+
                         List<IRInst*> args;
                         args.setCount((UInt)arraySize->getValue());
                         for (Index i = 0; i < args.getCount(); i++)
@@ -508,7 +574,10 @@ struct PeepholeContext : InstPassBase
                         {
                             IRBuilder builder(module);
                             builder.setInsertBefore(inst);
-                            auto makeArray = builder.emitMakeArray(arrayType, (UInt)args.getCount(), args.getBuffer());
+                            auto makeArray = builder.emitMakeArray(
+                                arrayType,
+                                (UInt)args.getCount(),
+                                args.getBuffer());
                             inst->replaceUsesWith(makeArray);
                             maybeRemoveOldInst(inst);
                             changed = true;
@@ -523,7 +592,8 @@ struct PeepholeContext : InstPassBase
                         // If we see updateElement(makeStruct(...), structKey, ...), we can
                         // replace it with a makeStruct that has the updated value.
                         auto structType = as<IRStructType>(inst->getDataType());
-                        if (!structType) break;
+                        if (!structType)
+                            break;
                         List<IRInst*> args;
                         UInt i = 0;
                         bool isValid = true;
@@ -549,7 +619,10 @@ struct PeepholeContext : InstPassBase
                         {
                             IRBuilder builder(module);
                             builder.setInsertBefore(inst);
-                            auto makeStruct = builder.emitMakeStruct(structType, (UInt)args.getCount(), args.getBuffer());
+                            auto makeStruct = builder.emitMakeStruct(
+                                structType,
+                                (UInt)args.getCount(),
+                                args.getBuffer());
                             inst->replaceUsesWith(makeStruct);
                             maybeRemoveOldInst(inst);
                             changed = true;
@@ -557,8 +630,9 @@ struct PeepholeContext : InstPassBase
                     }
                     else
                     {
-                        // Check if the updated `oldVal` is a chain of updateElement insts that assigns
-                        // values to every field of the struct, if so, we can just emit a makeStruct instead.
+                        // Check if the updated `oldVal` is a chain of updateElement insts that
+                        // assigns values to every field of the struct, if so, we can just emit a
+                        // makeStruct instead.
                         Dictionary<IRStructKey*, IRInst*> mapFieldKeyToVal;
                         for (auto updateElement = as<IRUpdateElement>(inst); updateElement;
                              updateElement = as<IRUpdateElement>(updateElement->getOldValue()))
@@ -569,17 +643,19 @@ struct PeepholeContext : InstPassBase
                             if (!subStructKey)
                                 break;
 
-                            // If the key already exists, it means there is already a later update at this key.
-                            // We need to be careful not to override it with an earlier value.
-                            // AddIfNotExists will ensure this does not happen.
+                            // If the key already exists, it means there is already a later update
+                            // at this key. We need to be careful not to override it with an earlier
+                            // value. AddIfNotExists will ensure this does not happen.
                             mapFieldKeyToVal.addIfNotExists(
-                                subStructKey, updateElement->getElementValue());
+                                subStructKey,
+                                updateElement->getElementValue());
                         }
 
                         // Check if every field of the struct has a value assigned to it,
                         // while build up arguments for makeStruct inst at the same time.
                         auto structType = as<IRStructType>(inst->getDataType());
-                        if (!structType) break;
+                        if (!structType)
+                            break;
                         List<IRInst*> args;
                         bool isComplete = true;
                         for (auto field : structType->getFields())
@@ -596,13 +672,17 @@ struct PeepholeContext : InstPassBase
                             }
                         }
 
-                        if (!isComplete) break;
+                        if (!isComplete)
+                            break;
 
                         // Create a makeStruct inst using args.
 
                         IRBuilder builder(module);
                         builder.setInsertBefore(inst);
-                        auto makeStruct = builder.emitMakeStruct(structType, (UInt)args.getCount(), args.getBuffer());
+                        auto makeStruct = builder.emitMakeStruct(
+                            structType,
+                            (UInt)args.getCount(),
+                            args.getBuffer());
                         inst->replaceUsesWith(makeStruct);
                         maybeRemoveOldInst(inst);
                         changed = true;
@@ -653,7 +733,9 @@ struct PeepholeContext : InstPassBase
             {
                 if (inst->getOperand(0)->getOp() == kIROp_PackAnyValue)
                 {
-                    if (isTypeEqual(inst->getOperand(0)->getOperand(0)->getDataType(), inst->getDataType()))
+                    if (isTypeEqual(
+                            inst->getOperand(0)->getOperand(0)->getDataType(),
+                            inst->getDataType()))
                     {
                         inst->replaceUsesWith(inst->getOperand(0)->getOperand(0));
                         maybeRemoveOldInst(inst);
@@ -663,16 +745,16 @@ struct PeepholeContext : InstPassBase
             }
             break;
         case kIROp_PackAnyValue:
-        {
-            // Pack(obj: anyValueN) : anyValueN --> obj
-            if (isTypeEqual(inst->getOperand(0)->getDataType(), inst->getDataType()))
             {
-                inst->replaceUsesWith(inst->getOperand(0));
-                maybeRemoveOldInst(inst);
-                changed = true;
+                // Pack(obj: anyValueN) : anyValueN --> obj
+                if (isTypeEqual(inst->getOperand(0)->getDataType(), inst->getDataType()))
+                {
+                    inst->replaceUsesWith(inst->getOperand(0));
+                    maybeRemoveOldInst(inst);
+                    changed = true;
+                }
             }
-        }
-        break;
+            break;
         case kIROp_GetOptionalValue:
             {
                 if (inst->getOperand(0)->getOp() == kIROp_MakeOptionalValue)
@@ -733,7 +815,8 @@ struct PeepholeContext : InstPassBase
                     // These witness tables provides `default`s in case they are not
                     // explicitly specialized via other linked modules, therefore we don't want
                     // to resolve them too soon before linking.
-                    if (isPrelinking && inst->getOperand(0)->findDecoration<IRUserExternDecoration>())
+                    if (isPrelinking &&
+                        inst->getOperand(0)->findDecoration<IRUserExternDecoration>())
                         break;
 
                     auto wt = as<IRWitnessTable>(inst->getOperand(0));
@@ -771,6 +854,8 @@ struct PeepholeContext : InstPassBase
         case kIROp_VectorReshape:
             {
                 auto fromType = as<IRVectorType>(inst->getOperand(0)->getDataType());
+                if (!fromType)
+                    break;
                 auto resultType = as<IRVectorType>(inst->getDataType());
                 if (!resultType)
                 {
@@ -813,17 +898,23 @@ struct PeepholeContext : InstPassBase
                 auto resultType = as<IRMatrixType>(inst->getDataType());
                 SLANG_ASSERT(fromType && resultType);
                 auto fromRows = as<IRIntLit>(fromType->getRowCount());
-                if (!fromRows) break;
+                if (!fromRows)
+                    break;
                 auto fromCols = as<IRIntLit>(fromType->getColumnCount());
-                if (!fromCols) break;
+                if (!fromCols)
+                    break;
                 auto toRows = as<IRIntLit>(resultType->getRowCount());
-                if (!toRows) break;
+                if (!toRows)
+                    break;
                 auto toCols = as<IRIntLit>(resultType->getColumnCount());
-                if (!toCols) break;
+                if (!toCols)
+                    break;
                 List<IRInst*> rows;
                 IRBuilder builder(inst);
                 builder.setInsertBefore(inst);
-                auto toRowType = builder.getVectorType(resultType->getElementType(), resultType->getColumnCount());
+                auto toRowType = builder.getVectorType(
+                    resultType->getElementType(),
+                    resultType->getColumnCount());
                 for (IRIntegerValue i = 0; i < toRows->getValue(); i++)
                 {
                     if (i < fromRows->getValue())
@@ -839,7 +930,8 @@ struct PeepholeContext : InstPassBase
                         rows.add(row);
                     }
                 }
-                auto newInst = builder.emitMakeMatrix(resultType, (UInt)rows.getCount(), rows.getBuffer());
+                auto newInst =
+                    builder.emitMakeMatrix(resultType, (UInt)rows.getCount(), rows.getBuffer());
                 inst->replaceUsesWith(newInst);
                 maybeRemoveOldInst(inst);
                 changed = true;
@@ -893,8 +985,8 @@ struct PeepholeContext : InstPassBase
                         // Is argValue not a local value, i.e. it's not a child
                         // of a block, and it's 'visible' from inst because
                         // inst is a descendent of argValue's parent
-                        if (!as<IRBlock>(argValue->getParent())
-                            && isChildInstOf(inst, argValue->getParent()))
+                        if (!as<IRBlock>(argValue->getParent()) &&
+                            isChildInstOf(inst, argValue->getParent()))
                         {
                             inst->replaceUsesWith(argValue);
                             // Never remove param inst.
@@ -908,7 +1000,8 @@ struct PeepholeContext : InstPassBase
                             if (!parentFunc)
                                 break;
 
-                            auto domTree = parentFunc->getModule()->findOrCreateDominatorTree(parentFunc);
+                            auto domTree =
+                                parentFunc->getModule()->findOrCreateDominatorTree(parentFunc);
 
                             if (domTree->dominates(argValue, inst))
                             {
@@ -943,12 +1036,14 @@ struct PeepholeContext : InstPassBase
                     }
                     IRBuilder builder(module);
                     builder.setInsertBefore(inst);
-                    auto newInst = builder.emitMakeVectorFromScalar(vectorType, inst->getOperand(0));
+                    auto newInst =
+                        builder.emitMakeVectorFromScalar(vectorType, inst->getOperand(0));
                     inst->replaceUsesWith(newInst);
                     maybeRemoveOldInst(inst);
                     break;
                 }
-                // If we see a swizzle(makeVector) then we can replace it with the values from makeVector.
+                // If we see a swizzle(makeVector) then we can replace it with the values from
+                // makeVector.
                 auto makeVector = inst->getOperand(0);
                 if (makeVector->getOp() != kIROp_MakeVector)
                     break;
@@ -982,7 +1077,9 @@ struct PeepholeContext : InstPassBase
                     IRBuilder builder(module);
                     builder.setInsertBefore(inst);
                     auto newMakeVector = builder.emitMakeVector(
-                        swizzle->getDataType(), (UInt)vals.getCount(), vals.getBuffer());
+                        swizzle->getDataType(),
+                        (UInt)vals.getCount(),
+                        vals.getBuffer());
                     inst->replaceUsesWith(newMakeVector);
                     maybeRemoveOldInst(inst);
                     changed = true;
@@ -1012,23 +1109,29 @@ struct PeepholeContext : InstPassBase
                 break;
             }
         case kIROp_GetNaturalStride:
-        {
-            if (targetProgram)
             {
-                if (isInGeneric)
-                    break;
-                auto type = inst->getOperand(0)->getDataType();
-                IRSizeAndAlignment sizeAlignment;
-                getNaturalSizeAndAlignment(targetProgram->getOptionSet(), type, &sizeAlignment);
-                IRBuilder builder(module);
-                builder.setInsertBefore(inst);
-                auto stride = builder.getIntValue(inst->getDataType(), sizeAlignment.getStride());
-                inst->replaceUsesWith(stride);
-                maybeRemoveOldInst(inst);
-                changed = true;
+                if (targetProgram)
+                {
+                    if (isInGeneric)
+                        break;
+                    auto type = inst->getOperand(0)->getDataType();
+                    IRSizeAndAlignment sizeAlignment;
+                    const auto res = getNaturalSizeAndAlignment(
+                        targetProgram->getOptionSet(),
+                        type,
+                        &sizeAlignment);
+                    if (!SLANG_SUCCEEDED(res))
+                        break;
+                    IRBuilder builder(module);
+                    builder.setInsertBefore(inst);
+                    auto stride =
+                        builder.getIntValue(inst->getDataType(), sizeAlignment.getStride());
+                    inst->replaceUsesWith(stride);
+                    maybeRemoveOldInst(inst);
+                    changed = true;
+                }
+                break;
             }
-            break;
-        }
         case kIROp_IsInt:
         case kIROp_IsFloat:
         case kIROp_IsHalf:
@@ -1146,10 +1249,7 @@ struct PeepholeContext : InstPassBase
         return result;
     }
 
-    bool processModule()
-    {
-        return processFunc(module->getModuleInst());
-    }
+    bool processModule() { return processFunc(module->getModuleInst()); }
 };
 
 bool peepholeOptimize(TargetProgram* target, IRModule* module, PeepholeOptimizationOptions options)
@@ -1157,9 +1257,9 @@ bool peepholeOptimize(TargetProgram* target, IRModule* module, PeepholeOptimizat
     PeepholeContext context = PeepholeContext(module);
     context.targetProgram = target;
     context.isPrelinking = options.isPrelinking;
-    context.useFastAnalysis = target
-        ? target->getOptionSet().getBoolOption(CompilerOptionName::MinimumSlangOptimization)
-        : true;
+    context.useFastAnalysis =
+        target ? target->getOptionSet().getBoolOption(CompilerOptionName::MinimumSlangOptimization)
+               : true;
     return context.processModule();
 }
 
@@ -1167,10 +1267,19 @@ bool peepholeOptimize(TargetProgram* target, IRInst* func)
 {
     PeepholeContext context = PeepholeContext(func->getModule());
     context.targetProgram = target;
-    context.useFastAnalysis = target
-        ? target->getOptionSet().getBoolOption(CompilerOptionName::MinimumSlangOptimization)
-        : true;
+    context.useFastAnalysis =
+        target ? target->getOptionSet().getBoolOption(CompilerOptionName::MinimumSlangOptimization)
+               : true;
     return context.processFunc(func);
+}
+
+bool peepholeOptimizeInst(TargetProgram* target, IRModule* module, IRInst* inst)
+{
+    PeepholeContext context = PeepholeContext(module);
+    context.targetProgram = target;
+    context.useFastAnalysis = true;
+    context.processInst(inst);
+    return context.changed;
 }
 
 bool peepholeOptimizeGlobalScope(TargetProgram* target, IRModule* module)

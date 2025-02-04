@@ -1,8 +1,9 @@
 // test-context.cpp
 #include "options.h"
 
-#include "../../source/core/slang-string-util.h"
 #include "../../source/core/slang-io.h"
+#include "../../source/core/slang-string-util.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -58,7 +59,12 @@ static bool _isSubCommand(const char* arg)
 
 /* !!!!!!!!!!!!!!!!!!!!!!!!!!!!! Options !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
 
-/* static */Result Options::parse(int argc, char** argv, TestCategorySet* categorySet, Slang::WriterHelper stdError, Options* optionsOut)
+/* static */ Result Options::parse(
+    int argc,
+    char** argv,
+    TestCategorySet* categorySet,
+    Slang::WriterHelper stdError,
+    Options* optionsOut)
 {
     // Reset the options
     *optionsOut = Options();
@@ -200,7 +206,7 @@ static bool _isSubCommand(const char* arg)
                 stdError.print("error: expected operand for '%s'\n", arg);
                 return SLANG_FAIL;
             }
-            optionsOut->serverCount = stringToInt(* argCursor++);
+            optionsOut->serverCount = stringToInt(*argCursor++);
             if (optionsOut->serverCount <= 0)
             {
                 optionsOut->serverCount = 1;
@@ -258,12 +264,17 @@ static bool _isSubCommand(const char* arg)
         {
             if (argCursor == argEnd)
             {
-                stdError.print("error: expecting an api expression (eg 'vk+dx12' or '+dx11') '%s'\n", arg);
+                stdError.print(
+                    "error: expecting an api expression (eg 'vk+dx12' or '+dx11') '%s'\n",
+                    arg);
                 return SLANG_FAIL;
             }
             const char* apiList = *argCursor++;
 
-            SlangResult res = RenderApiUtil::parseApiFlags(UnownedStringSlice(apiList), optionsOut->enabledApis, &optionsOut->enabledApis);
+            SlangResult res = RenderApiUtil::parseApiFlags(
+                UnownedStringSlice(apiList),
+                optionsOut->enabledApis,
+                &optionsOut->enabledApis);
             if (SLANG_FAILED(res))
             {
                 stdError.print("error: unable to parse api expression '%s'\n", apiList);
@@ -274,12 +285,17 @@ static bool _isSubCommand(const char* arg)
         {
             if (argCursor == argEnd)
             {
-                stdError.print("error: expected an api expression (eg 'vk+dx12' or '+dx11') '%s'\n", arg);
+                stdError.print(
+                    "error: expected an api expression (eg 'vk+dx12' or '+dx11') '%s'\n",
+                    arg);
                 return SLANG_FAIL;
             }
             const char* apiList = *argCursor++;
 
-            SlangResult res = RenderApiUtil::parseApiFlags(UnownedStringSlice(apiList), optionsOut->synthesizedTestApis, &optionsOut->synthesizedTestApis);
+            SlangResult res = RenderApiUtil::parseApiFlags(
+                UnownedStringSlice(apiList),
+                optionsOut->synthesizedTestApis,
+                &optionsOut->synthesizedTestApis);
             if (SLANG_FAILED(res))
             {
                 stdError.print("error: unable to parse api expression '%s'\n", apiList);
@@ -310,6 +326,15 @@ static bool _isSubCommand(const char* arg)
             {
                 optionsOut->expectedFailureList.add(line);
             }
+        }
+        else if (strcmp(arg, "-test-dir") == 0)
+        {
+            if (argCursor == argEnd)
+            {
+                stdError.print("error: expected operand for '%s'\n", arg);
+                return SLANG_FAIL;
+            }
+            optionsOut->testDir = *argCursor++;
         }
         else
         {
@@ -347,6 +372,12 @@ static bool _isSubCommand(const char* arg)
         {
             optionsOut->binDir = Path::getParentDirectory(exePath);
         }
+    }
+
+    if (optionsOut->testDir.getLength() == 0)
+    {
+        // If the test directory isn't set, use the "tests" directory
+        optionsOut->testDir = String("tests/");
     }
 
     return SLANG_OK;

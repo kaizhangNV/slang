@@ -15,12 +15,11 @@ class FenceImpl : public FenceBase
 {
 public:
     RefPtr<DeviceImpl> m_device;
-
-    FenceImpl(DeviceImpl* device);
+    NS::SharedPtr<MTL::SharedEvent> m_event;
 
     ~FenceImpl();
 
-    Result init(const IFence::Desc& desc);
+    Result init(DeviceImpl* device, const IFence::Desc& desc);
 
     virtual SLANG_NO_THROW Result SLANG_MCALL getCurrentValue(uint64_t* outValue) override;
 
@@ -29,8 +28,8 @@ public:
     virtual SLANG_NO_THROW Result SLANG_MCALL getSharedHandle(InteropHandle* outHandle) override;
 
     virtual SLANG_NO_THROW Result SLANG_MCALL
-        getNativeHandle(InteropHandle* outNativeHandle) override;
+    getNativeHandle(InteropHandle* outNativeHandle) override;
 };
 
-} // namespace metal 
+} // namespace metal
 } // namespace gfx

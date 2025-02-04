@@ -1,440 +1,254 @@
 #include "slang-ir-metal-legalize.h"
 
-#include "slang-ir.h"
-#include "slang-ir-insts.h"
-#include "slang-ir-util.h"
 #include "slang-ir-clone.h"
+#include "slang-ir-insts.h"
+#include "slang-ir-legalize-binary-operator.h"
+#include "slang-ir-legalize-varying-params.h"
 #include "slang-ir-specialize-address-space.h"
+#include "slang-ir-util.h"
+#include "slang-ir.h"
 
 namespace Slang
 {
-    struct EntryPointInfo
+
+// metal textures only support writing 4-component values, even if the texture is only 1, 2, or
+// 3-component in this case the other channels get ignored, but the signature still doesnt match so
+// now we have to replace the value being written with a 4-component vector where the new components
+// get ignored, nice
+void legalizeImageStoreValue(IRBuilder& builder, IRImageStore* imageStore)
+{
+    builder.setInsertBefore(imageStore);
+    auto originalValue = imageStore->getValue();
+    auto valueBaseType = originalValue->getDataType();
+    IRType* elementType = nullptr;
+    List<IRInst*> components;
+    if (auto valueVectorType = as<IRVectorType>(valueBaseType))
     {
-        IRFunc* entryPointFunc;
-        IREntryPointDecoration* entryPointDecor;
-    };
-
-    void hoistEntryPointParameterFromStruct(EntryPointInfo entryPoint)
-    {
-        // If an entry point has a input parameter with a struct type, we want to hoist out
-        // all the fields of the struct type to be individual parameters of the entry point.
-        // This will canonicalize the entry point signature, so we can handle all cases uniformly.
-
-        // For example, given an entry point:
-        // ```
-        // struct VertexInput { float3 pos; float 2 uv; int vertexId : SV_VertexID};
-        // void main(VertexInput vin) { ... }
-        // ```
-        // We will transform it to:
-        // ```
-        // void main(float3 pos, float2 uv, int vertexId : SV_VertexID) {
-        //     VertexInput vin = {pos,uv,vertexId};
-        //     ...
-        // }
-        // ```
-
-        auto func = entryPoint.entryPointFunc;
-        List<IRParam*> paramsToProcess;
-        for (auto param : func->getParams())
+        if (auto originalElementCount = as<IRIntLit>(valueVectorType->getElementCount()))
         {
-            if (as<IRStructType>(param->getDataType()))
+            if (originalElementCount->getValue() == 4)
             {
-                paramsToProcess.add(param);
+                return;
             }
         }
-
-        IRBuilder builder(func);
-        builder.setInsertBefore(func);
-        for (auto param : paramsToProcess)
+        elementType = valueVectorType->getElementType();
+        auto vectorValue = as<IRMakeVector>(originalValue);
+        for (UInt i = 0; i < vectorValue->getOperandCount(); i++)
         {
-            auto structType = as<IRStructType>(param->getDataType());
-            builder.setInsertBefore(func->getFirstBlock()->getFirstOrdinaryInst());
-            auto varLayout = findVarLayout(param);
-            IRStructTypeLayout* structTypeLayout = nullptr;
-            if (varLayout)
-                structTypeLayout = as<IRStructTypeLayout>(varLayout->getTypeLayout());
-            Index fieldIndex = 0;
-            List<IRInst*> fieldParams;
-            for (auto field : structType->getFields())
-            {
-                auto fieldParam = builder.emitParam(field->getFieldType());
-                
-                IRCloneEnv cloneEnv;
-                cloneInstDecorationsAndChildren(&cloneEnv, builder.getModule(), field->getKey(), fieldParam);
-
-                IRVarLayout* fieldLayout = structTypeLayout ? structTypeLayout->getFieldLayout(fieldIndex) : nullptr;
-                if (varLayout)
-                {
-                    IRVarLayout::Builder varLayoutBuilder(&builder, fieldLayout->getTypeLayout());
-                    varLayoutBuilder.cloneEverythingButOffsetsFrom(fieldLayout);
-                    for (auto offsetAttr : fieldLayout->getOffsetAttrs())
-                    {
-                        auto parentOffsetAttr = varLayout->findOffsetAttr(offsetAttr->getResourceKind());
-                        UInt parentOffset = parentOffsetAttr ? parentOffsetAttr->getOffset() : 0;
-                        UInt parentSpace = parentOffsetAttr ? parentOffsetAttr->getSpace() : 0;
-                        auto resInfo = varLayoutBuilder.findOrAddResourceInfo(offsetAttr->getResourceKind());
-                        resInfo->offset = parentOffset + offsetAttr->getOffset();
-                        resInfo->space = parentSpace + offsetAttr->getSpace();
-                    }
-                    builder.addLayoutDecoration(fieldParam, varLayoutBuilder.build());
-                }
-                param->insertBefore(fieldParam);
-                fieldParams.add(fieldParam);
-                fieldIndex++;
-            }
-            builder.setInsertBefore(func->getFirstBlock()->getFirstOrdinaryInst());
-            auto reconstructedParam = builder.emitMakeStruct(structType, fieldParams.getCount(), fieldParams.getBuffer());
-            param->replaceUsesWith(reconstructedParam);
-            param->removeFromParent();
-        }
-        fixUpFuncType(func);
-    }
-
-    void packStageInParameters(EntryPointInfo entryPoint)
-    {
-        // If the entry point has any parameters whose layout contains VaryingInput,
-        // we need to pack those parameters into a single `struct` type, and decorate
-        // the fields with the appropriate `[[attribute]]` decorations.
-        // For other parameters that are not `VaryingInput`, we need to leave them as is.
-        // 
-        // For example, given this code after `hoistEntryPointParameterFromStruct`:
-         // ```
-        // void main(float3 pos, float2 uv, int vertexId : SV_VertexID) {
-        //     VertexInput vin = {pos,uv,vertexId};
-        //     ...
-        // }
-        // ```
-        // We are going to transform it into:
-        // ```
-        // struct VertexInput {
-        //     float3 pos [[attribute(0)]];
-        //     float2 uv [[attribute(1)]];
-        // };
-        // void main(VertexInput vin, int vertexId : SV_VertexID) {
-        //     let pos = vin.pos;
-        //     let uv = vin.uv;
-        //     ...
-        // }
-
-        auto func = entryPoint.entryPointFunc;
-
-        bool isGeometryStage = false;
-        switch (entryPoint.entryPointDecor->getProfile().getStage())
-        {
-        case Stage::Vertex:
-        case Stage::Amplification:
-        case Stage::Mesh:
-        case Stage::Geometry:
-        case Stage::Domain:
-        case Stage::Hull:
-            isGeometryStage = true;
-            break;
-        }
-
-        List<IRParam*> paramsToPack;
-        for (auto param : func->getParams())
-        {
-            auto layout = findVarLayout(param);
-            if (!layout)
-                continue;
-            if (!layout->findOffsetAttr(LayoutResourceKind::VaryingInput))
-                continue;
-            if(param->findDecorationImpl(kIROp_HLSLMeshPayloadDecoration))
-                continue;
-            paramsToPack.add(param);
-        }
-
-        if (paramsToPack.getCount() == 0)
-            return;
-
-        IRBuilder builder(func);
-        builder.setInsertBefore(func);
-        IRStructType* structType = builder.createStructType();
-        auto stageText = getStageText(entryPoint.entryPointDecor->getProfile().getStage());
-        builder.addNameHintDecoration(structType, (String(stageText) + toSlice("Input")).getUnownedSlice());
-        List<IRStructKey*> keys;
-        IRStructTypeLayout::Builder layoutBuilder(&builder);
-        for (auto param : paramsToPack)
-        {
-            auto paramVarLayout = findVarLayout(param);
-            auto key = builder.createStructKey();
-            param->transferDecorationsTo(key);
-            builder.createStructField(structType, key, param->getDataType());
-            if (auto varyingInOffsetAttr = paramVarLayout->findOffsetAttr(LayoutResourceKind::VaryingInput))
-            {
-                if (!key->findDecoration<IRSemanticDecoration>() && !paramVarLayout->findAttr<IRSemanticAttr>())
-                {
-                    // If the parameter doesn't have a semantic, we need to add one for semantic matching.
-                    builder.addSemanticDecoration(key, toSlice("_slang_attr"), (int)varyingInOffsetAttr->getOffset());
-                }
-            }
-            if (isGeometryStage)
-            {
-                // For geometric stages, we need to translate VaryingInput offsets to MetalAttribute offsets.
-                IRVarLayout::Builder elementVarLayoutBuilder(&builder, paramVarLayout->getTypeLayout());
-                elementVarLayoutBuilder.cloneEverythingButOffsetsFrom(paramVarLayout);
-                for (auto offsetAttr : paramVarLayout->getOffsetAttrs())
-                {
-                    auto resourceKind = offsetAttr->getResourceKind();
-                    if (resourceKind == LayoutResourceKind::VaryingInput)
-                    {
-                        resourceKind = LayoutResourceKind::MetalAttribute;
-                    }
-                    auto resInfo = elementVarLayoutBuilder.findOrAddResourceInfo(resourceKind);
-                    resInfo->offset = offsetAttr->getOffset();
-                    resInfo->space = offsetAttr->getSpace();
-                }
-                paramVarLayout = elementVarLayoutBuilder.build();
-            }
-            layoutBuilder.addField(key, paramVarLayout);
-            builder.addLayoutDecoration(key, paramVarLayout);
-            keys.add(key);
-        }
-        builder.setInsertInto(func->getFirstBlock());
-        auto packedParam = builder.emitParamAtHead(structType);
-        auto typeLayout = layoutBuilder.build();
-        IRVarLayout::Builder varLayoutBuilder(&builder, typeLayout);
-
-        // Add a VaryingInput resource info to the packed parameter layout, so that we can emit
-        // the needed `[[stage_in]]` attribute in Metal emitter.
-        varLayoutBuilder.findOrAddResourceInfo(LayoutResourceKind::VaryingInput);
-        auto paramVarLayout = varLayoutBuilder.build();
-        builder.addLayoutDecoration(packedParam, paramVarLayout);
-
-        // Replace the original parameters with the packed parameter
-        builder.setInsertBefore(func->getFirstBlock()->getFirstOrdinaryInst());
-        for (Index paramIndex = 0; paramIndex < paramsToPack.getCount(); paramIndex++)
-        {
-            auto param = paramsToPack[paramIndex];
-            auto key = keys[paramIndex];
-            auto paramField = builder.emitFieldExtract(param->getDataType(), packedParam, key);
-            param->replaceUsesWith(paramField);
-            param->removeFromParent();
-        }
-        fixUpFuncType(func);
-    }
-
-
-    void ensureResultStructHasUserSemantic(IRStructType* structType, IRVarLayout* varLayout)
-    {
-        // Ensure each field in an output struct type has either a system semantic or a user semantic,
-        // so that signature matching can happen correctly.
-        auto typeLayout = as<IRStructTypeLayout>(varLayout->getTypeLayout());
-        Index index = 0;
-        IRBuilder builder(structType);
-        for (auto field : structType->getFields())
-        {
-            auto key = field->getKey();
-            if (key->findDecoration<IRSemanticDecoration>())
-            {
-                index++;
-                continue;
-            }
-            typeLayout->getFieldLayout(index);
-            auto fieldLayout = typeLayout->getFieldLayout(index);
-            if (auto offsetAttr = fieldLayout->findOffsetAttr(LayoutResourceKind::VaryingOutput))
-            {
-                UInt varOffset = 0;
-                if (auto varOffsetAttr = varLayout->findOffsetAttr(LayoutResourceKind::VaryingOutput))
-                    varOffset = varOffsetAttr->getOffset();
-                varOffset += offsetAttr->getOffset();
-                builder.addSemanticDecoration(key, toSlice("_slang_attr"), (int)varOffset);
-            }
-            index++;
+            components.add(vectorValue->getOperand(i));
         }
     }
-
-
-    void wrapReturnValueInStruct(EntryPointInfo entryPoint)
+    else
     {
-        // Wrap return value into a struct if it is not already a struct.
-        // For example, given this entry point:
-        // ```
-        // float4 main() : SV_Target { return float3(1,2,3); }
-        // ```
-        // We are going to transform it into:
-        // ```
-        // struct Output {
-        //     float4 value : SV_Target;
-        // };
-        // Output main() { return {float3(1,2,3)}; }
-
-        auto func = entryPoint.entryPointFunc;
-
-        auto returnType = func->getResultType();
-        if (as<IRVoidType>(returnType))
-            return;
-        auto entryPointLayoutDecor = func->findDecoration<IRLayoutDecoration>();
-        if (!entryPointLayoutDecor)
-            return;
-        auto entryPointLayout = as<IREntryPointLayout>(entryPointLayoutDecor->getLayout());
-        if (!entryPointLayout)
-            return;
-        auto resultLayout = entryPointLayout->getResultLayout();
-
-        // If return type is already a struct, just make sure every field has a semantic.
-        if (auto returnStructType = as<IRStructType>(returnType))
-        {
-            ensureResultStructHasUserSemantic(returnStructType, resultLayout);
-            return;
-        }
-
-        // If not, we need to wrap the result into a struct type.
-        IRBuilder builder(func);
-        builder.setInsertBefore(func);
-        IRStructType* structType = builder.createStructType();
-        auto stageText = getStageText(entryPoint.entryPointDecor->getProfile().getStage());
-        builder.addNameHintDecoration(structType, (String(stageText) + toSlice("Output")).getUnownedSlice());
-        auto key = builder.createStructKey();
-        builder.addNameHintDecoration(key, toSlice("output"));
-        builder.addLayoutDecoration(key, resultLayout);
-        builder.createStructField(structType, key, returnType);
-        IRStructTypeLayout::Builder structTypeLayoutBuilder(&builder);
-        structTypeLayoutBuilder.addField(key, resultLayout);
-        auto typeLayout = structTypeLayoutBuilder.build();
-        IRVarLayout::Builder varLayoutBuilder(&builder, typeLayout);
-        auto varLayout = varLayoutBuilder.build();
-        ensureResultStructHasUserSemantic(structType, varLayout);
-
-        for (auto block : func->getBlocks())
-        {
-            if (auto returnInst = as<IRReturn>(block->getTerminator()))
-            {
-                builder.setInsertBefore(returnInst);
-                auto returnVal = returnInst->getVal();
-                auto newResult = builder.emitMakeStruct(structType, 1, &returnVal);
-                returnInst->setOperand(0, newResult);
-            }
-        }
-        fixUpFuncType(func, structType);
+        elementType = valueBaseType;
+        components.add(originalValue);
     }
-
-    void legalizeMeshEntryPoint(EntryPointInfo entryPoint)
+    for (UInt i = components.getCount(); i < 4; i++)
     {
-        auto func = entryPoint.entryPointFunc;
-
-        if (entryPoint.entryPointDecor->getProfile().getStage() != Stage::Mesh)
-        {
-            return;
-        }
-
-        IRBuilder builder{ entryPoint.entryPointFunc->getModule() };
-        for (auto param : func->getParams())
-        {
-            if(param->findDecorationImpl(kIROp_HLSLMeshPayloadDecoration))
-            {
-                IRVarLayout::Builder varLayoutBuilder(&builder, IRTypeLayout::Builder{&builder}.build());
-
-                varLayoutBuilder.findOrAddResourceInfo(LayoutResourceKind::MetalPayload);
-                auto paramVarLayout = varLayoutBuilder.build();
-                builder.addLayoutDecoration(param, paramVarLayout);
-            }
-        }
-
+        components.add(builder.getIntValue(builder.getIntType(), 0));
     }
-
-    void legalizeDispatchMeshPayloadForMetal(EntryPointInfo entryPoint)
-    {
-        if (entryPoint.entryPointDecor->getProfile().getStage() != Stage::Amplification)
-        {
-            return;
-        }
-        // Find out DispatchMesh function
-        IRGlobalValueWithCode* dispatchMeshFunc = nullptr;
-        for (const auto globalInst : entryPoint.entryPointFunc->getModule()->getGlobalInsts())
-        {
-            if (const auto func = as<IRGlobalValueWithCode>(globalInst))
-            {
-                if (const auto dec = func->findDecoration<IRKnownBuiltinDecoration>())
-                {
-                    if (dec->getName() == "DispatchMesh")
-                    {
-                        SLANG_ASSERT(!dispatchMeshFunc && "Multiple DispatchMesh functions found");
-                        dispatchMeshFunc = func;
-                    }
-                }
-            }
-        }
-
-        if (!dispatchMeshFunc)
-            return;
-
-        IRBuilder builder{ entryPoint.entryPointFunc->getModule() };
-
-        // We'll rewrite the call to use mesh_grid_properties.set_threadgroups_per_grid
-        traverseUses(dispatchMeshFunc, [&](const IRUse* use) {
-            if (const auto call = as<IRCall>(use->getUser()))
-            {
-                SLANG_ASSERT(call->getArgCount() == 4);
-                const auto payload = call->getArg(3);
-
-                const auto payloadPtrType = composeGetters<IRPtrType>(
-                    payload,
-                    &IRInst::getDataType
-                );
-                SLANG_ASSERT(payloadPtrType);
-                const auto payloadType = payloadPtrType->getValueType();
-                SLANG_ASSERT(payloadType);
-
-                builder.setInsertBefore(entryPoint.entryPointFunc->getFirstBlock()->getFirstOrdinaryInst());
-                const auto annotatedPayloadType =
-                    builder.getPtrType(
-                        kIROp_RefType,
-                        payloadPtrType->getValueType(),
-                        AddressSpace::MetalObjectData
-                    );
-                auto packedParam = builder.emitParam(annotatedPayloadType);
-                builder.addExternCppDecoration(packedParam, toSlice("_slang_mesh_payload"));
-                IRVarLayout::Builder varLayoutBuilder(&builder, IRTypeLayout::Builder{&builder}.build());
-
-                // Add the MetalPayload resource info, so we can emit [[payload]]
-                varLayoutBuilder.findOrAddResourceInfo(LayoutResourceKind::MetalPayload);
-                auto paramVarLayout = varLayoutBuilder.build();
-                builder.addLayoutDecoration(packedParam, paramVarLayout);
-
-                // Now we replace the call to DispatchMesh with a call to the mesh grid properties
-                // But first we need to create the parameter
-                const auto meshGridPropertiesType = builder.getMetalMeshGridPropertiesType();
-                auto mgp = builder.emitParam(meshGridPropertiesType);
-                builder.addExternCppDecoration(mgp, toSlice("_slang_mgp"));
-                }
-            });
-    }
-
-    void legalizeEntryPointForMetal(EntryPointInfo entryPoint, DiagnosticSink* sink)
-    {
-        SLANG_UNUSED(sink);
-
-        hoistEntryPointParameterFromStruct(entryPoint);
-        packStageInParameters(entryPoint);
-        wrapReturnValueInStruct(entryPoint);
-        legalizeMeshEntryPoint(entryPoint);
-        legalizeDispatchMeshPayloadForMetal(entryPoint);
-    }
-
-
-    void legalizeIRForMetal(IRModule* module, DiagnosticSink* sink)
-    {
-        List<EntryPointInfo> entryPoints;
-        for (auto inst : module->getGlobalInsts())
-        {
-            if (auto func = as<IRFunc>(inst))
-            {
-                if (auto entryPointDecor = func->findDecoration<IREntryPointDecoration>())
-                {
-                    EntryPointInfo info;
-                    info.entryPointDecor = entryPointDecor;
-                    info.entryPointFunc = func;
-                    entryPoints.add(info);
-                }
-            }
-        }
-
-        for (auto entryPoint : entryPoints)
-            legalizeEntryPointForMetal(entryPoint, sink);
-
-        specializeAddressSpace(module);
-    }
-
+    auto fourComponentVectorType = builder.getVectorType(elementType, 4);
+    imageStore->setOperand(2, builder.emitMakeVector(fourComponentVectorType, components));
 }
 
+void legalizeFuncBody(IRFunc* func)
+{
+    IRBuilder builder(func);
+    for (auto block : func->getBlocks())
+    {
+        for (auto inst : block->getModifiableChildren())
+        {
+            if (auto call = as<IRCall>(inst))
+            {
+                ShortList<IRUse*> argsToFixup;
+                // Metal doesn't support taking the address of a vector element.
+                // If such an address is used as an argument to a call, we need to replace it with a
+                // temporary. for example, if we see:
+                // ```
+                //     void foo(inout float x) { x = 1; }
+                //     float4 v;
+                //     foo(v.x);
+                // ```
+                // We need to transform it into:
+                // ```
+                //     float4 v;
+                //     float temp = v.x;
+                //     foo(temp);
+                //     v.x = temp;
+                // ```
+                //
+                for (UInt i = 0; i < call->getArgCount(); i++)
+                {
+                    if (auto addr = as<IRGetElementPtr>(call->getArg(i)))
+                    {
+                        auto ptrType = addr->getBase()->getDataType();
+                        auto valueType = tryGetPointedToType(&builder, ptrType);
+                        if (!valueType)
+                            continue;
+                        if (as<IRVectorType>(valueType))
+                            argsToFixup.add(call->getArgs() + i);
+                    }
+                }
+                if (argsToFixup.getCount() == 0)
+                    continue;
+
+                // Define temp vars for all args that need fixing up.
+                for (auto arg : argsToFixup)
+                {
+                    auto addr = as<IRGetElementPtr>(arg->get());
+                    auto ptrType = addr->getDataType();
+                    auto valueType = tryGetPointedToType(&builder, ptrType);
+                    builder.setInsertBefore(call);
+                    auto temp = builder.emitVar(valueType);
+                    auto initialValue = builder.emitLoad(valueType, addr);
+                    builder.emitStore(temp, initialValue);
+                    builder.setInsertAfter(call);
+                    builder.emitStore(addr, builder.emitLoad(valueType, temp));
+                    arg->set(temp);
+                }
+            }
+            if (auto write = as<IRImageStore>(inst))
+            {
+                legalizeImageStoreValue(builder, write);
+            }
+        }
+    }
+}
+
+struct MetalAddressSpaceAssigner : InitialAddressSpaceAssigner
+{
+    virtual bool tryAssignAddressSpace(IRInst* inst, AddressSpace& outAddressSpace) override
+    {
+        switch (inst->getOp())
+        {
+        case kIROp_Var:
+            outAddressSpace = AddressSpace::ThreadLocal;
+            return true;
+        case kIROp_RWStructuredBufferGetElementPtr:
+            outAddressSpace = AddressSpace::Global;
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    virtual AddressSpace getAddressSpaceFromVarType(IRInst* type) override
+    {
+        if (as<IRUniformParameterGroupType>(type))
+        {
+            return AddressSpace::Uniform;
+        }
+        if (as<IRByteAddressBufferTypeBase>(type))
+        {
+            return AddressSpace::Global;
+        }
+        if (as<IRHLSLStructuredBufferTypeBase>(type))
+        {
+            return AddressSpace::Global;
+        }
+        if (as<IRGLSLShaderStorageBufferType>(type))
+        {
+            return AddressSpace::Global;
+        }
+        if (auto ptrType = as<IRPtrTypeBase>(type))
+        {
+            if (ptrType->hasAddressSpace())
+                return ptrType->getAddressSpace();
+            return AddressSpace::Global;
+        }
+        return AddressSpace::Generic;
+    }
+
+    virtual AddressSpace getLeafInstAddressSpace(IRInst* inst) override
+    {
+        if (as<IRGroupSharedRate>(inst->getRate()))
+            return AddressSpace::GroupShared;
+        switch (inst->getOp())
+        {
+        case kIROp_RWStructuredBufferGetElementPtr:
+            return AddressSpace::Global;
+        case kIROp_Var:
+            if (as<IRBlock>(inst->getParent()))
+                return AddressSpace::ThreadLocal;
+            break;
+        default:
+            break;
+        }
+        auto type = unwrapAttributedType(inst->getDataType());
+        if (!type)
+            return AddressSpace::Generic;
+        return getAddressSpaceFromVarType(type);
+    }
+};
+
+static void processInst(IRInst* inst)
+{
+    switch (inst->getOp())
+    {
+    case kIROp_Add:
+    case kIROp_Sub:
+    case kIROp_Mul:
+    case kIROp_Div:
+    case kIROp_FRem:
+    case kIROp_IRem:
+    case kIROp_And:
+    case kIROp_Or:
+    case kIROp_BitAnd:
+    case kIROp_BitOr:
+    case kIROp_BitXor:
+    case kIROp_Lsh:
+    case kIROp_Rsh:
+    case kIROp_Eql:
+    case kIROp_Neq:
+    case kIROp_Greater:
+    case kIROp_Less:
+    case kIROp_Geq:
+    case kIROp_Leq:
+        legalizeBinaryOp(inst);
+        break;
+    case kIROp_MetalCastToDepthTexture:
+        {
+            // If the operand is already a depth texture, don't do anything.
+            auto textureType = as<IRTextureTypeBase>(inst->getOperand(0)->getDataType());
+            if (textureType && getIntVal(textureType->getIsShadowInst()) == 1)
+            {
+                inst->replaceUsesWith(inst->getOperand(0));
+                inst->removeAndDeallocate();
+            }
+            break;
+        }
+    default:
+        for (auto child : inst->getModifiableChildren())
+        {
+            processInst(child);
+        }
+    }
+}
+
+void legalizeIRForMetal(IRModule* module, DiagnosticSink* sink)
+{
+    List<EntryPointInfo> entryPoints;
+    for (auto inst : module->getGlobalInsts())
+    {
+        if (auto func = as<IRFunc>(inst))
+        {
+            if (auto entryPointDecor = func->findDecoration<IREntryPointDecoration>())
+            {
+                EntryPointInfo info;
+                info.entryPointDecor = entryPointDecor;
+                info.entryPointFunc = func;
+                entryPoints.add(info);
+            }
+            legalizeFuncBody(func);
+        }
+    }
+
+    legalizeEntryPointVaryingParamsForMetal(module, sink, entryPoints);
+
+    MetalAddressSpaceAssigner metalAddressSpaceAssigner;
+    specializeAddressSpace(module, &metalAddressSpaceAssigner);
+
+    processInst(module->getModuleInst());
+}
+
+} // namespace Slang

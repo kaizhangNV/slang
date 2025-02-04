@@ -11,6 +11,6 @@ void removeTorchKernels(IRModule* module);
 void handleAutoBindNames(IRModule* module);
 void generateDerivativeWrappers(IRModule* module, DiagnosticSink* sink);
 void lowerBuiltinTypesForKernelEntryPoints(IRModule* module, DiagnosticSink* sink);
+void removeTorchAndCUDAEntryPoints(IRModule* module);
 
-}
-
+} // namespace Slang
