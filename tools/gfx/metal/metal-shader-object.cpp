@@ -81,6 +81,7 @@ ShaderObjectImpl::setResource(ShaderOffset const& offset, IResourceView* resourc
         SLANG_ASSERT(resourceViewImpl->m_type == ResourceViewImpl::ViewType::Buffer);
         m_buffers[bindingRange.baseIndex + offset.bindingArrayIndex] =
             static_cast<BufferResourceViewImpl*>(resourceView);
+        printf("tracking: set buffer address: %lx\n", static_cast<BufferResourceViewImpl*>(resourceView)->m_buffer->getDeviceAddress());
         break;
     case slang::BindingType::TypedBuffer:
     case slang::BindingType::MutableTypedBuffer:
@@ -123,7 +124,14 @@ Result ShaderObjectImpl::init(IDevice* device, ShaderObjectLayoutImpl* layout)
     // uniform data (which includes values from this object and
     // any existential-type sub-objects).
     //
-    size_t uniformSize = layout->getElementTypeLayout()->getSize();
+    // unsigned int kind = layout->getElementTypeLayout()->getKind();
+    // printf("kind: %d\n", kind);
+    size_t uniformSize = 0;
+    if (layout->isParameterBlock())
+        uniformSize = layout->getParameterBlockTypeLayout()->getSize();
+    else
+        uniformSize = layout->getElementTypeLayout()->getSize();
+
     if (uniformSize)
     {
         m_data.setCount(uniformSize);
@@ -161,6 +169,10 @@ Result ShaderObjectImpl::init(IDevice* device, ShaderObjectLayoutImpl* layout)
         for (Index i = 0; i < bindingRangeInfo.count; ++i)
         {
             RefPtr<ShaderObjectImpl> subObject;
+
+            if (bindingRangeInfo.bindingType == slang::BindingType::ParameterBlock)
+                subObjectLayout->setIsParameterBlock();
+
             SLANG_RETURN_ON_FAIL(
                 ShaderObjectImpl::create(device, subObjectLayout, subObject.writeRef()));
             m_objects[bindingRangeInfo.subObjectIndex + i] = subObject;
@@ -370,8 +382,8 @@ BufferResourceImpl* ShaderObjectImpl::_ensureArgumentBufferUpToDate(
     DeviceImpl* device,
     ShaderObjectLayoutImpl* layout)
 {
-    auto typeLayout = layout->getParameterBlockTypeLayout();
-    auto defaultTypeLayout = m_layout->getElementTypeLayout();
+    auto typeLayout = layout->getParameterBlockTypeLayout();    // layout is the layout of the current subObject (ParameterBlock is subObject)
+    auto defaultTypeLayout = m_layout->getElementTypeLayout();  // m_layout is the root object layout
 
     // If we have already created a buffer to hold the parmaeter block, then we should
     // simply re-use that buffer rather than re-create it.
@@ -406,89 +418,148 @@ BufferResourceImpl* ShaderObjectImpl::_ensureArgumentBufferUpToDate(
         SLANG_ASSERT(
             defaultTypeLayout->getBindingRangeCount() == typeLayout->getBindingRangeCount());
 
-        int bufferBindingIndexOffset = layout->getTotalOrdinaryDataSize() != 0 ? 1 : 0;
-
-        for (unsigned int bindingRangeIndex = 0;
-             bindingRangeIndex < defaultTypeLayout->getBindingRangeCount();
-             bindingRangeIndex++)
+        uint32_t fieldCount = typeLayout->getFieldCount();
+        uint32_t bufferIndex = 0;
+        uint32_t textureIndex = 0;
+        uint32_t samplerIndex = 0;
+        for (uint32_t i = 0; i < fieldCount; i++)
         {
-            int bindingCount = defaultTypeLayout->getBindingRangeBindingCount(bindingRangeIndex);
-            int setIndex = defaultTypeLayout->getBindingRangeDescriptorSetIndex(bindingRangeIndex);
-            int rangeIndex =
-                defaultTypeLayout->getBindingRangeFirstDescriptorRangeIndex(bindingRangeIndex);
-            int bindingOffset =
-                defaultTypeLayout->getDescriptorSetDescriptorRangeIndexOffset(setIndex, rangeIndex);
-            auto bindingType = defaultTypeLayout->getBindingRangeType(bindingRangeIndex);
-            for (int i = 0; i < bindingCount; i++)
-            {
-                auto argumentDataOffset =
-                    typeLayout->getDescriptorSetDescriptorRangeIndexOffset(setIndex, rangeIndex) +
-                    i * sizeof(uint64_t);
-                auto argumentPtr = (uint8_t*)argumentData + argumentDataOffset;
-                auto resourceIndex = bindingOffset + i;
-                switch (bindingType)
-                {
-                case slang::BindingType::ConstantBuffer:
-                case slang::BindingType::ParameterBlock:
-                    {
-                        if (m_objects[resourceIndex])
-                        {
-                            auto subArgumentBuffer =
-                                m_objects[resourceIndex]->_ensureArgumentBufferUpToDate(
-                                    device,
-                                    m_objects[resourceIndex]->getLayout());
-                            if (subArgumentBuffer)
-                            {
-                                gfx::DeviceAddress bufferPtr =
-                                    subArgumentBuffer->m_buffer->gpuAddress();
-                                memcpy(argumentPtr, &bufferPtr, sizeof(bufferPtr));
-                            }
-                        }
-                        break;
-                    }
-                case slang::BindingType::RawBuffer:
-                case slang::BindingType::MutableRawBuffer:
-                    {
-                        auto bufferViewImpl = static_cast<BufferResourceViewImpl*>(
-                            m_buffers[resourceIndex + bufferBindingIndexOffset].get());
+            slang::VariableLayoutReflection* field = typeLayout->getFieldByIndex(i);
+            size_t offset = field->getOffset();
+            size_t size = field->getTypeLayout()->getSize();
+            char const* name = field->getName();
+            slang::TypeReflection::Kind kind = field->getTypeLayout()->getKind();
 
-                        if (bufferViewImpl)
-                        {
-                            gfx::DeviceAddress bufferPtr =
-                                bufferViewImpl->m_buffer->getDeviceAddress() +
-                                bufferViewImpl->m_offset;
-                            memcpy(argumentPtr, &bufferPtr, sizeof(bufferPtr));
-                        }
-                        break;
-                    }
-                case slang::BindingType::Texture:
-                case slang::BindingType::MutableTexture:
+            // We use bindingRangeCount to check whether a field requires binding
+            uint32_t bindingRangeCount = field->getTypeLayout()->getBindingRangeCount();
+            if (bindingRangeCount == 0)
+            {
+                uint8_t* argumentPtr = (uint8_t*)argumentData + offset;
+                memcpy(argumentPtr, (uint8_t*)m_data.getBuffer() + offset, size);
+                continue;
+            }
+
+            uint32_t bindingRangeIndex = typeLayout->getFieldBindingRangeOffset(i);
+            slang::BindingType bindRangeType = field->getTypeLayout()->getBindingRangeType(bindingRangeIndex);
+
+            switch (bindRangeType)
+            {
+            case slang::BindingType::ConstantBuffer:
+            case slang::BindingType::ParameterBlock:
+                    break;
+                
+            case slang::BindingType::RawBuffer:
+            case slang::BindingType::MutableRawBuffer:
+                {
+                    auto bufferViewImpl = static_cast<BufferResourceViewImpl*>(
+                        m_buffers[bufferIndex++].get());
+                    uint8_t* argumentPtr = (uint8_t*)argumentData + offset;
+                    if (bufferViewImpl)
                     {
-                        auto textureViewImpl =
-                            static_cast<TextureResourceViewImpl*>(m_textures[resourceIndex].get());
-                        if (textureViewImpl)
-                        {
-                            auto resourceId = textureViewImpl->m_textureView->gpuResourceID();
-                            memcpy(argumentPtr, &resourceId, sizeof(resourceId));
-                        }
-                        break;
+                        gfx::DeviceAddress bufferPtr =
+                            bufferViewImpl->m_buffer->getDeviceAddress() +
+                            bufferViewImpl->m_offset;
+                        printf("tracking: set buffer address to argument buffer: %lx\n", bufferPtr);
+                        memcpy(argumentPtr, &bufferPtr, sizeof(bufferPtr));
                     }
-                case slang::BindingType::Sampler:
-                    {
-                        auto samplerStateImpl =
-                            static_cast<SamplerStateImpl*>(m_samplers[resourceIndex].get());
-                        auto resourceId = samplerStateImpl->m_samplerState->gpuResourceID();
-                        memcpy(argumentPtr, &resourceId, sizeof(resourceId));
-                        break;
-                    }
+                    break;
+                }
+            case slang::BindingType::Texture:
+            case slang::BindingType::MutableTexture:
+                {
+                    break;
+                }
+            case slang::BindingType::Sampler:
+                {
+                    break;
                 }
             }
+
+            printf("field: %s, offset = %lu, size = %lu, kind = %d, bindingRangeCount = %d, bindingRangeIndex = %d, bindingRangeType = %x\n",
+                name, offset, size, kind, bindingRangeCount, bindingRangeIndex, bindRangeType);
         }
-        writeOrdinaryDataIntoArgumentBuffer(
-            typeLayout,
-            defaultTypeLayout,
-            (uint8_t*)argumentData,
-            (uint8_t*)m_data.getBuffer());
+
+        // int bufferBindingIndexOffset = layout->getTotalOrdinaryDataSize() != 0 ? 1 : 0;
+
+        // for (unsigned int bindingRangeIndex = 0;
+        //      bindingRangeIndex < defaultTypeLayout->getBindingRangeCount();
+        //      bindingRangeIndex++)
+        // {
+        //     int bindingCount = defaultTypeLayout->getBindingRangeBindingCount(bindingRangeIndex);
+        //     int setIndex = defaultTypeLayout->getBindingRangeDescriptorSetIndex(bindingRangeIndex);
+        //     int rangeIndex =
+        //         defaultTypeLayout->getBindingRangeFirstDescriptorRangeIndex(bindingRangeIndex);
+        //     auto bindingType = defaultTypeLayout->getBindingRangeType(bindingRangeIndex);
+        //     for (int i = 0; i < bindingCount; i++)
+        //     {
+        //         auto argumentDataOffset =
+        //             typeLayout->getDescriptorSetDescriptorRangeIndexOffset(setIndex, rangeIndex) +
+        //             i * sizeof(uint64_t);
+        //         auto argumentPtr = (uint8_t*)argumentData + argumentDataOffset;
+        //         auto resourceIndex = i;
+        //         switch (bindingType)
+        //         {
+        //         case slang::BindingType::ConstantBuffer:
+        //         case slang::BindingType::ParameterBlock:
+        //             {
+        //                 if (m_objects[resourceIndex])
+        //                 {
+        //                     auto subArgumentBuffer =
+        //                         m_objects[resourceIndex]->_ensureArgumentBufferUpToDate(
+        //                             device,
+        //                             m_objects[resourceIndex]->getLayout());
+        //                     if (subArgumentBuffer)
+        //                     {
+        //                         gfx::DeviceAddress bufferPtr =
+        //                             subArgumentBuffer->m_buffer->gpuAddress();
+        //                         memcpy(argumentPtr, &bufferPtr, sizeof(bufferPtr));
+        //                     }
+        //                 }
+        //                 break;
+        //             }
+        //         case slang::BindingType::RawBuffer:
+        //         case slang::BindingType::MutableRawBuffer:
+        //             {
+        //                 auto bufferViewImpl = static_cast<BufferResourceViewImpl*>(
+        //                     m_buffers[resourceIndex + bufferBindingIndexOffset].get());
+
+        //                 if (bufferViewImpl)
+        //                 {
+        //                     gfx::DeviceAddress bufferPtr =
+        //                         bufferViewImpl->m_buffer->getDeviceAddress() +
+        //                         bufferViewImpl->m_offset;
+        //                     memcpy(argumentPtr, &bufferPtr, sizeof(bufferPtr));
+        //                 }
+        //                 break;
+        //             }
+        //         case slang::BindingType::Texture:
+        //         case slang::BindingType::MutableTexture:
+        //             {
+        //                 auto textureViewImpl =
+        //                     static_cast<TextureResourceViewImpl*>(m_textures[resourceIndex].get());
+        //                 if (textureViewImpl)
+        //                 {
+        //                     auto resourceId = textureViewImpl->m_textureView->gpuResourceID();
+        //                     memcpy(argumentPtr, &resourceId, sizeof(resourceId));
+        //                 }
+        //                 break;
+        //             }
+        //         case slang::BindingType::Sampler:
+        //             {
+        //                 auto samplerStateImpl =
+        //                     static_cast<SamplerStateImpl*>(m_samplers[resourceIndex].get());
+        //                 auto resourceId = samplerStateImpl->m_samplerState->gpuResourceID();
+        //                 memcpy(argumentPtr, &resourceId, sizeof(resourceId));
+        //                 break;
+        //             }
+        //         }
+        //     }
+        // }
+        // writeOrdinaryDataIntoArgumentBuffer(
+        //     typeLayout,
+        //     defaultTypeLayout,
+        //     (uint8_t*)argumentData,
+        //     (uint8_t*)m_data.getBuffer());
         m_argumentBuffer->unmap(&range);
         m_isArgumentBufferDirty = false;
     }
