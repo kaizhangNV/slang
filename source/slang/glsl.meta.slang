@@ -17,6 +17,10 @@
 // Section 4.1. 'asic Types'
 //
 
+public typealias f16vec2 = vector<half, 2>;
+public typealias f16vec3 = vector<half, 3>;
+public typealias f16vec4 = vector<half, 4>;
+
 public typealias vec2 = vector<float, 2>;
 public typealias vec3 = vector<float, 3>;
 public typealias vec4 = vector<float, 4>;
@@ -722,6 +726,35 @@ public uvec2 unpackDouble2x32(double v)
         uint64_t u = 0; // asuint64(v);
         return uvec2(uint(u & 0xFFFFFFFF), uint(u >> 32));
     }
+}
+
+[__readNone]
+[ForceInline]
+[require(cpp_cuda_glsl_hlsl_spirv, shader5_sm_4_0)]
+public u8vec4 unpack8(uint32_t u)
+{
+    __target_switch
+    {
+    case glsl: __intrinsic_asm "unpack8";
+    default:
+        u8vec4 res = {
+            uint8_t((u & 0xFF000000) >> 24),
+            uint8_t((u & 0x00FF0000) >> 16),
+            uint8_t((u & 0x0000FF00) >> 8),
+            uint8_t((u & 0x000000FF))
+        };
+        return res;
+    }
+}
+
+[__readNone]
+[ForceInline]
+[require(cpp_cuda_glsl_hlsl_spirv, shader5_sm_4_0)]
+public i8vec4 unpack8(int32_t u)
+{
+    uint32_t v = as_uint(u);
+    u8vec4 res = unpack8(u);
+    return i8vec4{as_int8(res[0]),as_int8(res[1]), as_int8(res[2]), as_int8(res[3])};
 }
 
 //
