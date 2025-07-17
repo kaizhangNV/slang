@@ -9,37 +9,24 @@ import itertools
 import gdb
 import sys
 
-
-
-
 if sys.version_info[0] == 3:
 	Iterator = object
 else:
 	class Iterator(object):
-
-
 		def next(self):
 			return type(self).__next__(self)
-
 
 def default_iterator(val):
 	for field in val.type.fields():
 		yield field.name, val[field.name]
 
-
 # Set to True to enable the logger
 ENABLE_LOGGING = True
-
-
-
 
 # log to the LLDB formatter stream
 def log(msg):
     if ENABLE_LOGGING:
-        lldb.formatters.Logger.Logger() >> msg
-
-
-
+        gdb.formatters.Logger.Logger() >> msg
 
 def make_string(F, L):
     strval = ""
@@ -51,22 +38,13 @@ def make_string(F, L):
         strval = strval + chr(V % 256)
     return '"' + strval + '"'
 
-
-
-
 # Return the pointer to the data in a Slang::RefPtr
 def get_ref_pointer(valobj):
     return valobj.GetNonSyntheticValue().GetChildMemberWithName("pointer")
 
-
-
-
 # Check if a pointer is nullptr
 def is_nullptr(valobj):
     return valobj.GetValueAsUnsigned(0) == 0
-
-
-
 
 # Slang::String summary
 def String_summary(valobj, dict):
@@ -78,9 +56,6 @@ def String_summary(valobj, dict):
     data = buffer_ptr.GetPointeeData(1, length)
     return make_string(data, length)
 
-
-
-
 # Slang::UnownedStringSlice summary
 def UnownedStringSlice_summary(valobj, dict):
     begin = valobj.GetChildMemberWithName("m_begin")
@@ -91,22 +66,16 @@ def UnownedStringSlice_summary(valobj, dict):
     data = begin.GetPointeeData(0, length)
     return make_string(data, length)
 
-
-
-
 # Slang::RefPtr synthetic provider
 class RefPtr_synthetic:
     def __init__(self, valobj, dict):
         self.valobj = valobj
 
-
     def has_children(self):
         return True
 
-
     def num_children(self):
         return len(self.children)
-
 
     def get_child_index(self, name):
         for index in range(self.num_children()):
@@ -114,13 +83,11 @@ class RefPtr_synthetic:
                 return index
         return -1
 
-
     def get_child_at_index(self, index):
         if index >= 0 and index < self.num_children():
             return self.children[index]
         else:
             return None
-
 
     def update(self):
         self.pointer = self.valobj.GetNonSyntheticValue().GetChildMemberWithName(
@@ -129,9 +96,6 @@ class RefPtr_synthetic:
         self.children = []
         if not is_nullptr(self.pointer):
             self.children = self.pointer.Dereference().children
-
-
-
 
 # Slang::RefPtr summary
 def RefPtr_summary(valobj, dict):
@@ -142,22 +106,16 @@ def RefPtr_summary(valobj, dict):
     refcount = pointee.GetChildMemberWithName("referenceCount").GetValueAsUnsigned()
     return str(pointer.GetValue()) + " refcount=" + str(refcount)
 
-
-
-
 # Slang::ComPtr synthetic provider
 class ComPtr_synthetic:
     def __init__(self, valobj, dict):
         self.valobj = valobj
 
-
     def has_children(self):
         return len(self.children) > 0
 
-
     def num_children(self):
         return len(self.children)
-
 
     def get_child_index(self, name):
         for index in range(self.num_children()):
@@ -165,22 +123,17 @@ class ComPtr_synthetic:
                 return index
         return -1
 
-
     def get_child_at_index(self, index):
         if index >= 0 and index < self.num_children():
             return self.children[index]
         else:
             return None
 
-
     def update(self):
         self.pointer = self.valobj.GetChildMemberWithName("m_ptr")
         self.children = []
         if not is_nullptr(self.pointer):
             self.children = self.pointer.Dereference().children
-
-
-
 
 # Slang::ComPtr summary
 def ComPtr_summary(valobj, dict):
@@ -189,26 +142,19 @@ def ComPtr_summary(valobj, dict):
         return "nullptr"
     return str(pointer.GetValue())
 
-
-
-
 # Slang::Array synthetic provider
 class Array_synthetic:
     def __init__(self, valobj, dict):
         self.valobj = valobj
 
-
     def has_children(self):
         return True
-
 
     def num_children(self):
         return self.count.GetValueAsUnsigned(0)
 
-
     def get_child_index(self, name):
         return int(name.lstrip("[").rstrip("]"))
-
 
     def get_child_at_index(self, index):
         if index >= 0 and index < self.num_children():
@@ -219,27 +165,20 @@ class Array_synthetic:
         else:
             return None
 
-
     def update(self):
         self.count = self.valobj.GetChildMemberWithName("m_count")
         self.buffer = self.valobj.GetChildMemberWithName("m_buffer")
         self.data_type = self.buffer.GetType().GetArrayElementType()
         self.data_size = self.data_type.GetByteSize()
 
-
 def ColorVariable(member_name):
     return "\033[36m" + member_name + "\033[0m"
-
 
 def ColorType(type_name):
     return "\033[33m" + type_name + "\033[0m"
 
-
 def ColorAddress(address):
     return "\033[34m" + address + "\033[0m"
-
-
-
 
 def IsTypePrintable(type):
     if type.code == gdb.TYPE_CODE_PTR or \
@@ -255,7 +194,7 @@ def IsTypePrintable(type):
         return True
 
 
-# Slang::String synthetic provider
+# Slang::String
 class StringPrinter:
     def __init__(self, val):
         self.val = val
@@ -267,7 +206,16 @@ class StringPrinter:
         val = (string + 1).cast(gdb.lookup_type('char').pointer());
         return '"' + val.string() + '"';
 
-# Slang::List synthetic provider
+# Slang::Name
+class NamePrinter:
+    def __init__(self, val):
+        self.val = val
+    def to_string(self):
+        text = self.val['text']
+        textPrinter = StringPrinter(text)
+        return textPrinter.to_string()
+
+# Slang::List
 class ListPrinter:
     def __init__(self, valobj):
         self.valobj = valobj
@@ -298,7 +246,6 @@ class ListPrinter:
         else:
             return None
 
-
     class _iterator():
         def __init__(self, valobj):
             if valobj is None:
@@ -313,52 +260,50 @@ class ListPrinter:
                 self.Typename = self.buffer.type
             self.curIndex = 0
 
-
         def __iter__(self):
             return self
-
 
         def __next__(self):
             if self.elementCount == 0:
                 raise StopIteration
-
 
             index = self.curIndex
             self.curIndex = self.curIndex + 1
             if self.curIndex > self.elementCount:
                 raise StopIteration
 
-
             indent = "    "
             prefixStr = '\n' + indent + indent + indent
             firstStr = prefixStr + '[%d]' % index
 
-
             val = self.buffer[index]
             secondStr = str(val)
-
 
             # Since we already filtered out the non-printable types, we can safely dereference the pointer
             if self.Typename.code == gdb.TYPE_CODE_PTR:
                 val = val.dereference()
                 secondStr += ": " + str(val)
 
-
             return (firstStr, secondStr)
 
-    def children(self):
-        if self.thisTypePrintable and self.count > 0:
-            return self._iterator(self.valobj)
-        else:
-            return self._iterator(None)
+    def display_hint(self):
+        # Tell GDB to treat this as an array
+        return "array"
+
+     def children(self):
+         if self.thisTypePrintable and self.count > 0:
+             return self._iterator(self.valobj)
+         else:
+             return self._iterator(None)
 
     def to_string(self):
         #  pass
+        import pdb; pdb.set_trace()
         count = self.valobj['m_count'];
         m_capacity = self.valobj['m_capacity'];
         buffer = self.valobj['m_buffer'];
         indent = "    "
-        string =  "\n" + indent
+        string =  "{\n" + indent
         string += ColorVariable("m_count")+ " = " + str(count) + "\n"
         string += indent
         string += ColorVariable("m_capacity") + " = " + str(m_capacity) + "\n"
@@ -373,18 +318,14 @@ class ShortList_synthetic:
     def __init__(self, valobj, dict):
         self.valobj = valobj
 
-
     def has_children(self):
         return True
-
 
     def num_children(self):
         return self.count.GetValueAsUnsigned(0)
 
-
     def get_child_index(self, name):
         return int(name.lstrip("[").rstrip("]"))
-
 
     def get_child_at_index(self, index):
         if index >= 0 and index < self.short_count:
@@ -420,4 +361,5 @@ def slang_pretty_printer():
     pp = gdb.printing.RegexpCollectionPrettyPrinter("slang")
     pp.add_printer("List", "^Slang::List<.+>$", ListPrinter)
     pp.add_printer("String", "^Slang::String$", StringPrinter)
+    pp.add_printer("Name", "^Slang::Name$", NamePrinter)
     return pp
