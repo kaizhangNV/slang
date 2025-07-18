@@ -188,7 +188,6 @@ def IsTypePrintable(type):
        type.code == gdb.TYPE_CODE_BOOL or \
        type.code == gdb.TYPE_CODE_DECFLOAT or \
        type.code == gdb.TYPE_CODE_ENUM or \
-       type.code == gdb.TYPE_CODE_PTR or \
        type.code == gdb.TYPE_CODE_STRING or \
        (type.code == gdb.TYPE_CODE_STRUCT and type.name == "Slang::String"):
         return True
@@ -221,10 +220,10 @@ class ListPrinter:
         self.valobj = valobj
         self.Typename = valobj.type.template_argument(0)
         self.count = valobj['m_count']
-        #  print("List_synthetic: %s\n" % self.Typename)
+        self.m_capacity = self.valobj['m_capacity'];
+        self.buffer = self.valobj['m_buffer'];
+
         self.thisTypePrintable = False
-        # we don't really want to expand the children if the type is not basic type.
-        # The exception is Slang::String, which is a struct but we want to expand it.
         if IsTypePrintable(self.Typename):
             self.thisTypePrintable = True
 
@@ -250,9 +249,6 @@ class ListPrinter:
         def __init__(self, valobj):
             if valobj is None:
                 self.valobj = None
-                self.elementCount = 0
-                self.buffer = None
-                self.Typename = None
             else:
                 self.valobj = valobj
                 self.elementCount = self.valobj['m_count']
@@ -264,7 +260,7 @@ class ListPrinter:
             return self
 
         def __next__(self):
-            if self.elementCount == 0:
+            if self.valobj is None:
                 raise StopIteration
 
             index = self.curIndex
@@ -272,45 +268,47 @@ class ListPrinter:
             if self.curIndex > self.elementCount:
                 raise StopIteration
 
-            indent = "    "
+            indent = "  "
             prefixStr = '\n' + indent + indent + indent
             firstStr = prefixStr + '[%d]' % index
 
             val = self.buffer[index]
-            secondStr = str(val)
+            secondStr = prefixStr + '[%d]' % index
 
             # Since we already filtered out the non-printable types, we can safely dereference the pointer
             if self.Typename.code == gdb.TYPE_CODE_PTR:
-                val = val.dereference()
-                secondStr += ": " + str(val)
+                secondStr += " = " + ColorAddress("{}".format(val))
+                deRefVal = val.dereference()
+                # TODO: for struct, we don't print, just leave the address there, in the future we can print
+                # a summary for all AST and IR nodes
+                if (deRefVal.type.code != gdb.TYPE_CODE_STRUCT):
+                    secondStr += str(deRefVal)
+            else:
+                secondStr += " = " + str(val)
 
+            if (index == self.elementCount - 1):
+                secondStr += prefixStr
             return (firstStr, secondStr)
 
     def display_hint(self):
-        # Tell GDB to treat this as an array
         return "array"
 
-     def children(self):
-         if self.thisTypePrintable and self.count > 0:
-             return self._iterator(self.valobj)
-         else:
-             return self._iterator(None)
+    def children(self):
+        if self.thisTypePrintable and self.count > 0:
+            return self._iterator(self.valobj)
+        else:
+            return self._iterator(None)
 
     def to_string(self):
-        #  pass
-        import pdb; pdb.set_trace()
-        count = self.valobj['m_count'];
-        m_capacity = self.valobj['m_capacity'];
-        buffer = self.valobj['m_buffer'];
         indent = "    "
-        string =  "{\n" + indent
-        string += ColorVariable("m_count")+ " = " + str(count) + "\n"
+        string =  "\n" + indent
+        string += ColorVariable("m_count")+ " = " + str(self.count) + "\n"
         string += indent
-        string += ColorVariable("m_capacity") + " = " + str(m_capacity) + "\n"
+        string += ColorVariable("m_capacity") + " = " + str(self.m_capacity) + "\n"
         string += indent
-        string += ColorVariable("m_buffer") + " (" + ColorType(str(buffer.type)) + ")"
-        string += " = " + ColorAddress(str(buffer)) + "\n"
-        string += indent + indent
+        string += ColorVariable("m_buffer") + " (" + ColorType(str(self.buffer.type)) + ")"
+        string += " = " + ColorAddress(str(self.buffer)) + "\n"
+        string += indent + "\b"
         return string
 
 # Slang::ShortList synthetic provider
@@ -349,6 +347,33 @@ class ShortList_synthetic:
         self.data_type = self.buffer.GetType().GetPointeeType()
         self.data_size = self.data_type.GetByteSize()
 
+# Slang::VarDeclBase
+class DeclBasePrinter:
+    def __init__(self, val):
+        self.val = val
+    def to_string(self):
+        try:
+            import pdb; pdb.set_trace()
+            name_and_loc = self.val['nameAndLoc']
+            name = name_and_loc['name']
+            loc = name_and_loc['loc']
+            typeExpr = self.val['type']
+            type_val = typeExpr['type']
+            name_str = NamePrinter(name).to_string() if name else 'nullptr'
+
+            lines = [
+                f"    {ColorVariable('name')} = {name_str}",
+                f"    {ColorVariable('astNodeType')} = {str(self.val['astNodeType'])}",
+            ]
+
+            if int(type_val) != 0 and type_val is not None:
+                ast_node_type = type_val['astNodeType']
+                lines.append(f"    {ColorVariable('type.type.astNodeType')} = {str(ast_node_type)}")
+
+            return '\n' + '\n'.join(lines)
+        except Exception as e:
+            return f"<error reading VarDeclBase: {e}>"
+
 def register_slang_printers(objfile):
 	if objfile == None:
 		objfile = gdb.current_objfile()
@@ -362,4 +387,7 @@ def slang_pretty_printer():
     pp.add_printer("List", "^Slang::List<.+>$", ListPrinter)
     pp.add_printer("String", "^Slang::String$", StringPrinter)
     pp.add_printer("Name", "^Slang::Name$", NamePrinter)
+    pp.add_printer("DeclBase", "^Slang::.*Decl$", DeclBasePrinter)
     return pp
+
+register_slang_printers(None)
