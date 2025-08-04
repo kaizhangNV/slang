@@ -348,31 +348,90 @@ class ShortList_synthetic:
         self.data_size = self.data_type.GetByteSize()
 
 # Slang::VarDeclBase
-class DeclBasePrinter:
+class DeclDispatcher:
     def __init__(self, val):
         self.val = val
     def to_string(self):
         try:
             import pdb; pdb.set_trace()
-            name_and_loc = self.val['nameAndLoc']
-            name = name_and_loc['name']
-            loc = name_and_loc['loc']
-            typeExpr = self.val['type']
-            type_val = typeExpr['type']
-            name_str = NamePrinter(name).to_string() if name else 'nullptr'
+            astNoteType = self.val['astNodeType']
+            if str(astNoteType) in PRINTER_CLASS_MAP:
+                decl_printer = PRINTER_CLASS_MAP[str(astNoteType)](self.val)
+                return decl_printer.to_string()
 
-            lines = [
-                f"    {ColorVariable('name')} = {name_str}",
-                f"    {ColorVariable('astNodeType')} = {str(self.val['astNodeType'])}",
-            ]
-
-            if int(type_val) != 0 and type_val is not None:
-                ast_node_type = type_val['astNodeType']
-                lines.append(f"    {ColorVariable('type.type.astNodeType')} = {str(ast_node_type)}")
-
-            return '\n' + '\n'.join(lines)
+            return ""
         except Exception as e:
             return f"<error reading VarDeclBase: {e}>"
+
+class TypeDispatcher:
+    def __init__(self, val):
+        self.val = val
+    def to_string(self):
+        return ""
+
+# Type is a decl ref
+class BasicExpressionTypePrinter:
+    def __init__(self, val):
+        self.val = val
+    def to_string(self):
+        #((BuiltinTypeModifier*)((Decl*)((DeclRefBase*)((decl->returnType.type)->m_operands.m_buffer[0].values.nodeOperand))->m_operands.m_buffer[0].values.nodeOperand)->modifiers.first).tag
+        decl = self.val['type']
+        declRefBase = decl['m_operands']['m_buffer'][0]['values']['nodeOperand']
+        decl = declRefBase['m_operands']['m_buffer'][0]['values']['nodeOperand']
+        modifiers = decl['modifiers']['first']
+        tag = modifiers['tag']
+        return tag.to_string()
+
+class DeclBasePrinter:
+    def __init__(self, val):
+        self.val = val
+    def to_string(self):
+        name_and_loc = self.val['nameAndLoc']
+        name = name_and_loc['name']
+        astNoteType = self.val['astNodeType']
+        name_str = NamePrinter(name).to_string() if name else 'nullptr'
+
+        lines = [
+            f"    {ColorVariable('astNodeType')} = {str(astNoteType)}",
+            f"    {ColorVariable('name')} = {name_str}",
+        ]
+        return lines
+
+class FuncDeclPrinter(DeclBasePrinter):
+    def __init__(self, val):
+        super().__init__(val)  # Call base class constructor
+        self.val = val
+    def to_string(self):
+        try:
+            import pdb; pdb.set_trace()
+            lines = super().to_string()
+            returnType = self.val['returnType']['type']
+            returnType_str = ""
+            if int(returnType) != 0:
+                returnType_str = str(returnType['astNodeType'])
+
+                if returnType_str == "Slang::ASTNodeType::BasicExpressionType":
+                    # figure out how to call c++ method from python
+                    base_type = gdb.parse_and_eval(f'{returnType}.getBaseType()')
+                lines.append(f"    {ColorVariable('returnType')} = {base_type}")
+            else:
+                lines.append(f"    {ColorVariable('returnType.type')} = nullptr")
+
+            return '\n'.join(lines)
+
+        except Exception as e:
+            return f"<error reading FuncDecl: {e}>"
+
+# Global dictionary mapping strings to printer classes
+PRINTER_CLASS_MAP = {
+    "Slang::ASTNodeType::FuncDecl": FuncDeclPrinter,
+    # "Slang::ASTNodeType::VarDecl": DeclBasePrinter,
+    # "Slang::ASTNodeType::ParamDecl": DeclBasePrinter,
+    # "Slang::ASTNodeType::TypeDefDecl": DeclBasePrinter,
+    # "Slang::ASTNodeType::StructDecl": DeclBasePrinter,
+    # "Slang::ASTNodeType::ClassDecl": DeclBasePrinter,
+}
+
 
 def register_slang_printers(objfile):
 	if objfile == None:
@@ -387,7 +446,10 @@ def slang_pretty_printer():
     pp.add_printer("List", "^Slang::List<.+>$", ListPrinter)
     pp.add_printer("String", "^Slang::String$", StringPrinter)
     pp.add_printer("Name", "^Slang::Name$", NamePrinter)
-    pp.add_printer("DeclBase", "^Slang::.*Decl$", DeclBasePrinter)
+
+    # Direct all Decls to DeclBasePrinter
+    pp.add_printer("DeclBase", "^Slang::.*Decl$", DeclDispatcher)
+    pp.add_printer("DeclBase", "^Slang::.*DeclBase$", DeclDispatcher)
     return pp
 
 register_slang_printers(None)
