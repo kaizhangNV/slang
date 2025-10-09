@@ -1,5 +1,11 @@
 implementing neural;
 
+public enum DTypeEnum : int
+{
+    Array = 0,
+    CooperativeVector = 1
+}
+
 /**
 Concrete implementation of IVector storing elements inline (on stack/registers).
 InlineVector stores all elements in a fixed-size array, making it suitable for
@@ -18,9 +24,11 @@ public struct InlineVector<T, int N> : IVector<T, N>
 {
     /// The differential type for automatic differentiation.
     public typealias Differential = InlineVector<T.Differential, N>;
+    internal typealias DType = T[N];
 
     /// The compile-time size of the vector.
     public static const int Size = N;
+    public static const DTypeEnum dTypeEnum = DTypeEnum.Array;
 
     /**
     Internal storage for vector elements.
@@ -65,7 +73,6 @@ public struct InlineVector<T, int N> : IVector<T, N>
         set() { this.m_data[index] = newValue; }
     }
 
-    // Linear transformation without bias
     [BackwardDerivative(matmulBwd)]
     public OutputVector matmul<int OutputSize, Storage, OutputVector>(
         Storage weightStorage,
@@ -75,6 +82,7 @@ public struct InlineVector<T, int N> : IVector<T, N>
             where Storage.Address == Storage.Differential.Address
             where OutputVector : IVector<T, OutputSize>
     {
+        static_assert(This.dTypeEnum == OutputVector.dTypeEnum, "Data type mismatch between InputVector and OutputVector");
         OutputVector output = OutputVector();
 
         [MaxIters(OutputSize)]
@@ -166,33 +174,7 @@ public struct InlineVector<T, int N> : IVector<T, N>
 
         dthis = DifferentialPair<This>(dthis.p, d);
     }
-
-    // Backward of linear transformation with bias
-    static void matmulBwd<int OutputSize, Storage, OutputVector>(
-        inout DifferentialPair<This> dthis,
-        DifferentialPtrPair<Storage> dWeightStorage,
-        DifferentialPtrPair<Storage> dBiasStorage,
-        no_diff Storage.Address dWeightAddress,
-        no_diff Storage.Address dBiasAddress,
-        OutputVector.Differential doutput)
-            where Storage : IStorage<T>
-            where Storage.Differential : IStorage<T.Differential>
-            where Storage.Address == Storage.Differential.Address
-            where OutputVector : IVector<T, OutputSize>
-    {
-        // Reuse the unbias backward method
-        matmulBwd<OutputSize, Storage, OutputVector>(dthis, dWeightStorage, dWeightAddress, doutput);
-
-        // Derivative of the bias is the same as the output differential
-        [ForceUnroll]
-        for (int i = 0; i < OutputSize; i++)
-        {
-            let biasOffset = Storage.getOffset(dBiasAddress, i);
-            dBiasStorage.d.atomicAdd(biasOffset, doutput[i]);
-        }
-    }
-
-    // Linear transformation without bias (Bindless storage)
+    // Apply from bindless storage
     [BackwardDerivative(matmulBwd)]
     public OutputVector matmul<int OutputSize, BindlessStorage, OutputVector>(
         BindlessStorage.Address weightAddress)
@@ -201,6 +183,8 @@ public struct InlineVector<T, int N> : IVector<T, N>
             where BindlessStorage.Address.Differential : IPointerLikeAddress<T.Differential>
             where OutputVector : IVector<T, OutputSize>
     {
+        static_assert(This.dTypeEnum == OutputVector.dTypeEnum, "Data type mismatch between InputVector and OutputVector");
+
         var output = OutputVector();
 
         // output = W * input
@@ -264,7 +248,7 @@ public struct InlineVector<T, int N> : IVector<T, N>
         }
 
         // Derivative of the weights is the outer product of the input and the output differential
-        // dW = dOutput * dInput^T
+        // dW = dOutput * Input^T
         [MaxIters(OutputSize)]
         for (int row = 0; row < OutputSize; row++)
         {
