@@ -21,6 +21,10 @@ public interface IStorage<T> : IDifferentiablePtrType
     */
     public associatedtype Address;
 
+    /// The underlying buffer type.
+    /// @remarks This is only used to form the signature of the internal getBuffer method.
+    internal associatedtype BufferType;
+
     /**
     Reads a value from storage.
     @param[in] address The address to read from.
@@ -50,6 +54,12 @@ public interface IStorage<T> : IDifferentiablePtrType
     @return The offset address.
     */
     public static Address getOffset(Address base, int elements);
+
+    /**
+    Gets a buffer reference.
+    @return A buffer reference.
+    */
+    internal BufferType getBuffer();
 }
 
 /**

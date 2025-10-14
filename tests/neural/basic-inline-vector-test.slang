@@ -35,28 +35,26 @@ RWStructuredBuffer<ElementType> dInput;
 RWStructuredBuffer<ElementType> dParameters;
 
 typealias BufferStorage = StructuredBufferStorage<ElementType>;
+typealias InputVector = InlineVector<ElementType, 4>;
+typealias OutputVector = InlineVector<ElementType, 2>;
 
 [Differentiable]
-OutputVector TestInlineVectorMatMul<InputVector, OutputVector>(
+OutputVector TestInlineVectorMatMul(
     InputVector input,
     BufferStorage weightStorage,
     BufferStorage.Address weightAddress)
-    where InputVector : IVector<ElementType, 4>
-    where OutputVector : IVector<ElementType, 2>
 {
     var outputVec = input.matmul<2, BufferStorage, OutputVector>(weightStorage, weightAddress);
     return outputVec;
 }
 
 [Differentiable]
-OutputVector TestInlineVectorMatMulAdd<InputVector, OutputVector>(
+OutputVector TestInlineVectorMatMulAdd(
     InputVector input,
     BufferStorage weightStorage,
     BufferStorage biasStorage,
     BufferStorage.Address weightAddress,
     BufferStorage.Address biasAddress)
-    where InputVector : IVector<ElementType, 4>
-    where OutputVector : IVector<ElementType, 2>
 {
     var outputVec = input.matmul<2, BufferStorage, OutputVector>(weightStorage, biasStorage, weightAddress, biasAddress);
     return outputVec;
@@ -66,13 +64,13 @@ OutputVector TestInlineVectorMatMulAdd<InputVector, OutputVector>(
 bool BasicTestWithoutBias()
 {
     ElementType[4] inputData = {ElementType(1.0), ElementType(2.0), ElementType(3.0), ElementType(4.0)};
-    let input = InlineVector<ElementType, 4>(inputData);
+    let input = InputVector(inputData);
     BufferStorage weightStorage = BufferStorage(parameters);
     BufferStorage dweightStorage = BufferStorage(dParameters);
     BufferStorage.Address weightAddress = 0;
 
     // Run the forward pass
-    let outputVec = TestInlineVectorMatMul<InlineVector<ElementType, 4>, InlineVector<ElementType, 2>>(input, weightStorage, weightAddress);
+    let outputVec = TestInlineVectorMatMul(input, weightStorage, weightAddress);
 
     // // (1*1 + 2*2 + 3*3 + 4*4) = 30.0
     // // (5*1 + 6*2 + 7*3 + 8*4) = 70.0
@@ -86,8 +84,7 @@ bool BasicTestWithoutBias()
     // Run the backward pass
     // dInput = W^T * dOutput
     // dInput = {3, 7, 11, 15}
-    bwd_diff(TestInlineVectorMatMul<InlineVector<ElementType, 4>, InlineVector<ElementType, 2>>)
-                (dPair, weightDiffPair, weightAddress, dRes);
+    bwd_diff(TestInlineVectorMatMul)(dPair, weightDiffPair, weightAddress, dRes);
 
     isPassed = isPassed &&
         dPair.d[0] == 3.0 && dPair.d[1] == 7.0 && dPair.d[2] == 11.0 && dPair.d[3] == 15.0;
@@ -106,7 +103,7 @@ bool BasicTestWithoutBias()
 bool BasicTestWithBias()
 {
     ElementType[4] inputData = {ElementType(1.0), ElementType(2.0), ElementType(3.0), ElementType(4.0)};
-    let input = InlineVector<ElementType, 4>(inputData);
+    let input = InputVector(inputData);
     BufferStorage weightStorage = BufferStorage(parameters);
     BufferStorage biasStorage = BufferStorage(parameters);
     BufferStorage dweightStorage = BufferStorage(dParameters);
@@ -118,8 +115,7 @@ bool BasicTestWithBias()
 
     // Run the forward pass
     let outputVec =
-        TestInlineVectorMatMulAdd<InlineVector<ElementType, 4>, InlineVector<ElementType, 2>>
-            (input, weightStorage, biasStorage, weightAddress, biasAddress);
+        TestInlineVectorMatMulAdd(input, weightStorage, biasStorage, weightAddress, biasAddress);
 
     // // (1*1 + 2*2 + 3*3 + 4*4) + 9.0 = 39.0
     // // (5*1 + 6*2 + 7*3 + 8*4) + 10.0 = 80.0
@@ -127,14 +123,13 @@ bool BasicTestWithBias()
 
     var weightDiffPair = DifferentialPtrPair<BufferStorage>(weightStorage, dweightStorage);
     var biasDiffPair = DifferentialPtrPair<BufferStorage>(biasStorage, dbiasStorage);
-    let dOutput = InlineVector<ElementType, 2>(1.0);
+    let dOutput = OutputVector(1.0);
     var dPair = diffPair(input);
 
     // Run the backward pass
     // dInput = W^T * dOutput
     // dInput = {3, 7, 11, 15}
-    bwd_diff(TestInlineVectorMatMulAdd<InlineVector<ElementType, 4>, InlineVector<ElementType, 2>>)
-                (dPair, weightDiffPair, biasDiffPair, weightAddress, biasAddress, dOutput);
+    bwd_diff(TestInlineVectorMatMulAdd)(dPair, weightDiffPair, biasDiffPair, weightAddress, biasAddress, dOutput);
 
     isPassed = isPassed &&
         dPair.d[0] == 3.0 && dPair.d[1] == 7.0 && dPair.d[2] == 11.0 && dPair.d[3] == 15.0;

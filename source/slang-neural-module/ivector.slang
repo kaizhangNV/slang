@@ -1,5 +1,11 @@
 implementing neural;
 
+#include "ivector-common.slang"
+
+internal interface IComponentDataType {}
+
+
+
 /**
 Generic vector interface for neural network operations.
 Provides a differentiable vector abstraction supporting automatic differentiation
@@ -22,6 +28,10 @@ public interface IVector<T, int N> : IDifferentiable
     /// The differential type for automatic differentiation.
     /// @remarks Ensures the differential is also a vector with the same structure.
     public associatedtype Differential : IVector<T.Differential, N>;
+
+    /// The component data type for the IVector.
+    /// @remarks This is used to distinguish the component data type for the IVector.
+    internal associatedtype ComponentDataType : IComponentDataType;
 
     /// Default constructor - initializes vector to zero.
     public __init();
@@ -71,15 +81,12 @@ public interface IVector<T, int N> : IDifferentiable
     - `Storage.Differential` must conform to `IStorage<T.Differential>`
     - `Storage.Address` must equal `Storage.Differential.Address` (same address type)
     - `OutputVector` must conform to `IVector<T, OutputSize>`
+    - `OutputVector.ComponentDataType` must equal `This.ComponentDataType`
     */
     [BackwardDifferentiable]
     public OutputVector matmul<int OutputSize, Storage, OutputVector>(
         Storage weightStorage,
-        no_diff Storage.Address weightAddress)
-            where Storage : IStorage<T>
-            where Storage.Differential : IStorage<T.Differential>
-            where Storage.Address == Storage.Differential.Address
-            where OutputVector : IVector<T, OutputSize>;
+        no_diff Storage.Address weightAddress) TYPE_CONSTRAINTS;
 
     /**
     Evaluates a linear transformation: output = W * input + bias.
@@ -93,17 +100,19 @@ public interface IVector<T, int N> : IDifferentiable
     @param[in] weightAddress The starting address in storage for the weight matrix.
     @param[in] biasAddress The starting address in storage for the bias vector.
     @return The result of the linear transformation.
+    @remarks Type constraints:
+    - `Storage` must conform to `IStorage<T>`
+    - `Storage.Differential` must conform to `IStorage<T.Differential>`
+    - `Storage.Address` must equal `Storage.Differential.Address` (same address type)
+    - `OutputVector` must conform to `IVector<T, OutputSize>`
+    - `OutputVector.ComponentDataType` must equal `This.ComponentDataType`
     */
     [BackwardDifferentiable]
     public OutputVector matmul<int OutputSize, Storage, OutputVector>(
         Storage weightStorage,
         Storage biasStorage,
         no_diff Storage.Address weightAddress,
-        no_diff Storage.Address biasAddress)
-            where Storage : IStorage<T>
-            where Storage.Differential : IStorage<T.Differential>
-            where Storage.Address == Storage.Differential.Address
-            where OutputVector : IVector<T, OutputSize>;
+        no_diff Storage.Address biasAddress) TYPE_CONSTRAINTS;
 
     /**
     Evaluates a linear transformation: output = W * input.
@@ -118,14 +127,11 @@ public interface IVector<T, int N> : IDifferentiable
     - `BindlessStorage.Address` must conform to `IPointerLikeAddress<T>`
     - `BindlessStorage.Address.Differential` must conform to `IPointerLikeAddress<T.Differential>`
     - `OutputVector` must conform to `IVector<T, OutputSize>`
+    - `OutputVector.ComponentDataType` must equal `This.ComponentDataType`
     */
     [BackwardDifferentiable]
     public OutputVector matmul<int OutputSize, BindlessStorage, OutputVector>(
-        BindlessStorage.Address weightAddress)
-            where BindlessStorage : IStorage<T>
-            where BindlessStorage.Address : IPointerLikeAddress<T>
-            where BindlessStorage.Address.Differential : IPointerLikeAddress<T.Differential>
-            where OutputVector : IVector<T, OutputSize>;
+        BindlessStorage.Address weightAddress) TYPE_CONSTRAINTS_FOR_BINDLSS_STORAGE;
 
     /**
     Evaluates a linear transformation: output = W * input + bias.
@@ -141,9 +147,5 @@ public interface IVector<T, int N> : IDifferentiable
     [BackwardDifferentiable]
     public OutputVector matmul<int OutputSize, BindlessStorage, OutputVector>(
         BindlessStorage.Address weightAddress,
-        BindlessStorage.Address biasAddress)
-            where BindlessStorage : IStorage<T>
-            where BindlessStorage.Address : IPointerLikeAddress<T>
-            where BindlessStorage.Address.Differential : IPointerLikeAddress<T.Differential>
-            where OutputVector : IVector<T, OutputSize>;
+        BindlessStorage.Address biasAddress) TYPE_CONSTRAINTS_FOR_BINDLSS_STORAGE;
 }

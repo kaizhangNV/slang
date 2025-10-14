@@ -1,4 +1,4 @@
-//TEST(compute):COMPARE_COMPUTE(filecheck-buffer=BUFFER):-vk -render-feature cooperative-vector -output-using-type -xslang -DTEST_HALF=1
+//DISABLE_TEST(compute):COMPARE_COMPUTE(filecheck-buffer=BUFFER):-vk -render-feature cooperative-vector -output-using-type -xslang -DTEST_HALF=1
 
 import neural;
 

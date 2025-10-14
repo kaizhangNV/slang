@@ -57,25 +57,23 @@ uniform RWStructuredBuffer<float> parametersFloat;
     typealias BindlessStorage = BindlessBufferStorage<ElementType>;
 #endif
 
+typealias InputVector = InlineVector<ElementType, 4>;
+typealias OutputVector = InlineVector<ElementType, 2>;
 
 [Differentiable]
-OutputVector TestInlineVectorMatMul<InputVector, OutputVector>(
+OutputVector TestInlineVectorMatMul(
     InputVector input,
     BindlessStorage.Address address)
-    where InputVector : IVector<ElementType, 4>
-    where OutputVector : IVector<ElementType, 2>
 {
     var outputVec = input.matmul<2, BindlessStorage, OutputVector>(address);
     return outputVec;
 }
 
 [Differentiable]
-OutputVector TestInlineVectorMatMulAdd<InputVector, OutputVector>(
+OutputVector TestInlineVectorMatMulAdd(
     InputVector input,
     BindlessStorage.Address weightAddress,
     BindlessStorage.Address biasAddress)
-    where InputVector : IVector<ElementType, 4>
-    where OutputVector : IVector<ElementType, 2>
 {
     var outputVec = input.matmul<2, BindlessStorage, OutputVector>(weightAddress, biasAddress);
     return outputVec;
@@ -85,26 +83,25 @@ OutputVector TestInlineVectorMatMulAdd<InputVector, OutputVector>(
 bool BasicTestWithoutBias()
 {
     ElementType[4] inputData = {ElementType(1.0), ElementType(2.0), ElementType(3.0), ElementType(4.0)};
-    let input = InlineVector<ElementType, 4>(inputData);
+    let input = InputVector(inputData);
     BindlessStorage.Address weightAddress = BindlessStorage.Address(parameters);
     BindlessStorage.Address dWeightAddress = BindlessStorage.Address(dParameters);
 
     // Run the forward pass
-    let outputVec = TestInlineVectorMatMul<InlineVector<ElementType, 4>, InlineVector<ElementType, 2>>(input, weightAddress);
+    let outputVec = TestInlineVectorMatMul(input, weightAddress);
 
     // (1*1 + 2*2 + 3*3 + 4*4) = 30.0
     // (5*1 + 6*2 + 7*3 + 8*4) = 70.0
     bool isPassed = (outputVec[0] == 30.0 && outputVec[1] == 70.0);
 
     var weightDiffPair = DifferentialPtrPair<BindlessStorage.Address>(weightAddress, dWeightAddress);
-    let dRes = InlineVector<ElementType, 2>(1.0f);
+    let dRes = OutputVector(1.0f);
     var dPair = diffPair(input);
 
     // Run the backward pass
     // dInput = W^T * dOutput
     // dInput = {3, 7, 11, 15}
-    bwd_diff(TestInlineVectorMatMul<InlineVector<ElementType, 4>, InlineVector<ElementType, 2>>)
-                (dPair, weightDiffPair, dRes);
+    bwd_diff(TestInlineVectorMatMul)(dPair, weightDiffPair, dRes);
 
     isPassed = isPassed &&
         dPair.d[0] == 3.0 && dPair.d[1] == 7.0 && dPair.d[2] == 11.0 && dPair.d[3] == 15.0;
@@ -123,14 +120,14 @@ bool BasicTestWithoutBias()
 bool BasicTestWithBias()
 {
     ElementType[4] inputData = {ElementType(1.0), ElementType(2.0), ElementType(3.0), ElementType(4.0)};
-    let input = InlineVector<ElementType, 4>(inputData);
+    let input = InputVector(inputData);
     BindlessStorage.Address weightAddress = BindlessStorage.Address(parameters);
     BindlessStorage.Address biasAddress = BindlessStorage.Address(parameters, 8);
     BindlessStorage.Address dWeightAddress = BindlessStorage.Address(dParameters);
     BindlessStorage.Address dBiasAddress = BindlessStorage.Address(dParameters, 8);
 
     // Run the forward pass
-    let outputVec = TestInlineVectorMatMulAdd<InlineVector<ElementType, 4>, InlineVector<ElementType, 2>>(input, weightAddress, biasAddress);
+    let outputVec = TestInlineVectorMatMulAdd(input, weightAddress, biasAddress);
 
     // (1*1 + 2*2 + 3*3 + 4*4) + 9.0 = 39.0
     // (5*1 + 6*2 + 7*3 + 8*4) + 10.0 = 80.0
@@ -138,14 +135,13 @@ bool BasicTestWithBias()
 
     var weightDiffPair = DifferentialPtrPair<BindlessStorage.Address>(weightAddress, dWeightAddress);
     var biasDiffPair = DifferentialPtrPair<BindlessStorage.Address>(biasAddress, dBiasAddress);
-    let dOutput = InlineVector<ElementType, 2>(1.0);
+    let dOutput = OutputVector(1.0);
     var dPair = diffPair(input);
 
     // Run the backward pass
     // dInput = W^T * dOutput
     // dInput = {3, 7, 11, 15}
-    bwd_diff(TestInlineVectorMatMulAdd<InlineVector<ElementType, 4>, InlineVector<ElementType, 2>>)
-                (dPair, weightDiffPair, biasDiffPair, dOutput);
+    bwd_diff(TestInlineVectorMatMulAdd)(dPair, weightDiffPair, biasDiffPair, dOutput);
 
     isPassed = isPassed &&
         dPair.d[0] == 3.0 && dPair.d[1] == 7.0 && dPair.d[2] == 11.0 && dPair.d[3] == 15.0;

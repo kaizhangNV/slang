@@ -56,12 +56,14 @@ public struct BindlessBufferStorage<T> : IStorage<T>
     }
     public typealias Address = BindlessAddress;
     public typealias Differential = BindlessBufferStorage<T.Differential>;
+    public typealias BufferType = RWStructuredBuffer<T>.Handle;
 
     // Following method will not be needed for bindless storage
     public T read(Address address) {static_assert(false, "Not implemented"); return {}; }
     public void atomicAdd(Address address, T value) {static_assert(false, "Not implemented");}
     public void write(Address address, T value) {static_assert(false, "Not implemented");}
     public static Address getOffset(Address base, int elements) { return Address(base.m_handle, base.m_baseIndex + elements); }
+    public BufferType getBuffer() { static_assert(false, "Not implemented"); return BufferType(uint2(0)); }
 }
 
 // [require(cpp_cuda_metal_spirv)]
@@ -107,10 +109,12 @@ public struct PointerStorage<T> : IStorage<T>
 
     public typealias Address = PointerAddress;
     public typealias Differential = PointerStorage<T.Differential>;
+    public typealias BufferType = T*;
 
     // Following method will not be needed for pointer storage
     public T read(Address address) {static_assert(false, "Not implemented"); return {}; }
     public void atomicAdd(Address address, T value) {static_assert(false, "Not implemented");}
     public void write(Address address, T value) {static_assert(false, "Not implemented");}
     public static Address getOffset(Address base, int elements) {return Address(base.m_ptr, base.m_baseIndex + elements * sizeof(T));}
+    public BufferType getBuffer() { static_assert(false, "Not implemented"); return nullptr; }
 }

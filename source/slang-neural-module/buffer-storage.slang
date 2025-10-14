@@ -104,16 +104,10 @@ public struct StructuredBufferStorage<T> : IStorage<T>
         m_buffer[address + m_baseAddress] = value;
     }
 
-    /**
-    Gets a buffer reference from an address (for advanced use cases).
-    @param[in] address The address to get buffer from.
-    @return A buffer reference starting at the specified address.
-    */
-    // [require(cpp_cuda_metal_spirv)]
-    public BufferType getBufferFromAddress(Address address)
+
+    public BufferType getBuffer()
     {
-        let ptr = &m_buffer[address + m_baseAddress];
-        return bit_cast<BufferType>(ptr);
+        return m_buffer;
     }
 
     /**
