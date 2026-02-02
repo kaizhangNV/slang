@@ -1253,6 +1253,7 @@ public struct WaveTangledVector<T, ShMemSize : ISharedMemorySize, int N, int Sub
 #if 1
         let outArray = MMA.mma<T, Address, OutputVector.Differential, T[AlignedOutSize].Differential, T.Differential, false
                         >( doutput, shA, shB, shC, dWeightAddress.p, none);
+
         This.Differential dInput = This.Differential(outArray);
         dthis = DifferentialPair<This>(dthis.p, dInput);
 
@@ -1291,7 +1292,6 @@ public struct WaveTangledVector<T, ShMemSize : ISharedMemorySize, int N, int Sub
                                     T, This
                                   >( shA, shB_outer2, doutput, dthis.p, dWeightAddress.d);
 #endif
-
         if (Bias)
         {
             // Use shB (not shA) for bias reduction scratch space so it doesn't
