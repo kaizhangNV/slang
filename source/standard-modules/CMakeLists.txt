@@ -40,4 +40,5 @@ add_custom_target(
 set_target_properties(generate_standard_module_config_header PROPERTIES FOLDER "generated")
 
 # Build the neural module
-add_subdirectory(neural)
+# TODO: Disable the neural module for now, we will add it back later as it currently breaks the release CI.
+#add_subdirectory(neural)
