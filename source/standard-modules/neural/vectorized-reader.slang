@@ -10,6 +10,14 @@ internal interface IArrayAccessor<T>
         static_assert(false, "atomicAdd is not supported for IArrayAccessor");
     }
 
+    /// Packed vector atomic add for two consecutive elements starting at index.
+    /// For half types on CUDA, this maps to a single half2 atomic instruction.
+    /// Default implementation falls back to two scalar atomicAdd calls.
+    internal void atomicAddPacked(int index, vector<T, 2> value)
+    {
+        static_assert(false, "atomicAdd is not supported for IArrayAccessor");
+    }
+
     __subscript(int index)->T
     {
         get;
@@ -23,6 +31,33 @@ internal extension<T> RWStructuredBuffer<T>.Handle : IArrayAccessor<T>
     override internal void atomicAdd(int index, T value)
     {
         __atomic_reduce_add(this[index], value);
+    }
+
+    [ForceInline]
+    override internal void atomicAddPacked(int index, vector<T, 2> value)
+    {
+        __target_switch
+        {
+        case cuda:
+            // Packed atomic requires the address to be aligned to sizeof(vector<T, 2>).
+            // For half, index must be even (aligned to 4 bytes).
+            if ((index & 1) == 0)
+            {
+                let scalarPtr = &this[index];
+                let vecPtr = reinterpret<vector<T, 2>*>(scalarPtr);
+                __atomic_reduce_add(vecPtr[0], value);
+            }
+            else
+            {
+                // Misaligned: fall back to two scalar atomics.
+                __atomic_reduce_add(this[index], value[0]);
+                __atomic_reduce_add(this[index + 1], value[1]);
+            }
+        default:
+            // On other targets, fall back to two scalar atomic adds.
+            __atomic_reduce_add(this[index], value[0]);
+            __atomic_reduce_add(this[index + 1], value[1]);
+        }
     }
 }
 
@@ -41,6 +76,33 @@ internal extension<T> Ptr<T> : IArrayAccessor<T>
     override internal void atomicAdd(int index, T value)
     {
         __atomic_reduce_add(this[index], value);
+    }
+
+    [ForceInline]
+    override internal void atomicAddPacked(int index, vector<T, 2> value)
+    {
+        __target_switch
+        {
+        case cuda:
+            // Packed atomic requires the address to be aligned to sizeof(vector<T, 2>).
+            // For half, index must be even (aligned to 4 bytes).
+            if ((index & 1) == 0)
+            {
+                let scalarPtr = this + index;
+                let vecPtr = reinterpret<vector<T, 2> *>(scalarPtr);
+                __atomic_reduce_add(vecPtr[0], value);
+            }
+            else
+            {
+                // Misaligned: fall back to two scalar atomics.
+                __atomic_reduce_add(this[index], value[0]);
+                __atomic_reduce_add(this[index + 1], value[1]);
+            }
+        default:
+            // On other targets, fall back to two scalar atomic adds.
+            __atomic_reduce_add(this[index], value[0]);
+            __atomic_reduce_add(this[index + 1], value[1]);
+        }
     }
 }
 
@@ -140,6 +202,38 @@ internal static void accessUint4Aligned<AccessOp Op, T, U, BufferType>(inout Buf
     if (Op == AccessOp.READ)
         value = uint4(0, 0, 0, 0);
 
+    // Optimization: when the buffer element type U is 2 bytes (half, bfloat16),
+    // use packed vector<U, 2> atomics instead of scalar atomics.
+    if (Op == AccessOp.ATOMIC_ADD && sizeof(U) == 2)
+    {
+        if (nBytes == 2)
+        {
+            // Fast path: T is also 2 bytes. Direct bit_cast from uint to vector<U, 2>.
+            [ForceUnroll]
+            for (int i = 0; i < 4; i++)
+            {
+                int index = startIndex + i * WritePerElement;
+                vector<U, 2> packed = bit_cast<vector<U, 2>>(value[i]);
+                buffer.atomicAddPacked(index, packed);
+            }
+        }
+        else if (nBytes == 4)
+        {
+            // T is 4 bytes (e.g., float). Each uint holds 1 T element.
+            // Narrow-cast pairs of T values to U and do packed atomics.
+            [ForceUnroll]
+            for (int i = 0; i < 4; i += 2)
+            {
+                int index = startIndex + i;
+                vector<U, 2> packed;
+                packed[0] = __realCast<U>(bit_cast<T>(value[i]));
+                packed[1] = __realCast<U>(bit_cast<T>(value[i + 1]));
+                buffer.atomicAddPacked(index, packed);
+            }
+        }
+        return;
+    }
+
     [ForceUnroll]
     for (int i = 0; i < 4; i++)
     {
@@ -194,6 +288,57 @@ internal void accessUint4<AccessOp Op, T, U, BufferType, bool IsAligned, int Str
     // this is same as paddingCount = endAddress < AlignedStride ? 0 : AlignedStride - endAddress + 1
     const int paddingCount = max<int>(0, endAddress - Stride + 1);
     const int elementsToRead = (4 * ReadPerElement) - paddingCount;
+
+    // Optimization: when the buffer element type U is 2 bytes (half, bfloat16),
+    // use packed vector<U, 2> atomics with bounds checking for unaligned access.
+    if (Op == AccessOp.ATOMIC_ADD && sizeof(U) == 2)
+    {
+        if (nBytes == 2)
+        {
+            // Fast path: T is also 2 bytes. Each uint holds 2 T elements.
+            [ForceUnroll]
+            for (int i = 0; i < 4; i++)
+            {
+                int offset = i * ReadPerElement;
+                if (offset + 1 < elementsToRead)
+                {
+                    int index = startIndex + offset;
+                    vector<U, 2> packed = bit_cast<vector<U, 2>>(value[i]);
+                    buffer.atomicAddPacked(index, packed);
+                }
+                else if (offset < elementsToRead)
+                {
+                    int index = startIndex + offset;
+                    U elem0 = bit_cast<U>(uint16_t(value[i] & 0xFFFF));
+                    buffer.atomicAdd(index, elem0);
+                }
+            }
+        }
+        else if (nBytes == 4)
+        {
+            // T is 4 bytes (e.g., float). Each uint holds 1 T element.
+            // Narrow-cast pairs of T values to U and do packed atomics.
+            [ForceUnroll]
+            for (int i = 0; i < 4; i += 2)
+            {
+                int offset = i * ReadPerElement;
+                if (offset + 1 < elementsToRead)
+                {
+                    int index = startIndex + offset;
+                    vector<U, 2> packed;
+                    packed[0] = __realCast<U>(bit_cast<T>(value[i]));
+                    packed[1] = __realCast<U>(bit_cast<T>(value[i + 1]));
+                    buffer.atomicAddPacked(index, packed);
+                }
+                else if (offset < elementsToRead)
+                {
+                    int index = startIndex + offset;
+                    buffer.atomicAdd(index, __realCast<U>(bit_cast<T>(value[i])));
+                }
+            }
+        }
+        return;
+    }
 
     [ForceUnroll]
     for (int i = 0; i < 4; i++)
