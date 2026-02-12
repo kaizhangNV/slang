@@ -851,6 +851,179 @@ VISIBILITY_LEVEL struct MMAHelper<T, int InputSize, int OutputSize, int Subgroup
             sharedMemoryOffset, subgroupId, subgroupCount, biasAddress);
     }
 
+    // ========================================================================
+    // Strategy A (Original): Row-by-row writeUint4Atomic
+    //
+    // Stores coopMat tiles to shared memory in row-major, then iterates row
+    // by row. Each lane reads a uint4 and calls writeUint4Atomic, which
+    // expands into 4 half2 atomics. Consecutive lanes are 16 bytes apart.
+    // ========================================================================
+    [ForceInline]
+    static void storeCoopMatTilesToGlobal_WriteUint4Atomic<U, Address, int CoopMatCRows, int CoopMatCColumns, int StrideInVectorTileC>(
+        inout MatC matC[CoopMatCRows * CoopMatCColumns],
+        uint sharedMemoryBOffset,
+        Address weightAddress)
+        where U : __BuiltinFloatingPointType
+        where U.Differential == U
+        where Address : IPointerLikeAddress<U>
+    {
+        const uint laneId = WaveGetLaneIndex();
+
+        static const int RowTileWidthInVec = StrideInVectorTileC;
+        static const int HalfsPerRow = CoopMatCColumns * CMShape.COLUMN_C;
+        static const int HalfsPerUint4 = 8;
+        static const int Uint4PerRow = HalfsPerRow / HalfsPerUint4;
+
+        [ForceUnroll]
+        for (uint i = 0; i < CoopMatCRows; i++)
+        {
+            [ForceUnroll]
+            for (uint j = 0; j < CoopMatCColumns; j++)
+            {
+                matC[i * CoopMatCColumns + j].Store<RowMajor, uint4>(
+                    ShMemPool.data, sharedMemoryBOffset + j * CMShape.COLUMN_C / CMShape.ElementCountPerVectorMatC,
+                    (uint)StrideInVectorTileC);
+            }
+
+            GroupMemoryBarrierWithWaveSync();
+
+            [ForceUnroll]
+            for (int row = 0; row < CMShape.ROW_C; row++)
+            {
+                let globalRowOffset = (int)((i * CMShape.ROW_C + row) * K);
+                uint sharedRowBaseOffset = sharedMemoryBOffset + row * RowTileWidthInVec;
+
+                if (sizeof(T) == 2)
+                {
+                    for (int v = (int)laneId; v < Uint4PerRow; v += N)
+                    {
+                        uint4 value = ShMemPool.data[sharedRowBaseOffset + v];
+                        let globalAddr = weightAddress.getOffset(globalRowOffset + v * HalfsPerUint4);
+                        globalAddr.writeUint4Atomic<half, true, K>(0, value);
+                    }
+                }
+                else if (sizeof(T) == 4)
+                {
+                    for (int v = (int)laneId; v < Uint4PerRow; v += N)
+                    {
+                        int srcIdx = v * 2;
+                        uint4 floatVec0 = ShMemPool.data[sharedRowBaseOffset + srcIdx];
+                        uint4 floatVec1 = ShMemPool.data[sharedRowBaseOffset + srcIdx + 1];
+
+                        uint4 packed;
+                        half h0 = (half)bit_cast<float>(floatVec0[0]);
+                        half h1 = (half)bit_cast<float>(floatVec0[1]);
+                        half h2 = (half)bit_cast<float>(floatVec0[2]);
+                        half h3 = (half)bit_cast<float>(floatVec0[3]);
+                        half h4 = (half)bit_cast<float>(floatVec1[0]);
+                        half h5 = (half)bit_cast<float>(floatVec1[1]);
+                        half h6 = (half)bit_cast<float>(floatVec1[2]);
+                        half h7 = (half)bit_cast<float>(floatVec1[3]);
+
+                        packed[0] = uint(bit_cast<uint16_t>(h0)) | (uint(bit_cast<uint16_t>(h1)) << 16);
+                        packed[1] = uint(bit_cast<uint16_t>(h2)) | (uint(bit_cast<uint16_t>(h3)) << 16);
+                        packed[2] = uint(bit_cast<uint16_t>(h4)) | (uint(bit_cast<uint16_t>(h5)) << 16);
+                        packed[3] = uint(bit_cast<uint16_t>(h6)) | (uint(bit_cast<uint16_t>(h7)) << 16);
+
+                        let globalAddr = weightAddress.getOffset(globalRowOffset + v * HalfsPerUint4);
+                        globalAddr.writeUint4Atomic<half, true, K>(0, packed);
+                    }
+                }
+            }
+
+            GroupMemoryBarrierWithWaveSync();
+        }
+    }
+
+    // ========================================================================
+    // Strategy B: Direct half2 atomics with flat linear sweep
+    //
+    // Stores coopMat tiles to shared memory in row-major, then does a flat
+    // linear sweep at half2 granularity. Each lane reads one uint (= one half2)
+    // from shared memory and issues a single half2 atomic to global memory.
+    //   1. All 32 lanes are always active (flat linear scan).
+    //   2. Consecutive lanes write to consecutive 4-byte addresses (perfect coalescing).
+    //   3. One atomic instruction per lane per iteration (no writeUint4Atomic overhead).
+    // Matches tin2's pattern: offset + lane_id → _atomic_addh2(dst, reg).
+    // ========================================================================
+    [ForceInline]
+    static void storeCoopMatTilesToGlobal_DirectH2Atomic<U, Address, int CoopMatCRows, int CoopMatCColumns, int StrideInVectorTileC>(
+        inout MatC matC[CoopMatCRows * CoopMatCColumns],
+        uint sharedMemoryBOffset,
+        Address weightAddress)
+        where U : __BuiltinFloatingPointType
+        where U.Differential == U
+        where Address : IPointerLikeAddress<U>
+    {
+        const uint laneId = WaveGetLaneIndex();
+
+        static const int RowTileWidthInVec = StrideInVectorTileC;
+
+        [ForceUnroll]
+        for (uint i = 0; i < CoopMatCRows; i++)
+        {
+            [ForceUnroll]
+            for (uint j = 0; j < CoopMatCColumns; j++)
+            {
+                matC[i * CoopMatCColumns + j].Store<RowMajor, uint4>(
+                    ShMemPool.data, sharedMemoryBOffset + j * CMShape.COLUMN_C / CMShape.ElementCountPerVectorMatC,
+                    (uint)StrideInVectorTileC);
+            }
+
+            GroupMemoryBarrierWithWaveSync();
+
+            if (sizeof(T) == 2)
+            {
+                // T = half: each uint in shared memory = 1 half2.
+                static const int H2PerRow = RowTileWidthInVec * 4;
+                static const int TotalH2 = CMShape.ROW_C * H2PerRow;
+
+                for (int h2Idx = (int)laneId; h2Idx < TotalH2; h2Idx += N)
+                {
+                    uint packed = smemLoadUint(sharedMemoryBOffset, h2Idx);
+
+                    int row = h2Idx / H2PerRow;
+                    int h2Col = h2Idx % H2PerRow;
+                    int halfCol = h2Col * 2;
+
+                    int globalOffset = (int)(i * CMShape.ROW_C + row) * K + halfCol;
+                    let addr = weightAddress.getOffset(globalOffset);
+
+                    vector<U, 2> h2 = bit_cast<vector<U, 2>>(packed);
+                    addr.atomicAdd(0, h2);
+                }
+            }
+            else if (sizeof(T) == 4)
+            {
+                // T = float: read 2 consecutive floats, convert to half, issue one half2 atomic.
+                static const int FloatsPerRow = RowTileWidthInVec * 4;
+                static const int H2PerRow = FloatsPerRow / 2;
+                static const int TotalH2 = CMShape.ROW_C * H2PerRow;
+
+                for (int h2Idx = (int)laneId; h2Idx < TotalH2; h2Idx += N)
+                {
+                    int row = h2Idx / H2PerRow;
+                    int h2Col = h2Idx % H2PerRow;
+
+                    int floatIdx = row * FloatsPerRow + h2Col * 2;
+                    uint f0_bits = smemLoadUint(sharedMemoryBOffset, floatIdx);
+                    uint f1_bits = smemLoadUint(sharedMemoryBOffset, floatIdx + 1);
+                    half h0 = (half)bit_cast<float>(f0_bits);
+                    half h1 = (half)bit_cast<float>(f1_bits);
+
+                    int halfCol = h2Col * 2;
+                    int globalOffset = (int)(i * CMShape.ROW_C + row) * K + halfCol;
+                    let addr = weightAddress.getOffset(globalOffset);
+
+                    vector<U, 2> h2 = vector<U, 2>(U(h0), U(h1));
+                    addr.atomicAdd(0, h2);
+                }
+            }
+
+            GroupMemoryBarrierWithWaveSync();
+        }
+    }
+
     [ForceInline]
     [require(cooperative_matrix, subgroup_basic)]
     [require(spvAtomicFloat16AddEXT)]
@@ -932,104 +1105,8 @@ VISIBILITY_LEVEL struct MMAHelper<T, int InputSize, int OutputSize, int Subgroup
 
         if (subgroupIndex == 0)
         {
-            const uint laneId = WaveGetLaneIndex();
-
-            // Total number of uint4 vectors per row of tiles in shared memory.
-            // Each tile column occupies COLUMN_C / ElementCountPerVectorMatC uint4 vectors per row,
-            // and there are CoopMatCColumns tiles across the K dimension.
-            static const int RowTileWidthInVec = StrideInVectorTileC;
-
-            // Total number of uint4 vectors in the shared memory for one row of C tiles.
-            // For T=half: ElementCountPerVectorMatC=8, ROW_C=16, so height = 16*16 / 8 = 32 per tile.
-            // For T=float: ElementCountPerVectorMatC=4, ROW_C=16, so height = 16*16 / 4 = 64 per tile.
-            // But with RowMajor Store, the height dimension in uint4 is just ROW_C rows with stride RowTileWidthInVec.
-            // So total uint4 = ROW_C * RowTileWidthInVec. But that double-counts the element packing...
-            // Actually Store<RowMajor, uint4> stores ROW_C rows, each RowTileWidthInVec uint4 vectors apart.
-            // Each row is COLUMN_C / ElementCountPerVectorMatC uint4 vectors of actual data per tile.
-            // Total shared memory used = ROW_C * RowTileWidthInVec uint4 vectors.
-
-            // Number of halfs per row of the tile-row in global memory.
-            // The weight matrix row for tile-row i spans CoopMatCColumns * COLUMN_C elements.
-            static const int HalfsPerRow = CoopMatCColumns * CMShape.COLUMN_C;
-            static const int HalfsPerUint4 = 8;  // sizeof(uint4) / sizeof(half) = 16 / 2 = 8
-            static const int Uint4PerRow = HalfsPerRow / HalfsPerUint4;
-
-            // Total number of half elements in one row of tiles (ROW_C rows x K columns).
-            static const int TotalHalfsInRowTile = CMShape.ROW_C * HalfsPerRow;
-            static const int TotalUint4InRowTile = TotalHalfsInRowTile / HalfsPerUint4;
-
-            // Store the result to shared memory, then linearly write to global memory.
-            // We process one row of cooperative matrix tiles at a time.
-            [ForceUnroll]
-            for (uint i = 0; i < CoopMatCRows; i++)
-            {
-                // Step 1: Store all coopMat tiles of row i into shared memory in row-major layout.
-                [ForceUnroll]
-                for (uint j = 0; j < CoopMatCColumns; j++)
-                {
-                    matC[i * CoopMatCColumns + j].Store<RowMajor, uint4>(
-                        ShMemPool.data, sharedMemoryBOffset + j * CMShape.COLUMN_C / CMShape.ElementCountPerVectorMatC,
-                        (uint)StrideInVectorTileC);
-                }
-
-                // Ensure all lanes have finished storing to shared memory.
-                GroupMemoryBarrierWithWaveSync();
-
-                // Each lane processes uint4 vectors, with all N lanes in the warp cooperating.
-                // Iterate over the shared memory row by row (ROW_C rows per tile-row).
-                [ForceUnroll]
-                for (int row = 0; row < CMShape.ROW_C; row++)
-                {
-                    // Global memory base for this row: row (i*ROW_C + row), starting at column 0.
-                    let globalRowOffset = (int)((i * CMShape.ROW_C + row) * K);
-
-                    // Shared memory base offset for this row (in uint4 units).
-                    uint sharedRowBaseOffset = sharedMemoryBOffset + row * RowTileWidthInVec;
-
-                    if (sizeof(T) == 2)
-                    {
-                        // T is half: shared memory and global memory are both half-packed uint4.
-                        for (int v = (int)laneId; v < Uint4PerRow; v += N)
-                        {
-                            uint4 value = ShMemPool.data[sharedRowBaseOffset + v];
-                            let globalAddr = weightAddress.getOffset(globalRowOffset + v * HalfsPerUint4);
-                            globalAddr.writeUint4Atomic<half, true, K>(0, value);
-                        }
-                    }
-                    else if (sizeof(T) == 4)
-                    {
-                        // T is float: shared memory uint4 holds 4 floats each.
-                        // Convert pairs of float-uint4 into one half-uint4 (8 halves).
-                        for (int v = (int)laneId; v < Uint4PerRow; v += N)
-                        {
-                            int srcIdx = v * 2;
-                            uint4 floatVec0 = ShMemPool.data[sharedRowBaseOffset + srcIdx];
-                            uint4 floatVec1 = ShMemPool.data[sharedRowBaseOffset + srcIdx + 1];
-
-                            uint4 packed;
-                            half h0 = (half)bit_cast<float>(floatVec0[0]);
-                            half h1 = (half)bit_cast<float>(floatVec0[1]);
-                            half h2 = (half)bit_cast<float>(floatVec0[2]);
-                            half h3 = (half)bit_cast<float>(floatVec0[3]);
-                            half h4 = (half)bit_cast<float>(floatVec1[0]);
-                            half h5 = (half)bit_cast<float>(floatVec1[1]);
-                            half h6 = (half)bit_cast<float>(floatVec1[2]);
-                            half h7 = (half)bit_cast<float>(floatVec1[3]);
-
-                            packed[0] = uint(bit_cast<uint16_t>(h0)) | (uint(bit_cast<uint16_t>(h1)) << 16);
-                            packed[1] = uint(bit_cast<uint16_t>(h2)) | (uint(bit_cast<uint16_t>(h3)) << 16);
-                            packed[2] = uint(bit_cast<uint16_t>(h4)) | (uint(bit_cast<uint16_t>(h5)) << 16);
-                            packed[3] = uint(bit_cast<uint16_t>(h6)) | (uint(bit_cast<uint16_t>(h7)) << 16);
-
-                            let globalAddr = weightAddress.getOffset(globalRowOffset + v * HalfsPerUint4);
-                            globalAddr.writeUint4Atomic<half, true, K>(0, packed);
-                        }
-                    }
-                }
-
-                // Barrier before the next tile-row reuses shared memory.
-                GroupMemoryBarrierWithWaveSync();
-            }
+            storeCoopMatTilesToGlobal_DirectH2Atomic<U, Address, CoopMatCRows, CoopMatCColumns, StrideInVectorTileC>(
+                matC, sharedMemoryBOffset, weightAddress);
         }
 
         AllMemoryBarrierWithGroupSync();
