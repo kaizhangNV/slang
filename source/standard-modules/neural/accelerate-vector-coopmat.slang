@@ -1446,15 +1446,12 @@ public struct WaveTangledVector<T, ShMemSize : ISharedMemorySize, int N, int Sub
                                     T, This
                                   >( shA, shB_outer2, doutput, dthis.p, dWeightAddress.d);
 #endif
-        if (Bias)
-        {
-            // Use shB (not shA) for bias reduction scratch space so it doesn't
-            // overlap with the tile-A region that the next layer's mma will load
-            // into. This avoids needing an extra block sync at the layer boundary.
-            const int subgroupIndex = getWaveId();
-            MMA.sumReduceRows<T.Differential, Address.Differential, OutputVector.Differential
-                >(shA, doutput, subgroupIndex, biasAddress.value.d);
-        }
+        // if (Bias)
+        // {
+        //     const int subgroupIndex = getWaveId();
+        //     MMA.sumReduceRows<T.Differential, Address.Differential, OutputVector.Differential
+        //         >(shA, doutput, subgroupIndex, biasAddress.value.d);
+        // }
     }
 
     // Linear transformation without bias

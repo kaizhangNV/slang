@@ -18,8 +18,8 @@ import neural;
 static const int SubgroupSize = 32;
 static const int BatchSize = 32;
 
-// Use half precision storage
-typealias Storage = StructuredBufferStorage<half>;
+// Use bindless address
+typealias Address = BindlessAddress<half>;
 
 // Single layer parameter layout:
 // weights [INPUT_SIZE * OUTPUT_SIZE], biases [OUTPUT_SIZE]
@@ -27,8 +27,8 @@ static const int LAYER_WEIGHTS = INPUT_SIZE * OUTPUT_SIZE;
 static const int LAYER_BIASES = OUTPUT_SIZE;
 static const int PARAM_COUNT = LAYER_WEIGHTS + LAYER_BIASES;
 
-static const uint WEIGHT_OFFSET = 0u;
-static const uint BIAS_OFFSET = uint(LAYER_WEIGHTS);
+static const int WEIGHT_OFFSET = 0;
+static const int BIAS_OFFSET = LAYER_WEIGHTS;
 
 // Query functions
 public int get_input_size() { return INPUT_SIZE; }
@@ -44,19 +44,19 @@ typealias ShMemPool = SharedMemoryPool<ShMemSizeLayer>;
 typealias VInput = WaveTangledVector<half, ShMemPool, INPUT_SIZE, SubgroupSize>;
 typealias VOutput = WaveTangledVector<half, ShMemPool, OUTPUT_SIZE, SubgroupSize>;
 typealias Act = ReLU<half>;
-typealias Layer = FFLayer<half, VInput, VOutput, Storage, LinearLayout, Act, true>;
+typealias Layer = FFLayer<half, VInput, VOutput, Address, LinearLayout, Act, true>;
 
 // Simple differentiable forward function - just one layer!
 [Differentiable]
-VOutput singleLayerForward(Storage storage, VInput input, Layer layer)
+VOutput singleLayerForward(Address weightAddr, Address biasAddr, VInput input, Layer layer)
 {
-    return layer.eval<Storage>(storage, input);
+    return layer.eval<Address>(weightAddr, biasAddr, input);
 }
 
 [Differentiable]
-VOutput MatVecMul(Storage storage, VInput input)
+VOutput MatVecMul(Address weightAddr, Address biasAddr, VInput input)
 {
-    return input.linearTransform<Storage, LinearLayout, VOutput>(storage, storage, WEIGHT_OFFSET, BIAS_OFFSET);
+    return input.linearTransform<Address, LinearLayout, VOutput>(weightAddr, biasAddr);
 }
 
 // Compute shader entry point - one thread group per sample
@@ -65,20 +65,26 @@ VOutput MatVecMul(Storage storage, VInput input)
 void compute_single_layer_backward(
     uint3 gid : SV_GroupID,
     uint gtid : SV_GroupIndex,
-    RWStructuredBuffer<half> params,
-    StructuredBuffer<half> inputs,
-    StructuredBuffer<half> grad_outputs,
-    RWStructuredBuffer<half> grad_params,
-    RWStructuredBuffer<half> grad_inputs,
+    uniform RWStructuredBuffer<half>.Handle params,
+    uniform StructuredBuffer<half>.Handle inputs,
+    uniform StructuredBuffer<half>.Handle grad_outputs,
+    uniform RWStructuredBuffer<half>.Handle grad_params,
+    uniform RWStructuredBuffer<half>.Handle grad_inputs,
     uniform int batch_size)
 {
     int sampleIdx = int(gid.x);
     if (sampleIdx >= batch_size)
         return;
 
-    let storage = Storage(params);
-    let gradStorage = Storage(grad_params);
+    let baseAddr = Address(params);
+    let gradBaseAddr = Address(grad_params);
     let layer = Layer(WEIGHT_OFFSET, BIAS_OFFSET);
+
+    // Compute weight/bias addresses outside differentiable function
+    let weightAddr = baseAddr.getOffset(WEIGHT_OFFSET);
+    let biasAddr = baseAddr.getOffset(BIAS_OFFSET);
+    let dWeightAddr = gradBaseAddr.getOffset(WEIGHT_OFFSET);
+    let dBiasAddr = gradBaseAddr.getOffset(BIAS_OFFSET);
 
     // Load input
     half inputArr[INPUT_SIZE];
@@ -101,11 +107,12 @@ void compute_single_layer_backward(
     let dOutput = VOutput(gradOutArr);
 
     // Backward pass
-    var storagePair = DifferentialPtrPair<Storage>(storage, gradStorage);
+    var weightAddrPair = DifferentialPtrPair<Address>(weightAddr, dWeightAddr);
+    var biasAddrPair = DifferentialPtrPair<Address>(biasAddr, dBiasAddr);
     var inputPair = diffPair(input);
 
-    // bwd_diff(singleLayerForward)(storagePair, inputPair, layer, dOutput);
-    bwd_diff(MatVecMul)(storagePair, inputPair, dOutput);
+    // bwd_diff(singleLayerForward)(weightAddrPair, biasAddrPair, inputPair, layer, dOutput);
+    bwd_diff(MatVecMul)(weightAddrPair, biasAddrPair, inputPair, dOutput);
 
     // Write input gradients
     if (gtid == 0)
