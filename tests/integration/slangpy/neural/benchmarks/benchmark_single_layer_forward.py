@@ -2,15 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 """
-Single Layer Backward Pass Benchmark
+Single Layer Forward Pass Benchmark
 
-Simplified backward pass comparison: single layer (Input -> Output)
-This requires much less shared memory than 2-layer MLP.
+Profiles linearTransform (MatVecMul) only, no activation.
 
 Network sizes:
 - tiny:  32 -> 16 (528 params)
 - small: 64 -> 16 (1,040 params)
 - medium: 128 -> 32 (4,128 params)
+- large: 256 -> 64 (16,448 params)
 """
 
 import argparse
@@ -51,17 +51,16 @@ def find_neural_module_dir():
     return None
 
 
-def run_single_layer_backward(device_type_str: str, size: str):
-    """Run single-layer backward benchmark."""
+def run_single_layer_forward(device_type_str: str, size: str):
+    """Run single-layer forward benchmark."""
     config = NETWORK_CONFIGS[size]
     input_size = config["input"]
     output_size = config["output"]
 
-    # Single layer: weights [input x output] + biases [output]
     total_params = input_size * output_size + output_size
 
     print(f"\n{'='*70}")
-    print(f"Single Layer Backward: {input_size} -> {output_size}")
+    print(f"Single Layer Forward: {input_size} -> {output_size}")
     print(f"Parameters: {total_params}")
     print(f"{'='*70}")
 
@@ -77,7 +76,6 @@ def run_single_layer_backward(device_type_str: str, size: str):
     device_type = device_type_map[device_type_str.lower()]
     test_dir = Path(__file__).resolve().parent
 
-    # Defines for shader
     defines = {
         "INPUT_SIZE": str(input_size),
         "OUTPUT_SIZE": str(output_size),
@@ -89,7 +87,6 @@ def run_single_layer_backward(device_type_str: str, size: str):
     compiler_options = spy.SlangCompilerOptions({
         "include_paths": include_paths,
         "debug_info": spy.SlangDebugInfoLevel.standard,
-        # "enable_experimental_features": True,
         "defines": defines,
     })
 
@@ -101,21 +98,18 @@ def run_single_layer_backward(device_type_str: str, size: str):
             bindless_options=spy.BindlessDesc(buffer_count=1000),
         )
 
-        module = device.load_module("benchmark_single_layer_backward.slang")
+        module = device.load_module("benchmark_single_layer_forward.slang")
 
-        # Link and create kernel
         program = device.link_program(
             modules=[module],
-            entry_points=[module.entry_point("compute_single_layer_backward")]
+            entry_points=[module.entry_point("compute_single_layer_forward")]
         )
         kernel = device.create_compute_kernel(program)
 
-        # Allocate buffers
         rng = np.random.default_rng(42)
 
         params_data = rng.standard_normal(total_params).astype(np.float16) * 0.1
         inputs_data = rng.standard_normal(BATCH_SIZE * input_size).astype(np.float16) * 0.1
-        grad_outputs_data = rng.standard_normal(BATCH_SIZE * output_size).astype(np.float16) * 0.1
 
         params_buf = device.create_buffer(
             data=params_data,
@@ -125,16 +119,8 @@ def run_single_layer_backward(device_type_str: str, size: str):
             data=inputs_data,
             usage=spy.BufferUsage.shader_resource,
         )
-        grad_outputs_buf = device.create_buffer(
-            data=grad_outputs_data,
-            usage=spy.BufferUsage.shader_resource,
-        )
-        grad_params_buf = device.create_buffer(
-            data=np.zeros(total_params, dtype=np.float16),
-            usage=spy.BufferUsage.shader_resource | spy.BufferUsage.unordered_access,
-        )
-        grad_inputs_buf = device.create_buffer(
-            data=np.zeros(BATCH_SIZE * input_size, dtype=np.float16),
+        outputs_buf = device.create_buffer(
+            data=np.zeros(BATCH_SIZE * output_size, dtype=np.float16),
             usage=spy.BufferUsage.unordered_access,
         )
 
@@ -142,10 +128,8 @@ def run_single_layer_backward(device_type_str: str, size: str):
 
         if device_type == spy.DeviceType.vulkan:
             params_arg = params_buf.descriptor_handle_rw
-            grad_params_arg = grad_params_buf.descriptor_handle_rw
         else:
             params_arg = params_buf
-            grad_params_arg = grad_params_buf
 
         # Warmup
         print(f"Warming up ({WARMUP} iterations)...")
@@ -154,9 +138,7 @@ def run_single_layer_backward(device_type_str: str, size: str):
                 thread_count=thread_count,
                 params=params_arg,
                 inputs=inputs_buf,
-                grad_outputs=grad_outputs_buf,
-                grad_params=grad_params_arg,
-                grad_inputs=grad_inputs_buf,
+                outputs=outputs_buf,
                 batch_size=BATCH_SIZE,
             )
         device.wait()
@@ -174,9 +156,7 @@ def run_single_layer_backward(device_type_str: str, size: str):
                 command_encoder=command_encoder,
                 params=params_arg,
                 inputs=inputs_buf,
-                grad_outputs=grad_outputs_buf,
-                grad_params=grad_params_arg,
-                grad_inputs=grad_inputs_buf,
+                outputs=outputs_buf,
                 batch_size=BATCH_SIZE,
             )
 
@@ -184,7 +164,6 @@ def run_single_layer_backward(device_type_str: str, size: str):
         device.submit_command_buffer(command_encoder.finish())
         device.wait()
 
-        # Calculate results
         timestamps = np.array(query_pool.get_results(0, 2))
         frequency = float(device.info.timestamp_frequency)
         elapsed_ticks = timestamps[1] - timestamps[0]
@@ -209,14 +188,14 @@ def run_single_layer_backward(device_type_str: str, size: str):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Single Layer Backward Benchmark")
+    parser = argparse.ArgumentParser(description="Single Layer Forward Benchmark")
     parser.add_argument("--device", default="cuda", choices=["cuda", "vulkan"])
     parser.add_argument("--size", default="small", choices=list(NETWORK_CONFIGS.keys()))
     parser.add_argument("--all", action="store_true", help="Run all sizes")
     args = parser.parse_args()
 
     print("="*70)
-    print("Single Layer Backward Pass Benchmark")
+    print("Single Layer Forward Pass Benchmark")
     print("="*70)
     print(f"Batch size: {BATCH_SIZE}")
     print(f"Warmup: {WARMUP}, Iterations: {ITERATIONS}")
@@ -225,12 +204,12 @@ def main():
     if args.all:
         results = {}
         for size in NETWORK_CONFIGS.keys():
-            time_ms = run_single_layer_backward(args.device, size)
+            time_ms = run_single_layer_forward(args.device, size)
             if time_ms:
                 results[size] = time_ms
 
         print("\n" + "="*70)
-        print("Summary: Single Layer Backward (CoopMat)")
+        print("Summary: Single Layer Forward (CoopMat)")
         print("="*70)
         print(f"{'Size':<10} {'Network':<15} {'Time (ms)':<12} {'Status'}")
         print("-"*50)
@@ -241,7 +220,7 @@ def main():
             else:
                 print(f"{size:<10} {net:<15} {'N/A':<12} FAILED")
     else:
-        run_single_layer_backward(args.device, args.size)
+        run_single_layer_forward(args.device, args.size)
 
 
 if __name__ == "__main__":

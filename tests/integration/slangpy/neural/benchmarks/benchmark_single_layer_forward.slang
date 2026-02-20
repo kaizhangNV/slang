@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Simple SINGLE LAYER backward pass benchmark.
-// Input -> Output directly (no hidden layer)
-// This should require much less shared memory than 2-layer MLP.
+// Simple SINGLE LAYER forward pass benchmark.
+// Profiles just the linearTransform (MatVecMul), no activation.
 
 import neural;
 
@@ -35,7 +34,7 @@ public int get_input_size() { return INPUT_SIZE; }
 public int get_output_size() { return OUTPUT_SIZE; }
 public int get_total_params() { return PARAM_COUNT; }
 
-// Shared memory size for single layer (much smaller than 2-layer!)
+// Shared memory size for single layer
 typealias ShMemSize = SharedMemorySize<half, TargetEnum.CUDA, ExecutionMode.Training, SubgroupSize, BatchSize / SubgroupSize>;
 typealias ShMemSizeLayer = ShMemSize.OfLayer1<INPUT_SIZE, OUTPUT_SIZE>;
 
@@ -43,33 +42,16 @@ typealias ShMemSizeLayer = ShMemSize.OfLayer1<INPUT_SIZE, OUTPUT_SIZE>;
 typealias ShMemPool = SharedMemoryPool<ShMemSizeLayer>;
 typealias VInput = WaveTangledVector<half, ShMemPool, INPUT_SIZE, SubgroupSize>;
 typealias VOutput = WaveTangledVector<half, ShMemPool, OUTPUT_SIZE, SubgroupSize>;
-typealias Act = ReLU<half>;
-typealias Layer = FFLayer<half, VInput, VOutput, LinearLayout, Act, true>;
-
-// Simple differentiable forward function - just one layer!
-[Differentiable]
-VOutput singleLayerForward(Address weightAddr, Address biasAddr, VInput input, Layer layer)
-{
-    return layer.eval<Address>(input, weightAddr, biasAddr);
-}
-
-[Differentiable]
-VOutput MatVecMul(Address weightAddr, Address biasAddr, VInput input)
-{
-    return input.linearTransform<Address, LinearLayout, VOutput>(weightAddr, biasAddr);
-}
 
 // Compute shader entry point - one thread group per sample
 [shader("compute")]
 [numthreads(32, 1, 1)]
-void compute_single_layer_backward(
+void compute_single_layer_forward(
     uint3 gid : SV_GroupID,
     uint gtid : SV_GroupIndex,
     uniform RWStructuredBuffer<half>.Handle params,
     uniform StructuredBuffer<half> inputs,
-    uniform StructuredBuffer<half> grad_outputs,
-    uniform RWStructuredBuffer<half>.Handle grad_params,
-    uniform RWStructuredBuffer<half> grad_inputs,
+    uniform RWStructuredBuffer<half> outputs,
     uniform int batch_size)
 {
     int sampleIdx = int(gid.x);
@@ -77,14 +59,8 @@ void compute_single_layer_backward(
         return;
 
     let baseAddr = Address(params);
-    let gradBaseAddr = Address(grad_params);
-    let layer = Layer();
-
-    // Compute weight/bias addresses outside differentiable function
     let weightAddr = baseAddr.getOffset(WEIGHT_OFFSET);
     let biasAddr = baseAddr.getOffset(BIAS_OFFSET);
-    let dWeightAddr = gradBaseAddr.getOffset(WEIGHT_OFFSET);
-    let dBiasAddr = gradBaseAddr.getOffset(BIAS_OFFSET);
 
     // Load input
     half inputArr[INPUT_SIZE];
@@ -96,32 +72,17 @@ void compute_single_layer_backward(
     }
     let input = VInput(inputArr);
 
-    // Load output gradient
-    half gradOutArr[OUTPUT_SIZE];
-    int gradOutBaseIdx = sampleIdx * OUTPUT_SIZE;
-    [ForceUnroll]
-    for (int i = 0; i < OUTPUT_SIZE; i++)
-    {
-        gradOutArr[i] = grad_outputs[gradOutBaseIdx + i];
-    }
-    let dOutput = VOutput(gradOutArr);
+    // Forward: just linearTransform (MatVecMul), no activation
+    let output = input.linearTransform<Address, LinearLayout, VOutput>(weightAddr, biasAddr);
 
-    // Backward pass
-    var weightAddrPair = DifferentialPtrPair<Address>(weightAddr, dWeightAddr);
-    var biasAddrPair = DifferentialPtrPair<Address>(biasAddr, dBiasAddr);
-    var inputPair = diffPair(input);
-
-    // bwd_diff(singleLayerForward)(weightAddrPair, biasAddrPair, inputPair, layer, dOutput);
-    bwd_diff(MatVecMul)(weightAddrPair, biasAddrPair, inputPair, dOutput);
-
-    // Write input gradients
+    // Write output
     if (gtid == 0)
     {
-        int gradInBaseIdx = sampleIdx * INPUT_SIZE;
+        int outBaseIdx = sampleIdx * OUTPUT_SIZE;
         [ForceUnroll]
-        for (int i = 0; i < INPUT_SIZE; i++)
+        for (int i = 0; i < OUTPUT_SIZE; i++)
         {
-            grad_inputs[gradInBaseIdx + i] = inputPair.d[i];
+            outputs[outBaseIdx + i] = output[i];
         }
     }
 }
