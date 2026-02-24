@@ -38,11 +38,9 @@ public int get_total_params() { return PARAM_COUNT; }
 // Shared memory size for single layer (much smaller than 2-layer!)
 typealias ShMemSize = SharedMemorySize<half, TargetEnum.CUDA, ExecutionMode.Training, SubgroupSize, BatchSize / SubgroupSize>;
 typealias ShMemSizeLayer = ShMemSize.OfLayer1<INPUT_SIZE, OUTPUT_SIZE>;
-
 // Define vector types
-typealias ShMemPool = SharedMemoryPool<ShMemSizeLayer>;
-typealias VInput = WaveTangledVector<half, ShMemPool, INPUT_SIZE, SubgroupSize>;
-typealias VOutput = WaveTangledVector<half, ShMemPool, OUTPUT_SIZE, SubgroupSize>;
+typealias VInput = WaveTangledVector<half, ShMemSizeLayer, INPUT_SIZE, SubgroupSize>;
+typealias VOutput = WaveTangledVector<half, ShMemSizeLayer, OUTPUT_SIZE, SubgroupSize>;
 typealias Act = ReLU<half>;
 typealias Layer = FFLayer<half, VInput, VOutput, LinearLayout, Act, true>;
 
