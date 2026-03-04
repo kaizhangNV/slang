@@ -4,7 +4,7 @@
 // Network architecture configurable via preprocessor defines.
 // This matches the original neuralnetwork library benchmark for fair comparison.
 
-import neural;
+import slang.neural;
 
 // Network configuration - use defines or defaults
 #ifndef INPUT_SIZE

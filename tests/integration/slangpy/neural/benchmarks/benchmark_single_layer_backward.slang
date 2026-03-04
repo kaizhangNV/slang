@@ -4,7 +4,7 @@
 // Input -> Output directly (no hidden layer)
 // This should require much less shared memory than 2-layer MLP.
 
-import neural;
+import slang.neural;
 
 // Network configuration - single layer: INPUT_SIZE -> OUTPUT_SIZE
 #ifndef INPUT_SIZE

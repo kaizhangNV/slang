@@ -41,11 +41,11 @@ def find_neural_module_dir():
     """Find the neural.slang-module directory."""
     slang_root = Path(__file__).resolve().parents[5]
     candidates = [
-        slang_root / "build" / "Release" / "lib" / "slang-standard-module-2026.1.2",
-        slang_root / "build" / "Debug" / "lib" / "slang-standard-module-2026.1.2",
+        slang_root / "build" / "Release" / "lib" / "slang-standard-module-2026.3.1",
+        slang_root / "build" / "Debug" / "lib" / "slang-standard-module-2026.3.1",
     ]
     for candidate in candidates:
-        neural_module = candidate / "neural.slang-module"
+        neural_module = candidate / "slang" / "neural.slang-module"
         if neural_module.exists():
             return candidate
     return None

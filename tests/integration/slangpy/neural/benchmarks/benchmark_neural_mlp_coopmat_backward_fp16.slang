@@ -4,7 +4,7 @@
 // FP16 version for fair comparison with Tin2/Tin3 fp16 backward benchmarks.
 // Uses autodiff (bwd_diff) for backward pass computation.
 
-import neural;
+import slang.neural;
 
 // Network configuration - use defines or defaults
 #ifndef INPUT_SIZE
