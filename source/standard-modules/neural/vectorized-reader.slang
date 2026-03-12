@@ -18,6 +18,8 @@ internal interface IArrayAccessor<T>
         static_assert(false, "atomicAdd is not supported for IArrayAccessor");
     }
 
+    internal uint4 readUint4(int uint4Index);
+
     __subscript(int index)->T
     {
         get;
@@ -58,6 +60,11 @@ internal extension<T> RWStructuredBuffer<T>.Handle : IArrayAccessor<T>
             __atomic_reduce_add(this[index], value[0]);
             __atomic_reduce_add(this[index + 1], value[1]);
         }
+    }
+
+    override internal uint4 readUint4(int uint4Index)
+    {
+        return uint4(0);
     }
 }
 
@@ -104,10 +111,18 @@ internal extension<T> Ptr<T> : IArrayAccessor<T>
             __atomic_reduce_add(this[index + 1], value[1]);
         }
     }
+
+    override internal uint4 readUint4(int uint4Index)
+    {
+        return uint4(0);
+    }
 }
 
 internal extension<T, int N> Array<T, N> : IArrayAccessor<T>
 {
+    static const int elementsPerUint4 = sizeof(uint4) / sizeof(T);
+    static const int uint4Count = N / elementsPerUint4;
+
     internal __subscript(int index) -> T
     {
         [ForceInline]
@@ -115,6 +130,13 @@ internal extension<T, int N> Array<T, N> : IArrayAccessor<T>
 
         [ForceInline]
         set { this[index] = newValue; }
+    }
+
+    [ForceInline]
+    override internal uint4 readUint4(int uint4Index)
+    {
+        let uint4Array = bit_cast<uint4[uint4Count]>(this);
+        return uint4Array[uint4Index];
     }
 }
 
