@@ -39,8 +39,8 @@ typealias ShMemSize = SharedMemorySize<half, TargetEnum.CUDA, ExecutionMode.Trai
 typealias ShMemSizeLayer = ShMemSize.OfLayer1<INPUT_SIZE, OUTPUT_SIZE>;
 
 // Define vector types
-typealias VInput = WaveTangledVector<half, ShMemSizeLayer, INPUT_SIZE, SubgroupSize>;
-typealias VOutput = WaveTangledVector<half, ShMemSizeLayer, OUTPUT_SIZE, SubgroupSize>;
+typealias VInput = WaveTangledVector<half, ShMemSizeLayer, INPUT_SIZE, SubgroupSize, 1>;
+typealias VOutput = WaveTangledVector<half, ShMemSizeLayer, OUTPUT_SIZE, SubgroupSize, 1>;
 
 // Compute shader entry point - one thread group per sample
 [shader("compute")]

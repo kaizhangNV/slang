@@ -72,13 +72,13 @@ void compute_batch_forward(
     typealias ShMemPool = SharedMemoryPool<ShMemSizeTotal>;
     
     // Layer 1: INPUT -> HIDDEN
-    typealias VInput = WaveTangledVector<float, ShMemPool, INPUT_SIZE, SubgroupSize>;
-    typealias VHidden = WaveTangledVector<float, ShMemPool, HIDDEN_SIZE, SubgroupSize>;
+    typealias VInput = WaveTangledVector<float, ShMemPool, INPUT_SIZE, SubgroupSize, 1>;
+    typealias VHidden = WaveTangledVector<float, ShMemPool, HIDDEN_SIZE, SubgroupSize, 1>;
     typealias Act1 = ReLU<float>;
     typealias Layer1 = FFLayer<float, VInput, VHidden, Storage, Act1, true>;
     
     // Layer 2: HIDDEN -> OUTPUT
-    typealias VOutput = WaveTangledVector<float, ShMemPool, OUTPUT_SIZE, SubgroupSize>;
+    typealias VOutput = WaveTangledVector<float, ShMemPool, OUTPUT_SIZE, SubgroupSize, 1>;
     typealias Act2 = ReLU<float>;
     typealias Layer2 = FFLayer<float, VHidden, VOutput, Storage, Act2, true>;
     

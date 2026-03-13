@@ -55,9 +55,9 @@ typealias ShMemSizeTotal = ShMemSizeLayer1;
 
 // Define vector types globally for use in differentiable function
 typealias ShMemPool = SharedMemoryPool<ShMemSizeTotal>;
-typealias VInput = WaveTangledVector<half, ShMemPool, INPUT_SIZE, SubgroupSize>;
-typealias VHidden = WaveTangledVector<half, ShMemPool, HIDDEN_SIZE, SubgroupSize>;
-typealias VOutput = WaveTangledVector<half, ShMemPool, OUTPUT_SIZE, SubgroupSize>;
+typealias VInput = WaveTangledVector<half, ShMemPool, INPUT_SIZE, SubgroupSize, 1>;
+typealias VHidden = WaveTangledVector<half, ShMemPool, HIDDEN_SIZE, SubgroupSize, 1>;
+typealias VOutput = WaveTangledVector<half, ShMemPool, OUTPUT_SIZE, SubgroupSize, 1>;
 typealias Act = ReLU<half>;
 typealias Layer1 = FFLayer<half, VInput, VHidden, Storage, Act, true>;
 typealias Layer2 = FFLayer<half, VHidden, VOutput, Storage, Act, true>;
