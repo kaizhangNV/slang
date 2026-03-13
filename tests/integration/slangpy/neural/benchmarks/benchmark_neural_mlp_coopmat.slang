@@ -21,7 +21,7 @@ import slang.neural;
 static const int SubgroupSize = 32;
 static const int BatchSize = 32;
 
-typealias Storage = StructuredBufferStorage<float>;
+typealias Address = BindlessAddress<float>;
 
 // Parameter layout:
 // Layer 1: weights [INPUT_SIZE * HIDDEN_SIZE], biases [HIDDEN_SIZE]
@@ -34,10 +34,8 @@ static const int LAYER2_BIASES = OUTPUT_SIZE;
 static const int PARAM_COUNT = LAYER1_WEIGHTS + LAYER1_BIASES + LAYER2_WEIGHTS + LAYER2_BIASES;
 
 // Parameter offsets
-static const uint LAYER1_WEIGHT_OFFSET = 0u;
-static const uint LAYER1_BIAS_OFFSET = uint(LAYER1_WEIGHTS);
-static const uint LAYER2_WEIGHT_OFFSET = uint(LAYER1_WEIGHTS + LAYER1_BIASES);
-static const uint LAYER2_BIAS_OFFSET = uint(LAYER1_WEIGHTS + LAYER1_BIASES + LAYER2_WEIGHTS);
+static const int LAYER1_OFFSET = 0;
+static const int LAYER2_OFFSET = LAYER1_WEIGHTS + LAYER1_BIASES;
 
 // Query functions
 public int get_input_size() { return INPUT_SIZE; }
@@ -49,8 +47,21 @@ public int get_total_params() { return PARAM_COUNT; }
 typealias ShMemSize = SharedMemorySize<float, TargetEnum.CUDA, ExecutionMode.Inference, SubgroupSize, BatchSize / SubgroupSize>;
 typealias ShMemSizeLayer1 = ShMemSize.OfLayer1<INPUT_SIZE, HIDDEN_SIZE>;
 typealias ShMemSizeLayer2 = ShMemSize.OfLayer1<HIDDEN_SIZE, OUTPUT_SIZE>;
-// Use max of both layers for shared memory pool
-typealias ShMemSizeTotal = ShMemSizeLayer1;  // Assuming layer1 needs more (larger input)
+typealias ShMemSizeTotal = ShMemSizeLayer1;
+
+// Define CoopMat types
+typealias ShMemPool = SharedMemoryPool<ShMemSizeTotal>;
+
+// Layer 1: INPUT -> HIDDEN
+typealias VInput = WaveTangledVector<float, ShMemPool, INPUT_SIZE, SubgroupSize, 1>;
+typealias VHidden = WaveTangledVector<float, ShMemPool, HIDDEN_SIZE, SubgroupSize, 1>;
+typealias Act1 = ReLU<float>;
+typealias Layer1 = FFLayer<float, VInput, VHidden, LinearLayout, Act1, true>;
+
+// Layer 2: HIDDEN -> OUTPUT
+typealias VOutput = WaveTangledVector<float, ShMemPool, OUTPUT_SIZE, SubgroupSize, 1>;
+typealias Act2 = ReLU<float>;
+typealias Layer2 = FFLayer<float, VHidden, VOutput, LinearLayout, Act2, true>;
 
 // Compute shader entry point - one thread group per sample
 [shader("compute")]
@@ -58,34 +69,22 @@ typealias ShMemSizeTotal = ShMemSizeLayer1;  // Assuming layer1 needs more (larg
 void compute_batch_forward(
     uint3 gid : SV_GroupID,
     uint gtid : SV_GroupIndex,
-    RWStructuredBuffer<float> params,
+    uniform RWStructuredBuffer<float>.Handle params,
     StructuredBuffer<float> inputs,
     RWStructuredBuffer<float> outputs,
     uniform int batch_size)
 {
-    // Each thread group processes one sample
     int sampleIdx = int(gid.x);
     if (sampleIdx >= batch_size)
         return;
-    
-    // Define CoopMat types inside shader function
-    typealias ShMemPool = SharedMemoryPool<ShMemSizeTotal>;
-    
-    // Layer 1: INPUT -> HIDDEN
-    typealias VInput = WaveTangledVector<float, ShMemPool, INPUT_SIZE, SubgroupSize, 1>;
-    typealias VHidden = WaveTangledVector<float, ShMemPool, HIDDEN_SIZE, SubgroupSize, 1>;
-    typealias Act1 = ReLU<float>;
-    typealias Layer1 = FFLayer<float, VInput, VHidden, Storage, Act1, true>;
-    
-    // Layer 2: HIDDEN -> OUTPUT
-    typealias VOutput = WaveTangledVector<float, ShMemPool, OUTPUT_SIZE, SubgroupSize, 1>;
-    typealias Act2 = ReLU<float>;
-    typealias Layer2 = FFLayer<float, VHidden, VOutput, Storage, Act2, true>;
-    
-    let storage = Storage(params);
-    let layer1 = Layer1(LAYER1_WEIGHT_OFFSET, LAYER1_BIAS_OFFSET);
-    let layer2 = Layer2(LAYER2_WEIGHT_OFFSET, LAYER2_BIAS_OFFSET);
-    
+
+    let baseAddr = Address(params);
+    let layer1 = Layer1();
+    let layer2 = Layer2();
+
+    let layer1Addr = baseAddr.getOffset(LAYER1_OFFSET);
+    let layer2Addr = baseAddr.getOffset(LAYER2_OFFSET);
+
     // Load input for this sample
     float inputArr[INPUT_SIZE];
     int inBaseIdx = sampleIdx * INPUT_SIZE;
@@ -94,12 +93,12 @@ void compute_batch_forward(
     {
         inputArr[i] = inputs[inBaseIdx + i];
     }
-    
+
     // Forward pass through 2 layers
     let input = VInput(inputArr);
-    let hidden = layer1.eval<Storage>(storage, input);
-    let output = layer2.eval<Storage>(storage, hidden);
-    
+    let hidden = layer1.eval<Address>(input, layer1Addr);
+    let output = layer2.eval<Address>(hidden, layer2Addr);
+
     // Only first thread writes result
     if (gtid == 0)
     {

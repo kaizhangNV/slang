@@ -53,9 +53,10 @@ typealias VInput = WaveTangledVector<half, ShMemSizeLayer, INPUT_SIZE, SubgroupS
 typealias VOutput = WaveTangledVector<half, ShMemSizeLayer, OUTPUT_SIZE, SubgroupSize, SubgroupCount>;
 
 [Differentiable]
-VOutput MatVecMul(Address weightAddr, Address biasAddr, in VInput input)
+VOutput MatVecMul(Address paramAddr, in VInput input)
 {
-    return input.linearTransform<Address, OptimalLayout, VOutput>(weightAddr, biasAddr);
+    let biasAddr = paramAddr.getOffset(TILED_WEIGHT_COUNT);
+    return input.linearTransform<Address, OptimalLayout, VOutput>(paramAddr, biasAddr);
 }
 
 // Compute shader entry point
@@ -86,11 +87,6 @@ void compute_single_layer_backward_tiled(
     let baseAddr = Address(params);
     let gradBaseAddr = Address(grad_params);
 
-    let weightAddr = baseAddr.getOffset(WEIGHT_OFFSET);
-    let biasAddr = baseAddr.getOffset(BIAS_OFFSET);
-    let dWeightAddr = gradBaseAddr.getOffset(WEIGHT_OFFSET);
-    let dBiasAddr = gradBaseAddr.getOffset(BIAS_OFFSET);
-
     // Load input
     half inputArr[INPUT_SIZE];
     int inBaseIdx = sampleIdx * INPUT_SIZE;
@@ -109,12 +105,11 @@ void compute_single_layer_backward_tiled(
     }
     let dOutput = VOutput(gradOutArr);
 
-    // Backward pass
-    var weightAddrPair = DifferentialPtrPair<Address>(weightAddr, dWeightAddr);
-    var biasAddrPair = DifferentialPtrPair<Address>(biasAddr, dBiasAddr);
+    // Backward pass — single address pair, getOffset called inside differentiable fn
+    var paramAddrPair = DifferentialPtrPair<Address>(baseAddr, gradBaseAddr);
     var inputPair = diffPair(input);
 
-    bwd_diff(MatVecMul)(weightAddrPair, biasAddrPair, inputPair, dOutput);
+    bwd_diff(MatVecMul)(paramAddrPair, inputPair, dOutput);
 
     // Write input gradients
     if (gtid == 0)

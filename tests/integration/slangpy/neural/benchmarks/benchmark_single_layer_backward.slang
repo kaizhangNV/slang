@@ -44,17 +44,17 @@ typealias VOutput = WaveTangledVector<half, ShMemSizeLayer, OUTPUT_SIZE, Subgrou
 typealias Act = ReLU<half>;
 typealias Layer = FFLayer<half, VInput, VOutput, LinearLayout, Act, true>;
 
-// Simple differentiable forward function - just one layer!
 [Differentiable]
-VOutput singleLayerForward(Address weightAddr, Address biasAddr, VInput input, Layer layer)
+VOutput singleLayerForward(Address paramAddr, VInput input, Layer layer)
 {
-    return layer.eval<Address>(input, weightAddr, biasAddr);
+    return layer.eval<Address>(input, paramAddr);
 }
 
 [Differentiable]
-VOutput MatVecMul(Address weightAddr, Address biasAddr, VInput input)
+VOutput MatVecMul(Address paramAddr, VInput input)
 {
-    return input.linearTransform<Address, LinearLayout, VOutput>(weightAddr, biasAddr);
+    let biasAddr = paramAddr.getOffset(LAYER_WEIGHTS);
+    return input.linearTransform<Address, LinearLayout, VOutput>(paramAddr, biasAddr);
 }
 
 // Compute shader entry point - one thread group per sample
@@ -78,12 +78,6 @@ void compute_single_layer_backward(
     let gradBaseAddr = Address(grad_params);
     let layer = Layer();
 
-    // Compute weight/bias addresses outside differentiable function
-    let weightAddr = baseAddr.getOffset(WEIGHT_OFFSET);
-    let biasAddr = baseAddr.getOffset(BIAS_OFFSET);
-    let dWeightAddr = gradBaseAddr.getOffset(WEIGHT_OFFSET);
-    let dBiasAddr = gradBaseAddr.getOffset(BIAS_OFFSET);
-
     // Load input
     half inputArr[INPUT_SIZE];
     int inBaseIdx = sampleIdx * INPUT_SIZE;
@@ -104,13 +98,11 @@ void compute_single_layer_backward(
     }
     let dOutput = VOutput(gradOutArr);
 
-    // Backward pass
-    var weightAddrPair = DifferentialPtrPair<Address>(weightAddr, dWeightAddr);
-    var biasAddrPair = DifferentialPtrPair<Address>(biasAddr, dBiasAddr);
+    // Backward pass — single address pair, getOffset called inside differentiable fn
+    var paramAddrPair = DifferentialPtrPair<Address>(baseAddr, gradBaseAddr);
     var inputPair = diffPair(input);
 
-    // bwd_diff(singleLayerForward)(weightAddrPair, biasAddrPair, inputPair, layer, dOutput);
-    bwd_diff(MatVecMul)(weightAddrPair, biasAddrPair, inputPair, dOutput);
+    bwd_diff(MatVecMul)(paramAddrPair, inputPair, dOutput);
 
     // Write input gradients
     if (gtid == 0)

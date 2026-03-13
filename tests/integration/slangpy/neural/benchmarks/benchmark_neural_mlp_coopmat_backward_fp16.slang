@@ -21,8 +21,7 @@ import slang.neural;
 static const int SubgroupSize = 32;
 static const int BatchSize = 32;
 
-// Use half precision storage
-typealias Storage = StructuredBufferStorage<half>;
+typealias Address = BindlessAddress<half>;
 
 // Parameter layout:
 // Layer 1: weights [INPUT_SIZE * HIDDEN_SIZE], biases [HIDDEN_SIZE]
@@ -35,10 +34,8 @@ static const int LAYER2_BIASES = OUTPUT_SIZE;
 static const int PARAM_COUNT = LAYER1_WEIGHTS + LAYER1_BIASES + LAYER2_WEIGHTS + LAYER2_BIASES;
 
 // Parameter offsets
-static const uint LAYER1_WEIGHT_OFFSET = 0u;
-static const uint LAYER1_BIAS_OFFSET = uint(LAYER1_WEIGHTS);
-static const uint LAYER2_WEIGHT_OFFSET = uint(LAYER1_WEIGHTS + LAYER1_BIASES);
-static const uint LAYER2_BIAS_OFFSET = uint(LAYER1_WEIGHTS + LAYER1_BIASES + LAYER2_WEIGHTS);
+static const int LAYER1_OFFSET = 0;
+static const int LAYER2_OFFSET = LAYER1_WEIGHTS + LAYER1_BIASES;
 
 // Query functions
 public int get_input_size() { return INPUT_SIZE; }
@@ -59,15 +56,18 @@ typealias VInput = WaveTangledVector<half, ShMemPool, INPUT_SIZE, SubgroupSize, 
 typealias VHidden = WaveTangledVector<half, ShMemPool, HIDDEN_SIZE, SubgroupSize, 1>;
 typealias VOutput = WaveTangledVector<half, ShMemPool, OUTPUT_SIZE, SubgroupSize, 1>;
 typealias Act = ReLU<half>;
-typealias Layer1 = FFLayer<half, VInput, VHidden, Storage, Act, true>;
-typealias Layer2 = FFLayer<half, VHidden, VOutput, Storage, Act, true>;
+typealias Layer1 = FFLayer<half, VInput, VHidden, LinearLayout, Act, true>;
+typealias Layer2 = FFLayer<half, VHidden, VOutput, LinearLayout, Act, true>;
 
-// Differentiable forward function for autodiff
+// Differentiable forward function for autodiff.
+// Single base address — layer offsets computed via getOffset inside the differentiable fn.
 [Differentiable]
-VOutput mlpForward(Storage storage, VInput input, Layer1 layer1, Layer2 layer2)
+VOutput mlpForward(Address paramAddr, VInput input, Layer1 layer1, Layer2 layer2)
 {
-    let hidden = layer1.eval<Storage>(storage, input);
-    let output = layer2.eval<Storage>(storage, hidden);
+    let layer1Addr = paramAddr.getOffset(LAYER1_OFFSET);
+    let layer2Addr = paramAddr.getOffset(LAYER2_OFFSET);
+    let hidden = layer1.eval<Address>(input, layer1Addr);
+    let output = layer2.eval<Address>(hidden, layer2Addr);
     return output;
 }
 
@@ -78,26 +78,23 @@ VOutput mlpForward(Storage storage, VInput input, Layer1 layer1, Layer2 layer2)
 void compute_batch_backward(
     uint3 gid : SV_GroupID,
     uint gtid : SV_GroupIndex,
-    RWStructuredBuffer<half> params,         // Network parameters
-    StructuredBuffer<half> inputs,           // Original inputs
-    StructuredBuffer<half> grad_outputs,     // Gradient from loss
-    RWStructuredBuffer<half> grad_params,    // Output: accumulated parameter gradients
-    RWStructuredBuffer<half> grad_inputs,    // Output: input gradients
+    uniform RWStructuredBuffer<half>.Handle params,
+    StructuredBuffer<half> inputs,
+    StructuredBuffer<half> grad_outputs,
+    uniform RWStructuredBuffer<half>.Handle grad_params,
+    RWStructuredBuffer<half> grad_inputs,
     uniform int batch_size)
 {
-    // Each thread group processes one sample
     int sampleIdx = int(gid.x);
     if (sampleIdx >= batch_size)
         return;
-    
-    // Create storage objects
-    let storage = Storage(params);
-    let gradStorage = Storage(grad_params);
-    
-    // Create layers
-    let layer1 = Layer1(LAYER1_WEIGHT_OFFSET, LAYER1_BIAS_OFFSET);
-    let layer2 = Layer2(LAYER2_WEIGHT_OFFSET, LAYER2_BIAS_OFFSET);
-    
+
+    let baseAddr = Address(params);
+    let gradBaseAddr = Address(grad_params);
+
+    let layer1 = Layer1();
+    let layer2 = Layer2();
+
     // Load input for this sample
     half inputArr[INPUT_SIZE];
     int inBaseIdx = sampleIdx * INPUT_SIZE;
@@ -107,7 +104,7 @@ void compute_batch_backward(
         inputArr[i] = inputs[inBaseIdx + i];
     }
     let input = VInput(inputArr);
-    
+
     // Load gradient from loss
     half gradOutArr[OUTPUT_SIZE];
     int gradOutBaseIdx = sampleIdx * OUTPUT_SIZE;
@@ -117,17 +114,14 @@ void compute_batch_backward(
         gradOutArr[i] = grad_outputs[gradOutBaseIdx + i];
     }
     let dOutput = VOutput(gradOutArr);
-    
-    // Create DifferentialPtrPair for storage (primal, gradient)
-    var storagePair = DifferentialPtrPair<Storage>(storage, gradStorage);
-    
-    // Create diffPair for input
+
+    // Single DifferentialPtrPair for the whole parameter block
+    var paramAddrPair = DifferentialPtrPair<Address>(baseAddr, gradBaseAddr);
     var inputPair = diffPair(input);
-    
-    // Compute backward pass using autodiff
-    bwd_diff(mlpForward)(storagePair, inputPair, layer1, layer2, dOutput);
-    
-    // Write input gradients (from inputPair.d)
+
+    bwd_diff(mlpForward)(paramAddrPair, inputPair, layer1, layer2, dOutput);
+
+    // Write input gradients
     if (gtid == 0)
     {
         int gradInBaseIdx = sampleIdx * INPUT_SIZE;
