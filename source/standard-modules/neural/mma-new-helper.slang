@@ -1162,7 +1162,7 @@ internal struct MMAHelperNew<T, int InputSize, int OutputSize, int SubgroupSize,
 
             if (subgroupId % (k << 1) == 0)
             {
-                if (subgroupId != (SubgroupCount - 1))
+                if (subgroupId + k < SubgroupCount)
                 {
                     [ForceUnroll]
                     for (int idx = 0; idx < OPA_TotalTiles; idx++)
