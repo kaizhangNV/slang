@@ -105,6 +105,7 @@ jobs:
             "-category" "full"
             "-expected-failure-list" "tests/expected-failure-github.txt"
             "-expected-failure-list" "tests/expected-failure-linux.txt"
+            "-expected-failure-list" "tests/expected-failure-gpu.txt"
             "-expected-failure-list" "tests/expected-failure-linux-gpu.txt"
             "-skip-reference-image-generation"
             "-show-adapter-info"
