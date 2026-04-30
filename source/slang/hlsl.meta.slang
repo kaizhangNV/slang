@@ -12,6 +12,8 @@ void __requireTargetExtension(constexpr String extensionName);
 in uint __builtinWaveLaneIndex : SV_WaveLaneIndex;
 in uint __builtinWaveLaneCount : SV_WaveLaneCount;
 in uint __builtinQuadLaneIndex : SV_QuadLaneIndex;
+in uint __builtinWaveIndex : SV_WaveIndex;
+in uint __builtinGroupIndex : SV_GroupIndex;
 
 //@public:
 /// Represents an interface for buffer data layout.
@@ -15404,7 +15406,7 @@ uint WaveMaskCountBits(WaveMask mask, bool value)
 // It seems this can only mean the active threads are the "threads the program flow would lead to". This implies a lockstep
 // "straight SIMD" style interpretation. That being the case this op on HLSL is just a memory barrier without any Sync.
 
-[require(cuda_glsl_hlsl_spirv, memorybarrier)]
+[require(cuda_glsl_hlsl_metal_spirv, memorybarrier)]
 void AllMemoryBarrierWithWaveMaskSync(WaveMask mask)
 {
     __target_switch
@@ -15417,6 +15419,9 @@ void AllMemoryBarrierWithWaveMaskSync(WaveMask mask)
     case spirv:
         __subgroupBarrier();
         return;
+    case metal:
+        // Metal simdgroup_barrier always syncs all 32 lanes; mask is ignored.
+        __intrinsic_asm "simdgroup_barrier(metal::mem_flags::mem_device | metal::mem_flags::mem_threadgroup)";
     }
 }
 
@@ -15436,7 +15441,7 @@ void AllMemoryBarrierWithWaveMaskSync(WaveMask mask)
 // aspect of HLSL seems to make everything in lock step - but that's not quite so, it only has to apparently be that way as far as the programmers
 // model appears - divergence could perhaps potentially still happen.
 
-[require(cuda_glsl_hlsl_spirv, memorybarrier)]
+[require(cuda_glsl_hlsl_metal_spirv, memorybarrier)]
 void GroupMemoryBarrierWithWaveMaskSync(WaveMask mask)
 {
     __target_switch
@@ -15449,10 +15454,13 @@ void GroupMemoryBarrierWithWaveMaskSync(WaveMask mask)
     case spirv:
         __subgroupBarrier();
         return;
+    case metal:
+        // Metal simdgroup_barrier always syncs all 32 lanes; mask is ignored.
+        __intrinsic_asm "simdgroup_barrier(metal::mem_flags::mem_threadgroup)";
     }
 }
 
-[require(cuda_glsl_hlsl_spirv, memorybarrier)]
+[require(cuda_glsl_hlsl_metal_spirv, memorybarrier)]
 void AllMemoryBarrierWithWaveSync()
 {
     __target_switch
@@ -15465,10 +15473,12 @@ void AllMemoryBarrierWithWaveSync()
     case spirv:
         __subgroupBarrier();
         return;
+    case metal:
+        __intrinsic_asm "simdgroup_barrier(metal::mem_flags::mem_device | metal::mem_flags::mem_threadgroup)";
     }
 }
 
-[require(cuda_glsl_hlsl_spirv, memorybarrier)]
+[require(cuda_glsl_hlsl_metal_spirv, memorybarrier)]
 void GroupMemoryBarrierWithWaveSync()
 {
     __target_switch
@@ -15481,6 +15491,8 @@ void GroupMemoryBarrierWithWaveSync()
     case spirv:
         __subgroupBarrier();
         return;
+    case metal:
+        __intrinsic_asm "simdgroup_barrier(metal::mem_flags::mem_threadgroup)";
     }
 }
 
@@ -17004,6 +17016,54 @@ uint WaveGetNumWaves()
         default:
             static_assert(false, "WaveGetNumWaves is only supported in compute shaders");
             return 0; // unreachable, but needed to satisfy compiler
+        }
+    }
+}
+
+/// Returns the index of the current wave (subgroup) within the workgroup.
+/// Equivalent to GLSL gl_SubgroupID / Metal simdgroup_index_in_threadgroup.
+/// @category wave
+__glsl_extension(GL_KHR_shader_subgroup_basic)
+__spirv_version(1.3)
+[NonUniformReturn]
+[ForceInline]
+[require(cuda_glsl_hlsl_metal_spirv_wgsl, subgroup_basic)]
+uint WaveGetWaveIndex()
+{
+    __target_switch
+    {
+    case glsl:
+        __intrinsic_asm "(gl_SubgroupID)";
+    case cuda:
+        {
+            uint3 tid = cudaThreadIdx();
+            uint3 blockDim = cudaBlockDim();
+            uint flattenedTid = tid.x + tid.y * blockDim.x + tid.z * blockDim.x * blockDim.y;
+            return flattenedTid / WaveGetLaneCount();
+        }
+    case spirv:
+        return spirv_asm
+        {
+            OpCapability GroupNonUniform;
+            result:$$uint = OpLoad builtin(SubgroupId:uint)
+        };
+    case metal:
+        return __builtinWaveIndex;
+    case wgsl:
+        __requireTargetExtension("subgroups");
+        return __builtinWaveIndex;
+    case hlsl:
+        __stage_switch
+        {
+        case compute:
+            {
+                uint groupIndex = __builtinGroupIndex;
+                uint waveSize = WaveGetLaneCount();
+                return groupIndex / waveSize;
+            }
+        default:
+            static_assert(false, "WaveGetWaveIndex is only supported in compute shaders for HLSL");
+            return 0;
         }
     }
 }
@@ -28193,10 +28253,13 @@ struct CoopMat
             else
                 __intrinsic_asm "$0.Store<Slang_CUDA_WMMA::ColMajor>(($1)->m_data + $2, $3)";
         case metal:
+            // This overload indexes the groupshared array in U elements. Metal's
+            // simdgroup_store writes through a T*, so offset in U first, then
+            // cast; only the row/column stride needs conversion to T elements.
             if (matrixLayout == CoopMatMatrixLayout.RowMajor)
-                __intrinsic_asm "simdgroup_store($0, (threadgroup $[0]*)(&((*($1))[0])) + $2, (ulong)$3)", T;
+                __intrinsic_asm "simdgroup_store($0, (threadgroup $[0]*)(&((*($1))[0]) + $2), (ulong)($3 * (sizeof($[1]) / sizeof($[0]))))", T, U;
             else
-                __intrinsic_asm "simdgroup_store($0, (threadgroup $[0]*)(&((*($1))[0])) + $2, (ulong)$3, ulong2(0), true)", T;
+                __intrinsic_asm "simdgroup_store($0, (threadgroup $[0]*)(&((*($1))[0]) + $2), (ulong)($3 * (sizeof($[1]) / sizeof($[0]))), ulong2(0), true)", T, U;
         }
     }
 
@@ -28222,9 +28285,9 @@ struct CoopMat
                 __intrinsic_asm "$0.Store<Slang_CUDA_WMMA::ColMajor>(($1), $2)";
         case metal:
             if (matrixLayout == CoopMatMatrixLayout.RowMajor)
-                __intrinsic_asm "simdgroup_store($0, (threadgroup $[0]*)($1), (ulong)$2)", T;
+                __intrinsic_asm "simdgroup_store($0, (threadgroup $[0]*)($1), (ulong)($2 * (sizeof($[1]) / sizeof($[0]))))", T, U;
             else
-                __intrinsic_asm "simdgroup_store($0, (threadgroup $[0]*)($1), (ulong)$2, ulong2(0), true)", T;
+                __intrinsic_asm "simdgroup_store($0, (threadgroup $[0]*)($1), (ulong)($2 * (sizeof($[1]) / sizeof($[0]))), ulong2(0), true)", T, U;
         }
     }
 
@@ -28480,10 +28543,13 @@ $}
             else
                 __intrinsic_asm "$TR::Load<Slang_CUDA_WMMA::ColMajor>(($0)->m_data + $1, $2)";
         case metal:
+            // This overload indexes the groupshared array in U elements. Metal's
+            // simdgroup_load reads through a T*, so offset in U first, then cast;
+            // only the row/column stride needs conversion to T elements.
             if (matrixLayout == CoopMatMatrixLayout.RowMajor)
-                __intrinsic_asm "_slang_simdgroup_load<$TR>((const threadgroup $[0]*)(&((*($0))[0])) + $1, (ulong)$2)", T;
+                __intrinsic_asm "_slang_simdgroup_load<$TR>((const threadgroup $[0]*)(&((*($0))[0]) + $1), (ulong)($2 * (sizeof($[1]) / sizeof($[0]))))", T, U;
             else
-                __intrinsic_asm "_slang_simdgroup_load_transpose<$TR>((const threadgroup $[0]*)(&((*($0))[0])) + $1, (ulong)$2)", T;
+                __intrinsic_asm "_slang_simdgroup_load_transpose<$TR>((const threadgroup $[0]*)(&((*($0))[0]) + $1), (ulong)($2 * (sizeof($[1]) / sizeof($[0]))))", T, U;
         }
     }
 
@@ -28509,9 +28575,9 @@ $}
                 __intrinsic_asm "$TR::Load<Slang_CUDA_WMMA::ColMajor>($0, $1)";
         case metal:
             if (matrixLayout == CoopMatMatrixLayout.RowMajor)
-                __intrinsic_asm "_slang_simdgroup_load<$TR>((const threadgroup $[0]*)($0), (ulong)$1)", T;
+                __intrinsic_asm "_slang_simdgroup_load<$TR>((const threadgroup $[0]*)($0), (ulong)($1 * (sizeof($[1]) / sizeof($[0]))))", T, U;
             else
-                __intrinsic_asm "_slang_simdgroup_load_transpose<$TR>((const threadgroup $[0]*)($0), (ulong)$1)", T;
+                __intrinsic_asm "_slang_simdgroup_load_transpose<$TR>((const threadgroup $[0]*)($0), (ulong)($1 * (sizeof($[1]) / sizeof($[0]))))", T, U;
         }
     }
 

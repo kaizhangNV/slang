@@ -5204,6 +5204,12 @@ semantic sv_wavelaneindex
     get : uint;
 }
 
+semantic sv_waveindex
+{
+    [require(compute)]
+    get : uint;
+}
+
 semantic sv_barycentrics
 {
     [require(fragment)]
