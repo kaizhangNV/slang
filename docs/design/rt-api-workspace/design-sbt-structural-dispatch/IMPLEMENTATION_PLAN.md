@@ -434,6 +434,9 @@ SBT construction remains a host responsibility.
 
 ### 6.2 Metal
 
+Translate `RayTraversalDesc.rayFlags` to `intersector` opacity, culling, geometry, and first-hit
+settings. `RAY_FLAG_SKIP_CLOSEST_HIT_SHADER` suppresses post-trace *ClosestHit* dispatch.
+
 Implement the following units:
 
 1. **Tag inference:** collect and normalize the sources defined in

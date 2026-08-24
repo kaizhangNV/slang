@@ -6,17 +6,39 @@ namespace rt
 public interface IRayMotion {}
 public struct NoMotion : IRayMotion {}
 
-public struct RayDesc
+public typealias RayDesc = RayDesc;
+
+public extension RayDesc
 {
-    public float3 origin;
-    public float tMin;
-    public float3 direction;
-    public float tMax;
+    public property float3 origin
+    {
+        get { return Origin; }
+        set { Origin = newValue; }
+    }
+
+    public property float tMin
+    {
+        get { return TMin; }
+        set { TMin = newValue; }
+    }
+
+    public property float3 direction
+    {
+        get { return Direction; }
+        set { Direction = newValue; }
+    }
+
+    public property float tMax
+    {
+        get { return TMax; }
+        set { TMax = newValue; }
+    }
 }
 
 public struct RayTraversalDesc
 {
     public RayDesc ray;
+    public RAY_FLAG rayFlags;
     public uint instanceMask;
     public uint sbtOffset;
     public uint sbtStride;

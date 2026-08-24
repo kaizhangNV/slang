@@ -1338,6 +1338,7 @@ void rayGen()
 
     rt::RayTraversalDesc desc;
     desc.ray = makeRay();
+    desc.rayFlags = RAY_FLAG_NONE;
     desc.instanceMask = 0xff;
     desc.sbtOffset = 0;
     desc.sbtStride = 1;
@@ -1347,6 +1348,12 @@ void rayGen()
     tracer.trace(desc, scene, gPrimaryDescriptor, payload);
 }
 ```
+
+`rayFlags` uses the existing portable `RAY_FLAG` values. D3D and Vulkan receive the flag word
+directly. Metal has the same traversal controls, but exposes them as individual `intersector`
+settings: opacity, triangle and geometry culling, forced opacity, and first-hit termination.
+`RAY_FLAG_SKIP_CLOSEST_HIT_SHADER` instead suppresses the generated post-trace *ClosestHit*
+dispatch.
 
 For Metal, Slang generates code that is equivalent to the user's old post-trace dispatch, but the
 source of truth is now `PrimaryTraceProgramLayout.HitGroups` and
@@ -1437,6 +1444,7 @@ rt::TraceProgramDescriptor<PrimaryTraceProgramLayout> gPrimaryDescriptor;
 
 rt::RayTraversalDesc desc;
 desc.ray = ray;
+desc.rayFlags = flags;
 desc.instanceMask = instanceMask;
 desc.sbtOffset = rayContributionToHitGroupIndex;
 desc.sbtStride = multiplierForGeometryContributionToHitGroupIndex;

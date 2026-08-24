@@ -318,6 +318,7 @@ void rayGenMain()
 {
     rt::RayTraversalDesc desc;
     desc.ray = makePrimaryRay(DispatchRaysIndex().xy);
+    desc.rayFlags = RAY_FLAG_NONE;
     desc.instanceMask = 0xff;
     desc.sbtOffset = 0;
     desc.sbtStride = 2;
@@ -380,8 +381,9 @@ Host flow:
    points from the reflected stage structs.
 2. Build the D3D/Vulkan ray tracing pipeline with those entry points.
 3. Build SBT records so slot `N` corresponds to native SBT record `N`.
-4. Lower `RayTraversalDesc.sbtOffset`, `RayTraversalDesc.sbtStride`, and
-   `RayTraversalDesc.missIndex` directly to native trace arguments.
+4. Lower `RayTraversalDesc.rayFlags`, `RayTraversalDesc.sbtOffset`,
+   `RayTraversalDesc.sbtStride`, and `RayTraversalDesc.missIndex` to the native
+   traversal controls.
 
 ### Difference from the Old Model
 

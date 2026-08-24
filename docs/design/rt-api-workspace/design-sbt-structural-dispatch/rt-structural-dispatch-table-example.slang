@@ -175,6 +175,7 @@ void rayGenMain()
 
     rt::RayTraversalDesc desc;
     desc.ray = makePrimaryRay(pixel);
+    desc.rayFlags = RAY_FLAG_NONE;
     desc.instanceMask = 0xff;
     desc.sbtOffset = 0;
     desc.sbtStride = 3;
