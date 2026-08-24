@@ -689,16 +689,18 @@ public extension<Context> AnyHitInput<Context>
     where Context : IHitContext
     where Context.Primitive == TrianglePrimitive
 {
-    public property TriangleHitAttributes triangle
+    public property TriangleData triangle
     {
-        get { return __rtAnyHitTriangle<Context>(); }
+        get;
     }
 }
 ```
 
 Using this compiler-known property contributes `triangle_data` to the Metal requirements. The
 corresponding `curve` property is constrained to `CurvePrimitive` and contributes `curve_data`.
-Merely declaring a triangle or curve hit group does not add either tag.
+For `BoundingBoxPrimitive<Attributes>`, the constrained `attributes` property exposes the custom
+type reported by *Intersection*. Merely declaring a triangle or curve hit group does not add either
+tag.
 
 A trace program layout connects the ray tracer and every grouped shader through the same trace
 context:
