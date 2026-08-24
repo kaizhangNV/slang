@@ -248,7 +248,7 @@ These restrictions are hard semantic errors and remain active under `-ignore-cap
 
 | Kind | Allowed | Rejected |
 | --- | --- | --- |
-| Stage implementation | Conformance, type-only layout use, reflection, and compiler-selected entry | User construction, runtime storage, existential conversion, or direct `invoke` call |
+| Stage implementation | Stateless methods, conformance, type-only layout use, reflection, and compiler-selected entry | Instance fields, user construction, runtime storage, existential conversion, or direct `invoke` call |
 | Stage input | Compiler-provided `invoke` parameter and same-stage helper flow | User construction, binding, storage, return, or cross-stage use |
 | Slot, group, group list, or program layout | Associated types and static metadata | Runtime materialization |
 | `TraceProgramDescriptor<Layout>` | Opaque resource binding and trace argument | Shader construction, field access, or copies outside opaque-resource rules |
