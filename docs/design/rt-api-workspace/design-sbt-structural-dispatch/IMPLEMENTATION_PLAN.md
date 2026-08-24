@@ -5,6 +5,9 @@ Status: implementation plan for [PROPOSAL.md](PROPOSAL.md).
 The proposal defines the source API and its semantics. This document defines the implementation
 boundaries, compiler order, milestones, and acceptance requirements.
 
+Stable implementation slices use the commit subject `(Checkpoint Commit) <message>`. A checkpoint
+means its relevant tests pass; it does not imply that the complete feature is finished.
+
 ## 1. Fixed Decisions
 
 ### 1.1 Standard Module
