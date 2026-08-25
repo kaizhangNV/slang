@@ -245,6 +245,10 @@ semantics. Add a new IR operation only for state or behavior with no existing re
 Generic constraints enforce context, payload, primitive, attribute, and group agreement. Full-layout
 validation is limited to facts unavailable until group packs and slots are concrete.
 
+The primitive marker interfaces are sealed. Applications select `TrianglePrimitive`,
+`CurvePrimitive`, or `BoundingBoxPrimitive<Attributes>` so every accepted primitive has a defined
+native target mapping.
+
 ### 3.2 Structural Use Rules
 
 These restrictions are hard semantic errors and remain active under `-ignore-capabilities`.
