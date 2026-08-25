@@ -236,11 +236,13 @@ namespace rt
     public struct MissGroupList<TraceContext, each TGroup> : IMissGroupList<TraceContext>
         where TraceContext : ITraceContext
         where TGroup : IMissGroup
+        where expand each TGroup.Context.TraceContext == TraceContext
     { ... }
 
     public struct CallableGroupList<TraceContext, each TGroup> : ICallableGroupList<TraceContext>
         where TraceContext : ITraceContext
         where TGroup : ICallableGroup
+        where expand each TGroup.Context.TraceContext == TraceContext
     { ... }
 
     public interface ITraceProgramLayout
@@ -1173,7 +1175,8 @@ primitive-AS traversal and nested instance acceleration structures. The source m
 portability boundary explicit:
 
 ```slang
-struct AccelerationStructure : IAccelerationStructure { }
+extension RaytracingAccelerationStructure : IAccelerationStructure { }
+typealias AccelerationStructure = RaytracingAccelerationStructure;
 
 [require(metal)]
 struct MultiLevelAccelerationStructure<let maxLevelCount : int> : IAccelerationStructure

@@ -59,7 +59,7 @@ including curves and Metal multilevel acceleration structures, remain capability
 | Binding and reflection          | Medium | Extend parameter groups for Metal function-table resources    |
 | Metal lowering                  | High   | Generate tables, candidate functions, and post-trace dispatch |
 
-## 2. Planned Repository Layout
+## 2. Repository Layout
 
 Keep feature logic in owned files and limit existing compiler files to narrow scheduling or query
 hooks. The layout below is part of the implementation contract.
@@ -151,11 +151,12 @@ tests/ray-tracing-2/
 │   └── metal/
 ├── reflection/
 ├── compatibility/
+│   ├── coexistence/
 │   ├── legacy-only/
-│   ├── mixed-api/
-│   └── no-import/
+│   └── mixed-api/
 ├── runtime/
 │   ├── shaders/
+│   ├── metal/
 │   └── expected/
 ├── integrate/
 └── coverage-manifest.md
@@ -251,6 +252,9 @@ native target mapping.
 
 The group-list interfaces are also sealed. Their canonical variadic and empty implementations keep
 the concrete group pack available to layout discovery.
+
+The motion-marker interfaces are sealed because the compiler maps exactly the four built-in motion
+modes to Metal tag requirements.
 
 ### 3.2 Structural Use Rules
 
