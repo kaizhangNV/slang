@@ -29,14 +29,14 @@ tag lists contain only the required native inputs.
 
 ## Target Mapping
 
-| Source contract | D3D/Vulkan | Metal |
-| --- | --- | --- |
-| `ITraceProgramLayout` | Native pipeline entry points and SBT records | Generated IFT/VFT functions and logical-slot tables |
-| `RayTracer.trace` | Existing native trace operation | `intersector::intersect` plus generated post-trace dispatch |
-| _ClosestHit_, _Miss_, _Callable_ | Native stages | Visible-function-table dispatch |
-| Triangle/curve _AnyHit_ | Native _AnyHit_ where supported | Generated candidate function in the IFT |
-| Bounding-box _Intersection_ and _AnyHit_ | Native `ReportHit` and _AnyHit_ control transfer | One generated IFT function that composes both source stages |
-| `TraceProgramDescriptor` | No physical shader binding beyond the native pipeline/SBT | Parameter-block-like IFT, VFT, and record-buffer resources |
+| Source contract                          | D3D/Vulkan                                                | Metal                                                       |
+| ---------------------------------------- | --------------------------------------------------------- | ----------------------------------------------------------- |
+| `ITraceProgramLayout`                    | Native pipeline entry points and SBT records              | Generated IFT/VFT functions and logical-slot tables         |
+| `RayTracer.trace`                        | Existing native trace operation                           | `intersector::intersect` plus generated post-trace dispatch |
+| _ClosestHit_, _Miss_, _Callable_         | Native stages                                             | Visible-function-table dispatch                             |
+| Triangle/curve _AnyHit_                  | Native _AnyHit_ where supported                           | Generated candidate function in the IFT                     |
+| Bounding-box _Intersection_ and _AnyHit_ | Native `ReportHit` and _AnyHit_ control transfer          | One generated IFT function that composes both source stages |
+| `TraceProgramDescriptor`                 | No physical shader binding beyond the native pipeline/SBT | Parameter-block-like IFT, VFT, and record-buffer resources  |
 
 The compiler infers Metal primitive, topology, motion, level, and optional-data tags from the trace
 context, selected capabilities, and reachable stage-input properties. Conflicting requirements are

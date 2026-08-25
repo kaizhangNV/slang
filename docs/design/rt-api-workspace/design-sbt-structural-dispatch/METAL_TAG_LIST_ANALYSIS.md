@@ -191,7 +191,7 @@ ClosestHit/Miss worldSpaceOrigin or Direction        -> original trace ray on Me
 
 D3D and Vulkan lower all four world-space property forms to native world-ray builtins. Metal's
 candidate stages require `[[world_space_origin]]` or `[[world_space_direction]]`, so their uses add
-`world_space_data`. Metal's generated post-trace *ClosestHit* and *Miss* dispatch instead forwards
+`world_space_data`. Metal's generated post-trace _ClosestHit_ and _Miss_ dispatch instead forwards
 the original `RayTraversalDesc.ray`, so those uses add no tag.
 
 The compiler unions the tag-producing requirements across reachable stages. The constrained input
@@ -214,19 +214,19 @@ using its user-data argument additionally contributes `user_data`.
 
 ## Complete Metal Tag Coverage
 
-| Metal item | Axis | Inference source | Combination and validation rule |
-| --- | --- | --- | --- |
-| `triangle`, `bounding_box`, `curve` | Per-function primitive selector | `IHitContext.Primitive` | Emit exactly one per generated function; reject primitive-incompatible properties. |
-| `instancing` | Acceleration-structure topology | `TraceContext.AccelerationStructure` | The one acceleration-structure type fixes the program-wide topology. |
-| `max_levels<N>` | Acceleration-structure topology | `MultiLevelAccelerationStructure<N>`, `N >= 2` | Require `instancing`; validate one supported level count. |
-| `primitive_motion` | Motion configuration | `TraceContext.Motion` | Select as part of one trace-wide configuration; allow coexistence with `instance_motion`; validate target support. |
-| `instance_motion` | Motion configuration | `TraceContext.Motion` | Allow coexistence with `primitive_motion`; require `instancing`. |
-| `triangle_data` | Shared optional data | Reachable use of `ClosestHitInput.triangle` or `AnyHitInput.triangle` | Union with other data requirements; expose both properties only for `TrianglePrimitive`. |
-| `curve_data` | Shared optional data | Reachable use of `ClosestHitInput.curve` or `AnyHitInput.curve` | Union with other data requirements; expose both properties only for `CurvePrimitive`. |
-| `world_space_data` | Shared optional data | Reachable use of `AnyHitInput.worldSpaceOrigin`, `AnyHitInput.worldSpaceDirection`, `IntersectionInput.worldSpaceOrigin`, or `IntersectionInput.worldSpaceDirection` | Union with other data requirements; require an instanced acceleration structure. *ClosestHit* and *Miss* uses do not add this tag. |
-| `extended_limits` | Build capability | Selected compilation capabilities | Add only when selected, reflect the mode, and reject unsupported targets. |
-| `intersection_function_buffer` | Lowering mode | Future IFB lowering | Select one trace-wide IFB path instead of an ordinary IFT; unavailable in the first version. |
-| `user_data` | Function-buffer data | Future IFB user-data argument | Union into an IFB signature; require `intersection_function_buffer`. |
+| Metal item                          | Axis                            | Inference source                                                                                                                                                     | Combination and validation rule                                                                                                    |
+| ----------------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `triangle`, `bounding_box`, `curve` | Per-function primitive selector | `IHitContext.Primitive`                                                                                                                                              | Emit exactly one per generated function; reject primitive-incompatible properties.                                                 |
+| `instancing`                        | Acceleration-structure topology | `TraceContext.AccelerationStructure`                                                                                                                                 | The one acceleration-structure type fixes the program-wide topology.                                                               |
+| `max_levels<N>`                     | Acceleration-structure topology | `MultiLevelAccelerationStructure<N>`, `N >= 2`                                                                                                                       | Require `instancing`; validate one supported level count.                                                                          |
+| `primitive_motion`                  | Motion configuration            | `TraceContext.Motion`                                                                                                                                                | Select as part of one trace-wide configuration; allow coexistence with `instance_motion`; validate target support.                 |
+| `instance_motion`                   | Motion configuration            | `TraceContext.Motion`                                                                                                                                                | Allow coexistence with `primitive_motion`; require `instancing`.                                                                   |
+| `triangle_data`                     | Shared optional data            | Reachable use of `ClosestHitInput.triangle` or `AnyHitInput.triangle`                                                                                                | Union with other data requirements; expose both properties only for `TrianglePrimitive`.                                           |
+| `curve_data`                        | Shared optional data            | Reachable use of `ClosestHitInput.curve` or `AnyHitInput.curve`                                                                                                      | Union with other data requirements; expose both properties only for `CurvePrimitive`.                                              |
+| `world_space_data`                  | Shared optional data            | Reachable use of `AnyHitInput.worldSpaceOrigin`, `AnyHitInput.worldSpaceDirection`, `IntersectionInput.worldSpaceOrigin`, or `IntersectionInput.worldSpaceDirection` | Union with other data requirements; require an instanced acceleration structure. _ClosestHit_ and _Miss_ uses do not add this tag. |
+| `extended_limits`                   | Build capability                | Selected compilation capabilities                                                                                                                                    | Add only when selected, reflect the mode, and reject unsupported targets.                                                          |
+| `intersection_function_buffer`      | Lowering mode                   | Future IFB lowering                                                                                                                                                  | Select one trace-wide IFB path instead of an ordinary IFT; unavailable in the first version.                                       |
+| `user_data`                         | Function-buffer data            | Future IFB user-data argument                                                                                                                                        | Union into an IFB signature; require `intersection_function_buffer`.                                                               |
 
 This table covers all Metal ray-tracing template tags. The first row additionally covers the
 primitive selector that precedes the shared tags in `[[intersection(...)]]`.

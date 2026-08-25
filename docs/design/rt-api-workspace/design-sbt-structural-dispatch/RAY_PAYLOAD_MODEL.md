@@ -23,13 +23,13 @@ The existing API has **two payload representation styles**:
 
 Within those styles, payloads appear in **five source-level roles**:
 
-| # | Role | Source shape |
-| --- | --- | --- |
-| 1 | Start a pipeline trace | `TraceRay(..., inout payload)` or `TraceMotionRay(...)` |
-| 2 | Receive the payload in a pipeline stage | `inout Payload payload` in *AnyHit*, *ClosestHit*, or *Miss* |
-| 3 | Traverse into a `HitObject` | `HitObject::TraceRay(..., inout payload)` |
-| 4 | Invoke deferred hit/miss shading | `HitObject::Invoke(..., inout payload)` |
-| 5 | Use Vulkan GLSL payload locations directly | `rayPayloadEXT` and `rayPayloadInEXT` |
+| #   | Role                                       | Source shape                                                 |
+| --- | ------------------------------------------ | ------------------------------------------------------------ |
+| 1   | Start a pipeline trace                     | `TraceRay(..., inout payload)` or `TraceMotionRay(...)`      |
+| 2   | Receive the payload in a pipeline stage    | `inout Payload payload` in _AnyHit_, _ClosestHit_, or _Miss_ |
+| 3   | Traverse into a `HitObject`                | `HitObject::TraceRay(..., inout payload)`                    |
+| 4   | Invoke deferred hit/miss shading           | `HitObject::Invoke(..., inout payload)`                      |
+| 5   | Use Vulkan GLSL payload locations directly | `rayPayloadEXT` and `rayPayloadInEXT`                        |
 
 `[raypayload]` is **not a sixth payload channel**. It annotates a payload structure with DXR payload
 access qualifiers. `SV_RayPayload` is likewise an explicit spelling for the stage-parameter role,
@@ -64,19 +64,19 @@ TraceRay(..., P)
 caller observes the final P
 ```
 
-An *Intersection* shader does not receive the portable ray payload. A *Callable* shader receives
-callable data, which is a separate mechanism. An *AnyHit* shader's payload writes are not rolled
+An _Intersection_ shader does not receive the portable ray payload. A _Callable_ shader receives
+callable data, which is a separate mechanism. An _AnyHit_ shader's payload writes are not rolled
 back when it rejects the candidate with `IgnoreHit()`.
 
 The payload is not the same as:
 
-| Data | Owner and purpose |
-| --- | --- |
-| Ray payload | Mutable state associated with one trace and its invoked stages |
-| Hit attributes | Geometry data produced by intersection and consumed by hit stages |
-| Callable data | The independent `inout` argument of `CallShader` and *Callable* stages |
-| Shader-record data | Per-SBT-record data selected by dispatch |
-| Bound resources | Buffers, textures, and samplers supplied by the host |
+| Data               | Owner and purpose                                                      |
+| ------------------ | ---------------------------------------------------------------------- |
+| Ray payload        | Mutable state associated with one trace and its invoked stages         |
+| Hit attributes     | Geometry data produced by intersection and consumed by hit stages      |
+| Callable data      | The independent `inout` argument of `CallShader` and _Callable_ stages |
+| Shader-record data | Per-SBT-record data selected by dispatch                               |
+| Bound resources    | Buffers, textures, and samplers supplied by the host                   |
 
 ## 2. Representation Style A: Data-Based `inout` Payloads
 
@@ -132,7 +132,7 @@ motion-blur variant, not another kind of payload.
 
 ### 2.2 Stage entry-point payload
 
-The payload becomes an `inout` parameter of the *AnyHit*, *ClosestHit*, and *Miss* entry points:
+The payload becomes an `inout` parameter of the _AnyHit_, _ClosestHit_, and _Miss_ entry points:
 
 ```slang
 [shader("anyhit")]
@@ -186,7 +186,7 @@ For the HLSL-style stage signature, `SV_RayPayload` does not create a second pay
 shader stage already let Slang classify the `inout` parameter as the payload. The semantic is an
 explicit spelling of the same role.
 
-An *Intersection* entry point receives hit attributes and ray built-ins, but not a ray payload:
+An _Intersection_ entry point receives hit attributes and ray built-ins, but not a ray payload:
 
 ```slang
 [shader("intersection")]
@@ -199,8 +199,8 @@ void intersection()
 
 ### 2.3 `HitObject::TraceRay`: traverse now, shade later
 
-`HitObject::TraceRay` performs traversal, including *Intersection* and *AnyHit*, but defers
-*ClosestHit* or *Miss* execution. It still carries an `inout` payload during traversal:
+`HitObject::TraceRay` performs traversal, including _Intersection_ and _AnyHit_, but defers
+_ClosestHit_ or _Miss_ execution. It still carries an `inout` payload during traversal:
 
 ```slang
 RadiancePayload payload = makeInitialPayload();
@@ -227,7 +227,7 @@ the caller continues to own `payload` separately.
 ### 2.4 `HitObject::Invoke`: execute deferred shading
 
 After optional shader-execution reordering, `HitObject::Invoke` passes a payload to the deferred
-*ClosestHit* or *Miss* shader:
+_ClosestHit_ or _Miss_ shader:
 
 ```slang
 // NVAPI, SPIR-V, and CUDA form.
@@ -343,7 +343,7 @@ does not accept a zero-sized payload.
 
 ### 4.2 Invoked shader stages: portable DXR requires the parameter
 
-DXR requires *AnyHit*, *ClosestHit*, and *Miss* shaders to declare a matching payload structure,
+DXR requires _AnyHit_, _ClosestHit_, and _Miss_ shaders to declare a matching payload structure,
 even when a particular shader never reads it. A portable Slang stage should therefore keep the
 parameter:
 
@@ -354,14 +354,14 @@ void miss(inout EmptyPayload payload)
 }
 ```
 
-The current Slang compiler accepts a payload-less *Miss* function when targeting SPIR-V, because
+The current Slang compiler accepts a payload-less _Miss_ function when targeting SPIR-V, because
 Vulkan can omit an unused incoming payload interface variable. That form is not portable to DXR and
 should not define the cross-target API contract.
 
 ### 4.3 Ray queries: no pipeline payload
 
 `RayQuery.TraceRayInline` performs inline traversal in the calling shader. It does not dispatch the
-pipeline *AnyHit*, *ClosestHit*, or *Miss* stages, so it has no pipeline payload parameter:
+pipeline _AnyHit_, _ClosestHit_, or _Miss_ stages, so it has no pipeline payload parameter:
 
 ```slang
 RayQuery<RAY_FLAG_NONE> query;
@@ -405,7 +405,7 @@ instead of diagnosing it at the API boundary.
 
 The payload type is part of the trace ABI:
 
-- The value passed to `TraceRay` must match every reachable *AnyHit*, *ClosestHit*, and *Miss*
+- The value passed to `TraceRay` must match every reachable _AnyHit_, _ClosestHit_, and _Miss_
   payload parameter.
 - Vulkan outgoing and incoming variables connected through one location must have matching types.
 - Payloads used with `HitObject` traversal and invocation must match the selected shaders.
@@ -483,14 +483,14 @@ struct RadiancePayload
 
 The annotation describes field traffic across stage boundaries:
 
-| Qualifier | Meaning |
-| --- | --- |
-| `write(caller)` | The caller's initial field value is supplied to the trace |
-| `read(caller)` | The trace's final field value is returned to the caller |
-| `read(anyhit)` | *AnyHit* receives the last preserved value of the field |
-| `write(anyhit)` | An executed *AnyHit* publishes the field for later stages |
-| `read(closesthit)` / `write(closesthit)` | Corresponding *ClosestHit* input/output traffic |
-| `read(miss)` / `write(miss)` | Corresponding *Miss* input/output traffic |
+| Qualifier                                | Meaning                                                   |
+| ---------------------------------------- | --------------------------------------------------------- |
+| `write(caller)`                          | The caller's initial field value is supplied to the trace |
+| `read(caller)`                           | The trace's final field value is returned to the caller   |
+| `read(anyhit)`                           | _AnyHit_ receives the last preserved value of the field   |
+| `write(anyhit)`                          | An executed _AnyHit_ publishes the field for later stages |
+| `read(closesthit)` / `write(closesthit)` | Corresponding _ClosestHit_ input/output traffic           |
+| `read(miss)` / `write(miss)`             | Corresponding _Miss_ input/output traffic                 |
 
 PAQs are lifetime and data-transfer declarations. They let a DXR implementation avoid preserving
 fields in stages that cannot consume them, reducing register pressure or spilling.
@@ -500,7 +500,7 @@ like an ordinary local value. If code accesses a field inconsistently with its d
 can become undefined or writes can be discarded at stage transitions.
 
 In particular, a field with `write(closesthit)` but not `read(closesthit)` is a write-only output of
-that stage. If *ClosestHit* executes, it must fully initialize the field; otherwise the published
+that stage. If _ClosestHit_ executes, it must fully initialize the field; otherwise the published
 value is undefined. A field that is conditionally updated normally needs both `read(closesthit)` and
 `write(closesthit)` so that the previous value is preserved along the branch that does not assign it.
 
@@ -550,14 +550,14 @@ parameter. The attribute does not turn every instance of that type into an activ
 No. Slang internally gives payload parameters a resource-layout category, but that is compiler
 classification, not a descriptor binding.
 
-| Property | Ray payload | Group-shared memory | Bound buffer/texture |
-| --- | --- | --- | --- |
-| Created by | Shader trace call/runtime | Shader workgroup invocation | Host application |
-| Visibility | One trace and its selected shader stages | Threads in one workgroup | Shaders with the binding |
-| Host binds the value | No | No | Yes |
-| Descriptor/register slot | No | No | Yes |
-| Lifetime | Trace and stage transitions | Workgroup execution | Resource allocation |
-| Typical implementation | Registers, stack, or private implementation storage | On-chip/shared memory | Device memory |
+| Property                 | Ray payload                                         | Group-shared memory         | Bound buffer/texture     |
+| ------------------------ | --------------------------------------------------- | --------------------------- | ------------------------ |
+| Created by               | Shader trace call/runtime                           | Shader workgroup invocation | Host application         |
+| Visibility               | One trace and its selected shader stages            | Threads in one workgroup    | Shaders with the binding |
+| Host binds the value     | No                                                  | No                          | Yes                      |
+| Descriptor/register slot | No                                                  | No                          | Yes                      |
+| Lifetime                 | Trace and stage transitions                         | Workgroup execution         | Resource allocation      |
+| Typical implementation   | Registers, stack, or private implementation storage | On-chip/shared memory       | Device memory            |
 
 The payload is therefore shader-internal like group-shared memory only in the limited sense that the
 host does not bind its contents. Its ownership and visibility are very different: it is per trace,

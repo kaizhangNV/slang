@@ -54,11 +54,11 @@ responsibilities.
 
 ## Target Mapping
 
-| Target | Lowering |
-| --- | --- |
-| D3D12 | Native callable entry points, callable SBT records, and `CallShader` |
+| Target | Lowering                                                                       |
+| ------ | ------------------------------------------------------------------------------ |
+| D3D12  | Native callable entry points, callable SBT records, and `CallShader`           |
 | Vulkan | Native callable entry points, callable SBT records, and `OpExecuteCallableKHR` |
-| Metal | A typed visible-function table plus generated record-buffer lookup |
+| Metal  | A typed visible-function table plus generated record-buffer lookup             |
 
 Metal threads the descriptor resources and record buffer through each visible callable function so
 nested callable dispatch uses the same program tables. All functions in one table receive a uniform
