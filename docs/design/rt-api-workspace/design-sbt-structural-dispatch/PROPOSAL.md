@@ -698,16 +698,22 @@ interface ITraceContext
 The motion type selects one trace-wide motion mode:
 
 ```slang
+[sealed]
+interface IRayMotion {}
+
+[sealed]
+interface IEnabledRayMotion : IRayMotion {}
+
 struct NoMotion : IRayMotion {}
 
 [require(metallib_2_4)]
-struct PrimitiveMotion : IRayMotion {}
+struct PrimitiveMotion : IEnabledRayMotion {}
 
 [require(metallib_2_4)]
-struct InstanceMotion : IRayMotion {}
+struct InstanceMotion : IEnabledRayMotion {}
 
 [require(metallib_2_4)]
-struct PrimitiveAndInstanceMotion : IRayMotion {}
+struct PrimitiveAndInstanceMotion : IEnabledRayMotion {}
 ```
 
 A hit group context specializes the trace context with a primitive kind and a record type:
