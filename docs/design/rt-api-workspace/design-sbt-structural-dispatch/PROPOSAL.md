@@ -9,10 +9,9 @@ This proposal sketches a new Slang ray tracing API that treats Metal as a first-
 while preserving the D3D and Vulkan pipeline model. The central idea is to make the shader source
 declare a conceptual shader binding table, or SBT, as structured Slang types. D3D and Vulkan can
 continue to use the native host-created SBT. Metal can use the same structure to synthesize the
-post-trace *ClosestHit* and *Miss* dispatch logic that Metal programmers normally write by hand.
+post-trace _ClosestHit_ and _Miss_ dispatch logic that Metal programmers normally write by hand.
 
-Catalog
--------
+## Catalog
 
 - [1. Challenges Extending Current Slang Ray Tracing To Metal](#1-challenges-extending-current-slang-ray-tracing-to-metal)
   - [1.1 Dispatch Model Gap](#11-dispatch-model-gap)
@@ -47,30 +46,30 @@ Catalog
 ### 1.1 Dispatch Model Gap
 
 D3D and Vulkan expose ray tracing as a pipeline-stage model. A trace call enters traversal, and
-the driver or hardware uses host-created SBT records to select *Miss*, *AnyHit*, *Intersection*,
-and *ClosestHit* shaders. The *ClosestHit* function is not directly called from ray-generation
+the driver or hardware uses host-created SBT records to select _Miss_, _AnyHit_, _Intersection_,
+and _ClosestHit_ shaders. The _ClosestHit_ function is not directly called from ray-generation
 source.
 
 Metal exposes a different model. `intersector.intersect(...)` returns an `intersection_result`.
-*AnyHit* and custom *Intersection* behavior can still be dispatched during traversal through Metal's
-function table or function buffer, but *Miss* and *ClosestHit* are ordinary post-trace shader logic
+_AnyHit_ and custom _Intersection_ behavior can still be dispatched during traversal through Metal's
+function table or function buffer, but _Miss_ and _ClosestHit_ are ordinary post-trace shader logic
 written by the user.
 
 Figure 1 shows the key mismatch: D3D/Vulkan assign stage dispatch to the host SBT and the
-driver/hardware, while Metal assigns *Miss* and *ClosestHit* dispatch to shader code after
+driver/hardware, while Metal assigns _Miss_ and _ClosestHit_ dispatch to shader code after
 `intersect(...)` returns. A portable Slang API needs enough structure to synthesize that Metal
 post-trace dispatch without changing the native D3D/Vulkan model.
 
 <a id="fig-dispatch-model-gap"></a>
 ![D3D and Vulkan SBT dispatch compared with Metal user-specified post-trace miss and closest-hit dispatch](figures/dispatch-model-gap.svg)
 
-*Figure 1. Dispatch model gap: D3D and Vulkan select pipeline stages through host-created SBT records, while Metal requires user-written post-trace dispatch for Miss and ClosestHit.*
+_Figure 1. Dispatch model gap: D3D and Vulkan select pipeline stages through host-created SBT records, while Metal requires user-written post-trace dispatch for Miss and ClosestHit._
 
 ### 1.2 Metal Function Table And Function Buffer Resource Mismatch
 
 Metal introduces `intersection_function_table` and `intersection_function_buffer_arguments`
 resource objects that are visible to shader code and must be bound from host code when traversal
-needs custom *Intersection* behavior. This is different from the D3D/Vulkan SBT model. The SBT is
+needs custom _Intersection_ behavior. This is different from the D3D/Vulkan SBT model. The SBT is
 built by host code, but it is not a shader-visible resource and shader code does not declare a
 binding point for it.
 
@@ -90,7 +89,7 @@ call.
 
 In existing D3D/Vulkan-style ray tracing models, this reachability is determined by host-created
 binding data. The shader source contains the trace call, but the SBT records and the binding edges
-from those records to *AnyHit*, *Intersection*, *ClosestHit*, and *Miss* shaders are provided by
+from those records to _AnyHit_, _Intersection_, _ClosestHit_, and _Miss_ shaders are provided by
 host code.
 Therefore, as shown in Figure 2, the complete reachability set is not known from shader source at
 ordinary compile time.
@@ -98,9 +97,9 @@ ordinary compile time.
 <a id="fig-reachability-definition"></a>
 ![Reachability is the set of SBT entries that one trace call can select](figures/reachability-definition.svg)
 
-*Figure 2. Reachability definition: the reachable entries are the SBT records one trace call can select at runtime, but in the existing model that set is determined by host-created binding data.*
+_Figure 2. Reachability definition: the reachable entries are the SBT records one trace call can select at runtime, but in the existing model that set is determined by host-created binding data._
 
-Metal adds a second constraint: each custom *Intersection* function reachable from an intersector
+Metal adds a second constraint: each custom _Intersection_ function reachable from an intersector
 must have a compatible `[[intersection(...)]]` tag list. Native Metal can validate a mismatch at
 pipeline build time because the user writes both the intersector tags and the function tags in
 source. Figure 3 shows why this works: pipeline build sees the intersector tags, function tags,
@@ -109,16 +108,16 @@ and host bindings together.
 <a id="fig-native-metal-tag-validation"></a>
 ![Native Metal can validate explicit intersector and custom intersection function tags at pipeline build time](figures/native-metal-tag-validation.svg)
 
-*Figure 3. Native Metal tag validation: the user-authored tag lists give pipeline build enough information to reject incompatible host bindings.*
+_Figure 3. Native Metal tag validation: the user-authored tag lists give pipeline build enough information to reject incompatible host bindings._
 
-Slang does not currently expose that Metal tag system. When lowering *AnyHit* or *Intersection*
+Slang does not currently expose that Metal tag system. When lowering _AnyHit_ or _Intersection_
 entry points to Metal, Slang must synthesize `[[intersection(...)]]` tags for the generated Metal
 functions. The compiler can see trace sites and stage entry points, but in the existing model it
 cannot see the host binding edges that determine which stage entries are reachable from each trace
 site.
 
 Figure 4 shows the information-flow problem. If two trace sites lower to different Metal tag
-sets, and several *AnyHit* or *Intersection* entries may be bound by the host, the compiler cannot
+sets, and several _AnyHit_ or _Intersection_ entries may be bound by the host, the compiler cannot
 know whether a generated function needs tag set A, tag set B, or another tag set. Emitting no tag,
 or emitting a tag inferred from the wrong trace site, can make the generated Metal pipeline fail
 to build.
@@ -126,7 +125,7 @@ to build.
 <a id="fig-slang-tag-synthesis-gap"></a>
 ![Slang cannot synthesize Metal intersection tags when host binding data owns reachability](figures/slang-tag-synthesis-gap.svg)
 
-*Figure 4. Slang tag synthesis gap: Slang must emit Metal `[[intersection(...)]]` tags before host binding data reveals which AnyHit or Intersection entries are reachable from each trace site.*
+_Figure 4. Slang tag synthesis gap: Slang must emit Metal `[[intersection(...)]]` tags before host binding data reveals which AnyHit or Intersection entries are reachable from each trace site._
 
 ### 1.4 Reserved Challenges
 
@@ -148,10 +147,10 @@ source of truth that is visible to both the compiler and host reflection.
 
 The design builds that capability in the following order:
 
-1. Express ray tracing stage shaders as types. Hit, *Miss*, and *Callable* shader logic is written
+1. Express ray tracing stage shaders as types. Hit, _Miss_, and _Callable_ shader logic is written
    as structs that implement Slang interfaces instead of only as free-standing shader entry points.
    Representing a stage as a type allows an SBT group declaration to refer to it directly.
-2. Declare the SBT layout. `ITraceProgramLayout` maps hit, *Miss*, and *Callable* shader groups to
+2. Declare the SBT layout. `ITraceProgramLayout` maps hit, _Miss_, and _Callable_ shader groups to
    logical SBT slots. `RayTracer<ProgramLayout>`, where
    `ProgramLayout : ITraceProgramLayout`, names this layout at a trace site, enabling Slang to
    synthesize Metal post-trace dispatch.
@@ -169,7 +168,7 @@ duplicated outside shader source. Figure 5 gives a high-level view of this API s
 <a id="fig-api-overview"></a>
 ![API overview](figures/api-overview.svg)
 
-*Figure 5. Proposed API overview: shader source combines interface-conforming stage types, trace contexts, and group metadata into an `ITraceProgramLayout`; host code reflects that same layout to build D3D/Vulkan SBT records and Metal function tables/function buffers.*
+_Figure 5. Proposed API overview: shader source combines interface-conforming stage types, trace contexts, and group metadata into an `ITraceProgramLayout`; host code reflects that same layout to build D3D/Vulkan SBT records and Metal function tables/function buffers._
 
 ### 2.2 Detailed Component Descriptions
 
@@ -255,8 +254,8 @@ namespace rt
 ```
 
 Each group interface describes one logical SBT record and names its slot in the corresponding SBT
-section. A hit group names its *ClosestHit* stage and the types representing its optional *AnyHit*
-and *Intersection* behavior. *Miss* and *Callable* groups name the corresponding single-stage
+section. A hit group names its _ClosestHit_ stage and the types representing its optional _AnyHit_
+and _Intersection_ behavior. _Miss_ and _Callable_ groups name the corresponding single-stage
 records. The group-list types declare which records belong to the three SBT sections, and
 `ITraceProgramLayout` combines those sections into one source-level schema.
 
@@ -265,16 +264,16 @@ Every executable stage input exposes it through a read-only `input.record` prope
 map that property to native shader-record data; Metal loads it from the descriptor's generated data
 buffer before dispatching the logical stage.
 
-| Layout intrinsic | Describes |
-| --- | --- |
-| `IShaderGroupSlot` | A record index within the corresponding SBT section |
-| `IHitGroup` | One hit-group slot with *ClosestHit* and optional *AnyHit*/*Intersection* behavior |
-| `IMissGroup` | One *Miss* slot and its *Miss* stage |
-| `ICallableGroup` | One *Callable* slot and its *Callable* stage |
-| `HitGroupList`, `MissGroupList`, `CallableGroupList` | The records present in each SBT section |
-| `ITraceProgramLayout` | The complete logical SBT layout for one trace context |
+| Layout intrinsic                                     | Describes                                                                          |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `IShaderGroupSlot`                                   | A record index within the corresponding SBT section                                |
+| `IHitGroup`                                          | One hit-group slot with _ClosestHit_ and optional _AnyHit_/_Intersection_ behavior |
+| `IMissGroup`                                         | One _Miss_ slot and its _Miss_ stage                                               |
+| `ICallableGroup`                                     | One _Callable_ slot and its _Callable_ stage                                       |
+| `HitGroupList`, `MissGroupList`, `CallableGroupList` | The records present in each SBT section                                            |
+| `ITraceProgramLayout`                                | The complete logical SBT layout for one trace context                              |
 
-The *AnyHit* and *Intersection* associated types do not require executable stages. Built-in
+The _AnyHit_ and _Intersection_ associated types do not require executable stages. Built-in
 placeholder types such as `NoAnyHit` and `NoIntersection` satisfy the group contract while
 representing their absence. Slang recognizes these placeholders and omits the corresponding native
 shader or function entries during lowering.
@@ -286,12 +285,27 @@ groups without requiring either side to recover that mapping from arbitrary cont
 are zero-based and must be unique within their SBT section. The explicit slot, rather than list
 position, is authoritative, so reordering declarations does not renumber SBT records.
 
-For D3D and Vulkan, host code reflects the declared groups and constructs each native hit, *Miss*,
-and *Callable* record at its declared slot. Native ray tracing continues to perform stage
+For D3D and Vulkan, host code reflects the declared groups and constructs each native hit, _Miss_,
+and _Callable_ record at its declared slot. Native ray tracing continues to perform stage
 selection through the host-created SBT.
 
-For Metal, Slang uses the same declared group membership and slots to synthesize the *Miss* and
-*ClosestHit* dispatch that Metal does not provide natively. Actual *AnyHit* and *Intersection*
+_Callable_ dispatch is explicit rather than part of traversal:
+
+```slang
+tracer.callShader<CallableContext>(callableIndex, descriptor, data);
+```
+
+where `CallableContext : ICallableGroupContext` and
+`CallableContext.TraceContext == ProgramLayout.TraceContext`. D3D and Vulkan lower this operation
+to native `CallShader`; Metal indexes the descriptor's _Callable_ visible-function table. It is
+available from ray-generation, _ClosestHit_, _Miss_, and _Callable_ logic. Metal passes the
+descriptor resources and record buffer through generated visible functions so nested calls and
+`input.record` use the same program descriptor. Because the index may be dynamic, all _Callable_
+groups in one program layout must use the same `CallableData` type. Slang diagnoses an incompatible
+group during specialization.
+
+For Metal, Slang uses the same declared group membership and slots to synthesize the _Miss_ and
+_ClosestHit_ dispatch that Metal does not provide natively. Actual _AnyHit_ and _Intersection_
 shader types identify the traversal-time functions represented in the target-specific resources
 described in the next subsection.
 
@@ -309,17 +323,17 @@ shader code does not declare an SBT binding point.
 
 D3D and Vulkan do not expose an equivalent shader-visible function table or function buffer.
 Their comparable structure is the host-created SBT. It is useful to view the SBT as one
-host-side database with separate hit-group, *Miss*, and *Callable* sections. A hit-group record can
-name *ClosestHit*, *AnyHit*, and *Intersection* shaders together, while the *Miss* and *Callable*
+host-side database with separate hit-group, _Miss_, and _Callable_ sections. A hit-group record can
+name _ClosestHit_, _AnyHit_, and _Intersection_ shaders together, while the _Miss_ and _Callable_
 sections are one-dimensional lists.
 
 Figure 6 shows the SBT baseline that the portable layout is trying to preserve. The native
-D3D/Vulkan SBT is one host-side object with hit-group, *Miss*, and *Callable* sections.
+D3D/Vulkan SBT is one host-side object with hit-group, _Miss_, and _Callable_ sections.
 
 <a id="fig-d3d-vulkan-sbt-layout"></a>
 ![D3D and Vulkan shader binding table layout](figures/d3d-vulkan-sbt-layout.svg)
 
-*Figure 6. D3D/Vulkan SBT layout: one host-side object contains hit-group, miss, and callable sections, and shader code has no SBT binding point.*
+_Figure 6. D3D/Vulkan SBT layout: one host-side object contains hit-group, miss, and callable sections, and shader code has no SBT binding point._
 
 The previous subsection already makes the two sides share the same conceptual layout through
 `ITraceProgramLayout`. Host code can reflect the layout to build the target-side records. The
@@ -351,7 +365,7 @@ does not declare a second trace context of its own.
 On D3D and Vulkan, specialization does not need to materialize
 `TraceProgramDescriptor<ProgramLayout>` as a shader-visible resource. The native SBT remains a
 host-side object, as shown in Figure 6.
-Host code still uses the same `ProgramLayout` reflection to build hit-group, *Miss*, and *Callable*
+Host code still uses the same `ProgramLayout` reflection to build hit-group, _Miss_, and _Callable_
 SBT records, but shader code does not receive a Metal-style function-table or function-buffer
 object.
 
@@ -393,23 +407,23 @@ TraceProgramDescriptor<ProgramLayout>
 ```
 
 There are at most three generated visible-function-table resource objects in the descriptor:
-`visible_function_table_0` is the *Miss* table, `visible_function_table_1` is the *ClosestHit*
-table, and `visible_function_table_2` is the *Callable* table. They and the generated data buffer
+`visible_function_table_0` is the _Miss_ table, `visible_function_table_1` is the _ClosestHit_
+table, and `visible_function_table_2` is the _Callable_ table. They and the generated data buffer
 are separate components of the `TraceProgramDescriptor` lowering, not entries in the native IFT.
 
-Figure 7 supplements this layout with the dispatch relationship between the *ClosestHit* table and
+Figure 7 supplements this layout with the dispatch relationship between the _ClosestHit_ table and
 the IFT entries.
 
 <a id="fig-intersection-function-table-layout"></a>
 ![Metal TraceProgramDescriptor resource layout with closest-hit dispatch zoom](figures/intersection-function-table-layout.svg)
 
-*Figure 7. Ordinary intersection function table lowering: the left side shows the complete TraceProgramDescriptor layout, consisting of an IFT, three visible-function tables, and a generated data buffer. The right side zooms into the paired dispatch between the ClosestHit visible-function table and IFT entries. A 1:1 mapping connects native IFT entries to logical hit slots. Miss and Callable visible-function tables use independent indices.*
+_Figure 7. Ordinary intersection function table lowering: the left side shows the complete TraceProgramDescriptor layout, consisting of an IFT, three visible-function tables, and a generated data buffer. The right side zooms into the paired dispatch between the ClosestHit visible-function table and IFT entries. A 1:1 mapping connects native IFT entries to logical hit slots. Miss and Callable visible-function tables use independent indices._
 
 **Lowering Strategy**
 
 The compiler expands the opaque source-level descriptor into those Metal resource objects and uses
 each object for its distinct role. The IFT is passed to Metal traversal for candidate-hit dispatch.
-The generated visible-function tables perform *Miss*, *ClosestHit*, and *Callable* dispatch, while
+The generated visible-function tables perform _Miss_, _ClosestHit_, and _Callable_ dispatch, while
 the generated data buffer carries record data shared by those functions. The generated Metal-side
 use can be thought of as:
 
@@ -436,7 +450,7 @@ else
 ```
 
 The first Metal layout uses four header words in `descriptorData`. They contain the word offsets of
-the instance hit-group-offset table and the hit, *Miss*, and *Callable* record tables. Each record
+the instance hit-group-offset table and the hit, _Miss_, and _Callable_ record tables. Each record
 table entry is a byte offset from the start of `descriptorData` to that record's data. This keeps
 function selection and `input.record` access indexed by the same logical slots without exposing the
 physical buffer layout in shader source.
@@ -444,15 +458,15 @@ physical buffer layout in shader source.
 **Gaps, Fixes, And Constraints**
 
 - **Gap 1: Native function-table entries do not dispatch every ray-tracing stage.** A populated
-  entry selects candidate-hit behavior generated from *AnyHit* filtering or custom *Intersection*
-  logic. A triangle or curve group without *AnyHit* has no populated IFT entry. IFT entries do not
-  dispatch *Miss* or *ClosestHit*. Slang fixes this by lowering *Miss* and *ClosestHit* to separate
+  entry selects candidate-hit behavior generated from _AnyHit_ filtering or custom _Intersection_
+  logic. A triangle or curve group without _AnyHit_ has no populated IFT entry. IFT entries do not
+  dispatch _Miss_ or _ClosestHit_. Slang fixes this by lowering _Miss_ and _ClosestHit_ to separate
   generated visible-function-table resource objects carried by the descriptor lowering.
 
   **Constraint:** the host or Slang runtime must populate those generated visible-function tables
-  as part of the `TraceProgramDescriptor` lowering. The *Miss*, *ClosestHit*, and *Callable*
+  as part of the `TraceProgramDescriptor` lowering. The _Miss_, _ClosestHit_, and _Callable_
   entries can be queried from the `ProgramLayout` reflection data described in the previous
-  section. *Miss* uses `desc.missIndex`, *ClosestHit* uses `logicalHitSlot`, and *Callable* uses its
+  section. _Miss_ uses `desc.missIndex`, _ClosestHit_ uses `logicalHitSlot`, and _Callable_ uses its
   own index.
 
 - **Gap 2: Native function-table indexing is not the portable hit-slot formula.** Ordinary
@@ -475,7 +489,7 @@ physical buffer layout in shader source.
   **Constraint:** the host must construct acceleration-structure function-table offsets and function
   table contents so every `metalIFTIndex` selected by traversal maps to exactly one
   `logicalHitSlot`. The numbers do not need to be equal. What matters is that the selected
-  candidate-hit function and the generated *ClosestHit* visible function represent the same logical
+  candidate-hit function and the generated _ClosestHit_ visible function represent the same logical
   hit group:
 
   ```text
@@ -531,12 +545,12 @@ This lowering is reserved for a future API version and is not part of the first 
 The Metal 4 function-buffer path represents candidate-hit dispatch with an
 `intersection_function_buffer_arguments` resource object rather than an ordinary
 `intersection_function_table` resource object. Figure 8 shows both the function-buffer layout and
-the descriptor-side data needed for generated *Miss*, *ClosestHit*, and *Callable* dispatch.
+the descriptor-side data needed for generated _Miss_, _ClosestHit_, and _Callable_ dispatch.
 
 <a id="fig-intersection-function-buffer-layout"></a>
 ![Metal intersection function buffer arguments layout](figures/intersection-function-buffer-layout.svg)
 
-*Figure 8. Metal function-buffer lowering: `intersection_function_buffer_arguments` carries the candidate-hit table, while descriptor-side data carries records and visible-function dispatch resources for Miss, ClosestHit, and Callable dispatch.*
+_Figure 8. Metal function-buffer lowering: `intersection_function_buffer_arguments` carries the candidate-hit table, while descriptor-side data carries records and visible-function dispatch resources for Miss, ClosestHit, and Callable dispatch._
 
 **Native Layout**
 
@@ -549,10 +563,10 @@ intersection_function_buffer_arguments:
     intersection_function_stride      -> byte stride between table entries
 ```
 
-The function-buffer table still only contains candidate-hit behavior: *AnyHit* filtering and custom
-*Intersection* logic. Descriptor-side data carries the rest of the portable trace program state:
-records, slot maps, bindless resources, and generated visible-function tables for *Miss*,
-*ClosestHit*, and *Callable* dispatch.
+The function-buffer table still only contains candidate-hit behavior: _AnyHit_ filtering and custom
+_Intersection_ logic. Descriptor-side data carries the rest of the portable trace program state:
+records, slot maps, bindless resources, and generated visible-function tables for _Miss_,
+_ClosestHit_, and _Callable_ dispatch.
 
 **Lowering Strategy**
 
@@ -606,13 +620,13 @@ else
 
 - **Gap 1: The function buffer still does not dispatch every ray-tracing stage.** Like ordinary
   `intersection_function_table`, the function-buffer table dispatches candidate-hit behavior, not
-  *Miss* or *ClosestHit*. Slang fixes this by keeping candidate-hit functions in the function buffer
-  and lowering *Miss*, *ClosestHit*, and *Callable* to generated visible-function tables in
+  _Miss_ or _ClosestHit_. Slang fixes this by keeping candidate-hit functions in the function buffer
+  and lowering _Miss_, _ClosestHit_, and _Callable_ to generated visible-function tables in
   descriptor-side data.
 
   **Constraint:** the host or Slang runtime must populate the generated visible-function tables
-  from the `ProgramLayout` reflection data described in the previous section. *Miss* uses
-  `desc.missIndex`, *ClosestHit* uses `logicalHitSlot`, and *Callable* uses its own index.
+  from the `ProgramLayout` reflection data described in the previous section. _Miss_ uses
+  `desc.missIndex`, _ClosestHit_ uses `logicalHitSlot`, and _Callable_ uses its own index.
 
 - **Gap 2: The host must still build a target-side candidate-hit table.** The function-buffer form
   is closer to the D3D/Vulkan SBT model than ordinary `intersection_function_table`, because the
@@ -625,7 +639,7 @@ else
 
   **Constraint:** the host or Slang runtime must populate the function buffer consistently with the
   reflected `ProgramLayout` hit groups and with the exact Metal IFB indexing rules. The same
-  logical slot should select both the candidate-hit function and the generated *ClosestHit* visible
+  logical slot should select both the candidate-hit function and the generated _ClosestHit_ visible
   function:
 
   ```text
@@ -710,7 +724,7 @@ public extension<Context> AnyHitInput<Context>
 Using this compiler-known property contributes `triangle_data` to the Metal requirements. The
 corresponding `curve` property is constrained to `CurvePrimitive` and contributes `curve_data`.
 For `BoundingBoxPrimitive<Attributes>`, the constrained `attributes` property exposes the custom
-type reported by *Intersection*. Merely declaring a triangle or curve hit group does not add either
+type reported by _Intersection_. Merely declaring a triangle or curve hit group does not add either
 tag.
 
 A trace program layout connects the ray tracer and every grouped shader through the same trace
@@ -798,7 +812,7 @@ program layout, and each stage `invoke(...)` method names the input context it a
 <a id="fig-context-reachability"></a>
 ![Context connects ray tracer and hit shaders](figures/context-reachability.svg)
 
-*Figure 9. Context reachability contract: the user-written trace call and stage `invoke(...)` signatures give the compiler a source-visible relationship between `RayTracer<ProgramLayout>`, the trace-wide context, hit groups, and stage input types.*
+_Figure 9. Context reachability contract: the user-written trace call and stage `invoke(...)` signatures give the compiler a source-visible relationship between `RayTracer<ProgramLayout>`, the trace-wide context, hit groups, and stage input types._
 
 This does not prove that arbitrary host data is correct. If the host builds an SBT or Metal
 function table that violates the reflected program layout, the program can still be wrong. The
@@ -812,7 +826,7 @@ goal is to make the shader-side contract explicit enough that:
 
 ### 2.3 Writing Stages As Interface-Conforming Types
 
-In the new model, *Miss*, *ClosestHit*, *AnyHit*, and *Intersection* logic are not written as
+In the new model, _Miss_, _ClosestHit_, _AnyHit_, and _Intersection_ logic are not written as
 independent entry points. They are written as ordinary structs that conform to built-in stage
 interfaces.
 
@@ -853,26 +867,26 @@ struct PrimarySphereIntersection
 The compiler is responsible for lowering these structs to the target form:
 
 - D3D and Vulkan: generated native entry points and hit groups, connected to SBT records.
-- Metal: generated intersection functions for *AnyHit* and custom *Intersection* behavior, plus
-  generated post-trace *Miss* and *ClosestHit* visible-function dispatch.
+- Metal: generated intersection functions for _AnyHit_ and custom _Intersection_ behavior, plus
+  generated post-trace _Miss_ and _ClosestHit_ visible-function dispatch.
 
 The user writes one source-level model. The target backend chooses the appropriate pipeline shape.
 
 #### 2.3.1 Hit-Group Composition And Target Mapping
 
 The source model must distinguish a source stage from a function generated for a target. D3D and
-Vulkan have native hit groups and native *AnyHit*, *ClosestHit*, and *Intersection* stages. Metal
+Vulkan have native hit groups and native _AnyHit_, _ClosestHit_, and _Intersection_ stages. Metal
 has none of those stages as separate pipeline entry points: it has traversal-time
 `[[intersection(...)]]` functions and a returned closest result. Slang therefore validates source
 hit-group composition first, then maps that valid composition to each target.
 
 The current primitive types allow these source stages:
 
-| Primitive | Source *Intersection* | Source *AnyHit* | Source *ClosestHit* |
-| --- | --- | --- | --- |
-| `TrianglePrimitive` | Prohibited; intersection is fixed function | Optional | Optional |
-| `[require(metal)] CurvePrimitive` | Prohibited; intersection is fixed function | Optional | Optional |
-| `BoundingBoxPrimitive<Attributes>` | Required to define the procedural primitive | Optional | Optional |
+| Primitive                          | Source _Intersection_                       | Source _AnyHit_ | Source _ClosestHit_ |
+| ---------------------------------- | ------------------------------------------- | --------------- | ------------------- |
+| `TrianglePrimitive`                | Prohibited; intersection is fixed function  | Optional        | Optional            |
+| `[require(metal)] CurvePrimitive`  | Prohibited; intersection is fixed function  | Optional        | Optional            |
+| `BoundingBoxPrimitive<Attributes>` | Required to define the procedural primitive | Optional        | Optional            |
 
 In compact form, the valid combinations are exactly:
 
@@ -891,39 +905,39 @@ BoundingBoxPrimitive<Attributes> + Intersection
 ```
 
 All stages in one hit group use the same primitive context and hit-data type. For a bounding-box
-group, the source *Intersection* produces the custom hit data subsequently read by its *AnyHit* and
-*ClosestHit* stages. `NoAnyHit`, `NoClosestHit`, and `NoIntersection` are source placeholders only;
+group, the source _Intersection_ produces the custom hit data subsequently read by its _AnyHit_ and
+_ClosestHit_ stages. `NoAnyHit`, `NoClosestHit`, and `NoIntersection` are source placeholders only;
 they do not consume native shader entries.
 
 The following table is exhaustive for candidate-generation and filtering. Each row has two valid
-variants: with or without *ClosestHit*. On D3D/Vulkan, a present *ClosestHit* becomes the native
+variants: with or without _ClosestHit_. On D3D/Vulkan, a present _ClosestHit_ becomes the native
 hit-group stage. On Metal, it becomes post-trace visible-function dispatch; when it is absent,
 Slang emits no such dispatch.
 
-| Source primitive and candidate stages | D3D/Vulkan lowering | Metal lowering |
-| --- | --- | --- |
-| Triangle, no *AnyHit* | Native triangle hit group; fixed-function triangle test | Built-in triangle test; no IFT entry |
-| Triangle + *AnyHit* | Native triangle hit group with native *AnyHit* | Lower the source *AnyHit* to a generated `[[intersection(triangle)]]` function and put that function in the IFT |
-| Curve, no *AnyHit* | Reject by capability | Built-in curve test; no IFT entry |
-| Curve + *AnyHit* | Reject by capability | Lower the source *AnyHit* to a generated `[[intersection(curve)]]` function and put that function in the IFT |
-| Bounding box + *Intersection* | Native procedural hit group with native *Intersection* | Lower the source *Intersection* to a generated `[[intersection(bounding_box)]]` function and put that function in the IFT; lower its `reportHit` operations as described below |
-| Bounding box + *Intersection* + *AnyHit* | Native procedural hit group; `ReportHit`/`OpReportIntersectionKHR` invokes native *AnyHit* | Generate one `[[intersection(bounding_box)]]` function for the hit group; lower the source *Intersection* into it and route every `reportHit` through the source *AnyHit* |
+| Source primitive and candidate stages    | D3D/Vulkan lowering                                                                        | Metal lowering                                                                                                                                                                 |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Triangle, no _AnyHit_                    | Native triangle hit group; fixed-function triangle test                                    | Built-in triangle test; no IFT entry                                                                                                                                           |
+| Triangle + _AnyHit_                      | Native triangle hit group with native _AnyHit_                                             | Lower the source _AnyHit_ to a generated `[[intersection(triangle)]]` function and put that function in the IFT                                                                |
+| Curve, no _AnyHit_                       | Reject by capability                                                                       | Built-in curve test; no IFT entry                                                                                                                                              |
+| Curve + _AnyHit_                         | Reject by capability                                                                       | Lower the source _AnyHit_ to a generated `[[intersection(curve)]]` function and put that function in the IFT                                                                   |
+| Bounding box + _Intersection_            | Native procedural hit group with native _Intersection_                                     | Lower the source _Intersection_ to a generated `[[intersection(bounding_box)]]` function and put that function in the IFT; lower its `reportHit` operations as described below |
+| Bounding box + _Intersection_ + _AnyHit_ | Native procedural hit group; `ReportHit`/`OpReportIntersectionKHR` invokes native _AnyHit_ | Generate one `[[intersection(bounding_box)]]` function for the hit group; lower the source _Intersection_ into it and route every `reportHit` through the source _AnyHit_      |
 
 The Metal binding unit is the **generated candidate function for the whole hit group**, not an
-individual source *AnyHit* or *Intersection* stage. Each hit group therefore reflects at most one
+individual source _AnyHit_ or _Intersection_ stage. Each hit group therefore reflects at most one
 Metal candidate function:
 
-| Source hit-group stages | Reflected Metal candidate function |
-| --- | --- |
-| Triangle/curve without *AnyHit* | None |
-| Triangle/curve with *AnyHit* | Generated function containing *AnyHit* |
-| Bounding box with *Intersection* only | Generated function containing *Intersection* |
-| Bounding box with *Intersection* and *AnyHit* | One generated function containing *Intersection*, with each reported candidate routed through *AnyHit* |
+| Source hit-group stages                       | Reflected Metal candidate function                                                                     |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Triangle/curve without _AnyHit_               | None                                                                                                   |
+| Triangle/curve with _AnyHit_                  | Generated function containing _AnyHit_                                                                 |
+| Bounding box with _Intersection_ only         | Generated function containing _Intersection_                                                           |
+| Bounding box with _Intersection_ and _AnyHit_ | One generated function containing _Intersection_, with each reported candidate routed through _AnyHit_ |
 
-The host never decides whether to bind *AnyHit*, *Intersection*, or both, and it never combines
+The host never decides whether to bind _AnyHit_, _Intersection_, or both, and it never combines
 those stages itself. Slang performs that composition and reflection exposes only the resulting
 Metal candidate function. If it is non-null, the host installs it as the hit group's IFT entry. In
-parallel, reflection exposes the generated *ClosestHit* visible function, if present, for the
+parallel, reflection exposes the generated _ClosestHit_ visible function, if present, for the
 post-trace visible-function table.
 
 The D3D/Vulkan column describes their portable core pipeline models. The composition rules follow
@@ -939,19 +953,19 @@ Neither shader source nor generated shader code directly calls a Metal `[[inters
 function. The host or Slang runtime installs it in the `intersection_function_table`, and Slang
 passes that table to `intersector.intersect(...)`. During traversal, Metal calculates the IFT
 index from the acceleration-structure offsets and invokes the selected entry. This is separate
-from the visible-function tables that Slang uses for post-trace *Miss*, *ClosestHit*, and
-*Callable* dispatch.
+from the visible-function tables that Slang uses for post-trace _Miss_, _ClosestHit_, and
+_Callable_ dispatch.
 
 Despite its name, a generated Metal `[[intersection(triangle)]]` or
 `[[intersection(curve)]]` function does not calculate the primitive intersection. Metal's built-in
 test has already produced a candidate. The selected IFT entry reconstructs the source
-`AnyHitInput`, runs *AnyHit*, and maps `ignoreHit()` to rejection and
+`AnyHitInput`, runs _AnyHit_, and maps `ignoreHit()` to rejection and
 `acceptHitAndEndSearch()` to acceptance with traversal termination. It therefore implements source
-*AnyHit* filtering; it does not represent a source custom *Intersection* stage.
+_AnyHit_ filtering; it does not represent a source custom _Intersection_ stage.
 
 **Lowering `reportHit` on Metal**
 
-A source bounding-box *Intersection* may call `reportHit(t, attributes)` zero, one, or multiple
+A source bounding-box _Intersection_ may call `reportHit(t, attributes)` zero, one, or multiple
 times. An overload accepts the native hit-kind value. D3D lowers this operation to `ReportHit`,
 and Vulkan lowers it to `OpReportIntersectionKHR`. Metal has no equivalent operation: one
 `[[intersection(bounding_box)]]` invocation returns at most one candidate. Slang therefore lowers
@@ -963,33 +977,33 @@ For each source `reportHit(t, attributes)`, the generated function:
    at the `[[max_distance]]` input, is inclusive for bounding-box reports, and is updated after
    every accepted closer or equal-distance report. Later reads of the current ray bound observe
    the updated value.
-2. Runs the source *AnyHit* when the hit group has one and the candidate is non-opaque.
-3. Returns `false` to the source *Intersection* when *AnyHit* calls `ignoreHit()`; otherwise it
+2. Runs the source _AnyHit_ when the hit group has one and the candidate is non-opaque.
+3. Returns `false` to the source _Intersection_ when _AnyHit_ calls `ignoreHit()`; otherwise it
    records the candidate and returns `true`, unless traversal is terminated as described below.
 4. Updates the local current-closest distance, hit kind, and attributes after an accepted
    candidate.
-5. Stops the source *Intersection* and traversal when *AnyHit* calls
+5. Stops the source _Intersection_ and traversal when _AnyHit_ calls
    `acceptHitAndEndSearch()`.
 
-After the source *Intersection* finishes, the generated Metal function returns the closest
+After the source _Intersection_ finishes, the generated Metal function returns the closest
 accepted candidate accumulated during that invocation. If no report was accepted, it returns
 `accept_intersection = false`. Otherwise, it returns the candidate distance and the appropriate
 `accept_intersection` and `continue_search` values. The generated ray-data state retains the
-accepted candidate's attributes and hit kind so generated post-trace *ClosestHit* dispatch
+accepted candidate's attributes and hit kind so generated post-trace _ClosestHit_ dispatch
 observes the same values.
 
-This transformation preserves the important `ReportHit` control-flow contract: *AnyHit* executes
+This transformation preserves the important `ReportHit` control-flow contract: _AnyHit_ executes
 once for every reported non-opaque candidate, and the Boolean result of `reportHit` is available to
-the remainder of the source *Intersection*. It is not equivalent to running *Intersection* to
-completion and then invoking *AnyHit* once.
+the remainder of the source _Intersection_. It is not equivalent to running _Intersection_ to
+completion and then invoking _AnyHit_ once.
 
-Consequently, the public *Intersection* contract exposes `reportHit` instead of returning one
+Consequently, the public _Intersection_ contract exposes `reportHit` instead of returning one
 candidate value. A return-only contract could not represent zero or multiple reports or reproduce
 the Boolean control-flow result of native `ReportHit`.
 
 The generated candidate function is specialized per concrete hit group. If two groups reuse the
-same source *Intersection* type with different *AnyHit* types, Slang generates two candidate
-functions so each `reportHit` operation routes to the *AnyHit* selected by its group.
+same source _Intersection_ type with different _AnyHit_ types, Slang generates two candidate
+functions so each `reportHit` operation routes to the _AnyHit_ selected by its group.
 
 **Concrete Generated-Function Example**
 
@@ -1106,10 +1120,10 @@ MetalIntersectionResult generatedSphereHitGroupCandidate(
 ```
 
 This pattern is useful for a closed procedural surface such as a sphere. The near root is normally
-the desired hit. If it is rejected by *AnyHit*, `reportHit` returns `false`, so the *Intersection*
+the desired hit. If it is rejected by _AnyHit_, `reportHit` returns `false`, so the _Intersection_
 can offer the far root instead. If the near root is accepted, `reportHit` returns `true` and the
 source function returns without doing unnecessary work. An accept-and-end decision also exits the
-remaining source *Intersection* logic and returns `continue_search = false`.
+remaining source _Intersection_ logic and returns `continue_search = false`.
 
 The host sees and binds only the generated result:
 
@@ -1118,17 +1132,17 @@ IFT[metalIFTIndex]                = generatedSphereHitGroupCandidate
 ClosestHitVFT[logicalHitSlot]     = generatedSphereClosestHit
 ```
 
-There is no separately bound Metal *AnyHit* function. Changing the source contract from one return
+There is no separately bound Metal _AnyHit_ function. Changing the source contract from one return
 value to `reportHit` fixes the composition because every candidate-reporting point is now explicit:
-Slang can insert the paired *AnyHit* decision at that point, return its Boolean result to the
-source *Intersection*, and still collapse all accepted local reports into the one candidate that a
+Slang can insert the paired _AnyHit_ decision at that point, return its Boolean result to the
+source _Intersection_, and still collapse all accepted local reports into the one candidate that a
 Metal `[[intersection(bounding_box)]]` function can return.
 
-Conversely, a bounding box without a source *Intersection* is invalid: neither D3D/Vulkan nor the
+Conversely, a bounding box without a source _Intersection_ is invalid: neither D3D/Vulkan nor the
 proposed Metal lowering has a primitive test that can turn the box into an actual hit.
 
-The lowering must respect native opacity and ray flags: source *AnyHit* is not invoked when a
-candidate is treated as opaque. A program that relies on *AnyHit* filtering must not configure the
+The lowering must respect native opacity and ray flags: source _AnyHit_ is not invoked when a
+candidate is treated as opaque. A program that relies on _AnyHit_ filtering must not configure the
 corresponding geometry or trace as opaque.
 
 ### 2.4 Acceleration-Structure Topology And Portability
@@ -1183,9 +1197,9 @@ Reachable uses of compiler-known input properties contribute target requirements
   `world_space_data` on Metal.
 
 The same world-space properties are also available on `ClosestHitInput` and `MissInput`. D3D and
-Vulkan lower all four stage-input forms to native world-ray builtins. Metal lowers the *AnyHit* and
-*Intersection* forms to `[[world_space_origin]]` and `[[world_space_direction]]`, but supplies the
-*ClosestHit* and *Miss* forms from the original `RayTraversalDesc.ray` during generated post-trace
+Vulkan lower all four stage-input forms to native world-ray builtins. Metal lowers the _AnyHit_ and
+_Intersection_ forms to `[[world_space_origin]]` and `[[world_space_direction]]`, but supplies the
+_ClosestHit_ and _Miss_ forms from the original `RayTraversalDesc.ray` during generated post-trace
 dispatch. Therefore, only candidate-stage uses infer `world_space_data`.
 
 Tag-producing requirements are unioned across all reachable stages. A trace program may therefore
@@ -1213,19 +1227,19 @@ model, but are outside the first-version signature.
 The following table accounts for every Metal ray-tracing tag and the primitive selector used by
 `[[intersection(...)]]`:
 
-| Metal item | Semantic axis | Inference source | Combination and validation rule |
-| --- | --- | --- | --- |
-| `triangle`, `bounding_box`, `curve` | Per-function primitive selector | `IHitContext.Primitive` | Exactly one selector is emitted per generated function. Primitive-specific properties are type-constrained. |
-| `instancing` | Acceleration-structure topology | `TraceContext.AccelerationStructure` | One acceleration-structure type determines the topology for the entire trace program. |
-| `max_levels<N>` | Acceleration-structure topology | `MultiLevelAccelerationStructure<N>`, `N >= 2` | Implies `instancing`; the compiler validates one level count in Metal's supported range. |
-| `primitive_motion` | Motion configuration | `TraceContext.Motion` | Selected as part of one trace-wide configuration; may coexist with `instance_motion`. The compiler validates target support. |
-| `instance_motion` | Motion configuration | `TraceContext.Motion` | May coexist with `primitive_motion`, but requires `instancing`; otherwise compilation fails. |
-| `triangle_data` | Shared optional data | Reachable use of `ClosestHitInput.triangle` or `AnyHitInput.triangle` | Unioned with other data requirements. Both properties are available only for `TrianglePrimitive`. |
-| `curve_data` | Shared optional data | Reachable use of `ClosestHitInput.curve` or `AnyHitInput.curve` | Unioned with other data requirements. Both properties are available only for `CurvePrimitive`. |
-| `world_space_data` | Shared optional data | Reachable use of `AnyHitInput.worldSpaceOrigin`, `AnyHitInput.worldSpaceDirection`, `IntersectionInput.worldSpaceOrigin`, or `IntersectionInput.worldSpaceDirection` | Unioned with other data requirements, but requires an instanced acceleration structure. *ClosestHit* and *Miss* uses do not add this tag. |
-| `extended_limits` | Build capability | Compilation capability set | Added only when that mode is selected and reflected to the host; unsupported targets are diagnosed. |
-| `intersection_function_buffer` | Lowering mode | Future function-buffer lowering | One trace-wide lowering selects IFB instead of an ordinary IFT; IFB is unavailable in the first version. |
-| `user_data` | Function-buffer data | Future function-buffer user-data argument | Unioned into an IFB signature and requires `intersection_function_buffer`; otherwise compilation fails. |
+| Metal item                          | Semantic axis                   | Inference source                                                                                                                                                     | Combination and validation rule                                                                                                           |
+| ----------------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `triangle`, `bounding_box`, `curve` | Per-function primitive selector | `IHitContext.Primitive`                                                                                                                                              | Exactly one selector is emitted per generated function. Primitive-specific properties are type-constrained.                               |
+| `instancing`                        | Acceleration-structure topology | `TraceContext.AccelerationStructure`                                                                                                                                 | One acceleration-structure type determines the topology for the entire trace program.                                                     |
+| `max_levels<N>`                     | Acceleration-structure topology | `MultiLevelAccelerationStructure<N>`, `N >= 2`                                                                                                                       | Implies `instancing`; the compiler validates one level count in Metal's supported range.                                                  |
+| `primitive_motion`                  | Motion configuration            | `TraceContext.Motion`                                                                                                                                                | Selected as part of one trace-wide configuration; may coexist with `instance_motion`. The compiler validates target support.              |
+| `instance_motion`                   | Motion configuration            | `TraceContext.Motion`                                                                                                                                                | May coexist with `primitive_motion`, but requires `instancing`; otherwise compilation fails.                                              |
+| `triangle_data`                     | Shared optional data            | Reachable use of `ClosestHitInput.triangle` or `AnyHitInput.triangle`                                                                                                | Unioned with other data requirements. Both properties are available only for `TrianglePrimitive`.                                         |
+| `curve_data`                        | Shared optional data            | Reachable use of `ClosestHitInput.curve` or `AnyHitInput.curve`                                                                                                      | Unioned with other data requirements. Both properties are available only for `CurvePrimitive`.                                            |
+| `world_space_data`                  | Shared optional data            | Reachable use of `AnyHitInput.worldSpaceOrigin`, `AnyHitInput.worldSpaceDirection`, `IntersectionInput.worldSpaceOrigin`, or `IntersectionInput.worldSpaceDirection` | Unioned with other data requirements, but requires an instanced acceleration structure. _ClosestHit_ and _Miss_ uses do not add this tag. |
+| `extended_limits`                   | Build capability                | Compilation capability set                                                                                                                                           | Added only when that mode is selected and reflected to the host; unsupported targets are diagnosed.                                       |
+| `intersection_function_buffer`      | Lowering mode                   | Future function-buffer lowering                                                                                                                                      | One trace-wide lowering selects IFB instead of an ordinary IFT; IFB is unavailable in the first version.                                  |
+| `user_data`                         | Function-buffer data            | Future function-buffer user-data argument                                                                                                                            | Unioned into an IFB signature and requires `intersection_function_buffer`; otherwise compilation fails.                                   |
 
 Slang first builds a normalized trace-wide requirement set:
 
@@ -1368,29 +1382,29 @@ settings: opacity, triangle and geometry culling, forced opacity, and first-hit 
 the flag word is runtime-valued, Slang emits a small setup sequence that decodes it into those
 settings before calling `intersect(...)`; constant flags allow the target compiler to fold that
 setup away.
-`RAY_FLAG_SKIP_CLOSEST_HIT_SHADER` instead suppresses the generated post-trace *ClosestHit*
+`RAY_FLAG_SKIP_CLOSEST_HIT_SHADER` instead suppresses the generated post-trace _ClosestHit_
 dispatch.
 
 For Metal, Slang generates code that is equivalent to the user's old post-trace dispatch, but the
 source of truth is now `PrimaryTraceProgramLayout.HitGroups` and
 `PrimaryTraceProgramLayout.MissGroups`. The generated dispatch uses Metal visible functions for
-*Miss* and *ClosestHit* rather than emitting one large switch containing every stage body.
+_Miss_ and _ClosestHit_ rather than emitting one large switch containing every stage body.
 
 Metal host migration:
 
 1. Query `PrimaryTraceProgramLayout` through Slang reflection.
-2. Populate the generated *Miss* and *ClosestHit* visible-function tables in the
-   `TraceProgramDescriptor` lowering from the reflected *Miss* and hit-group slots.
+2. Populate the generated _Miss_ and _ClosestHit_ visible-function tables in the
+   `TraceProgramDescriptor` lowering from the reflected _Miss_ and hit-group slots.
 3. For each hit group with a reflected Metal candidate function, put that generated function in
-   the ordinary `intersection_function_table`. The host does not bind source *AnyHit* and
-   *Intersection* stages separately.
+   the ordinary `intersection_function_table`. The host does not bind source _AnyHit_ and
+   _Intersection_ stages separately.
 4. Choose native Metal IFT indices for each reachable logical hit slot and build
    acceleration-structure function-table offsets so traversal selects the corresponding native
    index. The native IFT index and logical hit slot do not need to be numerically equal, but the
    mapping must be 1:1.
 
 This keeps each generated Metal candidate function aligned with Slang's generated visible-function
-dispatch for *Miss* and *ClosestHit*.
+dispatch for _Miss_ and _ClosestHit_.
 
 ### 3.2 Migrating Existing Slang D3D/Vulkan Ray Tracing Code
 
@@ -1473,10 +1487,10 @@ tracer.trace(desc, scene, gPrimaryDescriptor, payload);
 D3D/Vulkan host migration:
 
 1. Query `PrimaryTraceProgramLayout` through Slang reflection.
-2. For each reflected *Miss* group, add a *Miss* record at its declared slot.
+2. For each reflected _Miss_ group, add a _Miss_ record at its declared slot.
 3. For each reflected hit group, add a hit group record at its declared slot.
-4. Populate any reflected shader-record or local-root data associated with the *Miss*, hit, and
-   *Callable* groups.
+4. Populate any reflected shader-record or local-root data associated with the _Miss_, hit, and
+   _Callable_ groups.
 5. Use the same application data that previously produced `rayContributionToHitGroupIndex`,
    `multiplierForGeometryContributionToHitGroupIndex`, and `missShaderIndex`.
 
@@ -1617,7 +1631,7 @@ for (auto callable : programLayout.callableGroups)
 
 This pattern is reserved for a future API version. For function-buffer lowering, the candidate-hit
 table is organized by the same logical slots used
-by generated *ClosestHit* dispatch. The host does not author custom post-trace dispatch logic for
+by generated _ClosestHit_ dispatch. The host does not author custom post-trace dispatch logic for
 Metal, but the `TraceProgramDescriptor` lowering may expose generated visible-function table and
 record resources that the host or Slang runtime populates from the reflected program layout.
 
@@ -1626,7 +1640,7 @@ Pattern C: Metal intersection function table.
 Metal's ordinary function table path uses the same reflected `ProgramLayout`, but candidate-hit
 selection is driven by acceleration-structure function-table offsets instead of directly by
 `RayTraversalDesc.sbtOffset` and `RayTraversalDesc.sbtStride`. Host setup must therefore align the
-ordinary function-table entries with the logical hit-group slots used by generated *ClosestHit*
+ordinary function-table entries with the logical hit-group slots used by generated _ClosestHit_
 visible-function dispatch.
 
 ```cpp
@@ -1679,8 +1693,8 @@ for (auto callable : programLayout.callableGroups)
 This is valid when the engine also builds geometry and instance acceleration-structure metadata
 so traversal selects the same `metalIFTIndex` for primitives that post-trace dispatch will map to
 `hit.slot`. The mapping from `metalIFTIndex` to `hit.slot` must be 1:1, but the numbers do not
-need to be equal. *Callable* and *Miss* visible-function tables do not use this hit-slot mapping:
-*Miss* is indexed by `missIndex`, and *Callable* uses its own index.
+need to be equal. _Callable_ and _Miss_ visible-function tables do not use this hit-slot mapping:
+_Miss_ is indexed by `missIndex`, and _Callable_ uses its own index.
 
 Pattern D: Manual host construction without reflection.
 

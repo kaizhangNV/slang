@@ -81,7 +81,7 @@ source/standard-modules/
     ├── stage-contracts.slang     # Executable interfaces and placeholders
     ├── program-layout.slang      # Slots, groups, lists, and layout
     ├── descriptor.slang          # Opaque descriptor resource
-    └── trace.slang               # RayTracer and structural trace call
+    └── trace.slang               # RayTracer trace and callable-dispatch operations
 ```
 
 Each included source file uses `implementing raytracing;` and exposes public declarations only in
@@ -336,6 +336,7 @@ never replaced by an ordinary interface type.
 | Slots, groups, lists, and layouts | Ordinary types and witnesses canonicalized after specialization into compiler-side layout metadata |
 | `TraceProgramDescriptor<Layout>`  | Opaque resource associated with one specialized layout                                             |
 | `RayTracer.trace`                 | Existing trace path with a compiler-private `ProgramLayout` marker                                 |
+| `RayTracer.callShader`            | Typed callable marker; native `CallShader` or Metal visible-function-table dispatch                |
 | Selected stage                    | Concrete `invoke` function plus its stage witness and temporary liveness root                      |
 
 Preserve the `ProgramLayout` marker through linking and specialization. D3D/Vulkan erase it after
@@ -366,7 +367,7 @@ structural synthesis
     canonicalize selected layouts
     resolve stage witnesses and slots
     collect reachable ABI and Metal-tag requirements
-    diagnose mixed API use
+    diagnose linked-module mixed API use
     generate target adapters and Metal helpers
     remove temporary liveness roots
 
@@ -380,7 +381,9 @@ target structural lowering
 existing target legalization and emission
 ```
 
-Both new phases return immediately when no selected structural entry or trace program is present.
+The front end diagnoses mixed API use within one source module. The synthesis check covers uses
+that meet only after linking. Both new phases return immediately when no selected structural entry
+or trace program is present.
 
 ### 5.1 Layout Discovery And Liveness
 
@@ -420,14 +423,15 @@ Non-stage capability requirements still propagate normally.
 
 ## 6. Target Implementation
 
-| Concern     | D3D/Vulkan                             | Metal                                                       |
-| ----------- | -------------------------------------- | ----------------------------------------------------------- |
-| Stage code  | Generate native entry adapters         | Generate candidate and visible functions                    |
-| Trace call  | Reuse existing `TraceRay` lowering     | Generate traversal and post-trace dispatch                  |
-| `reportHit` | Reuse native reporting                 | Lower through generated per-hit-group candidate state       |
-| Attributes  | Reuse native hit-attribute ABI         | Transport custom attributes in private generated `ray_data` |
-| Descriptor  | No physical shader resource            | Lower through the parameter-group binding system            |
-| SBT records | Host builds native SBT from reflection | Generate function tables and record-data buffer bindings    |
+| Concern         | D3D/Vulkan                             | Metal                                                       |
+| --------------- | -------------------------------------- | ----------------------------------------------------------- |
+| Stage code      | Generate native entry adapters         | Generate candidate and visible functions                    |
+| Trace call      | Reuse existing `TraceRay` lowering     | Generate traversal and post-trace dispatch                  |
+| `reportHit`     | Reuse native reporting                 | Lower through generated per-hit-group candidate state       |
+| _Callable_ call | Reuse native `CallShader`              | Index a generated visible-function table                    |
+| Attributes      | Reuse native hit-attribute ABI         | Transport custom attributes in private generated `ray_data` |
+| Descriptor      | No physical shader resource            | Lower through the parameter-group binding system            |
+| SBT records     | Host builds native SBT from reflection | Generate function tables and record-data buffer bindings    |
 
 ### 6.1 D3D And Vulkan
 
@@ -447,6 +451,10 @@ Implement the following units:
    before emission.
 2. **Function dispatch:** generate one candidate function per concrete hit group, visible functions
    for _ClosestHit_, _Miss_, and _Callable_, IFT-to-logical-slot mapping, and post-trace selection.
+   Lower `RayTracer.callShader<CallableContext>` to the _Callable_ table. Require one
+   `CallableData` ABI across every _Callable_ group in the selected layout because the table index
+   may be dynamic. Pass the descriptor resources and record buffer through Metal _Callable_
+   visible functions so nested calls use the same tables and records.
 3. **Candidate reporting:** lower every source `reportHit` with portable range/current-distance
    behavior, Boolean feedback, closest accepted candidate retention, payload writes on rejection,
    and accept-and-end unwinding through helper calls. Dispatch _AnyHit_ only when it exists and the
