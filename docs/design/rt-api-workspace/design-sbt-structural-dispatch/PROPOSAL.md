@@ -260,6 +260,11 @@ and *Intersection* behavior. *Miss* and *Callable* groups name the corresponding
 records. The group-list types declare which records belong to the three SBT sections, and
 `ITraceProgramLayout` combines those sections into one source-level schema.
 
+The context's `Record` associated type describes the shader-visible data carried by that record.
+Every executable stage input exposes it through a read-only `input.record` property. D3D and Vulkan
+map that property to native shader-record data; Metal loads it from the descriptor's generated data
+buffer before dispatching the logical stage.
+
 | Layout intrinsic | Describes |
 | --- | --- |
 | `IShaderGroupSlot` | A record index within the corresponding SBT section |
@@ -429,6 +434,12 @@ else
     closestHitFns[logicalHitSlot](payload, descriptorData, logicalHitSlot, result);
 }
 ```
+
+The first Metal layout uses four header words in `descriptorData`. They contain the word offsets of
+the instance hit-group-offset table and the hit, *Miss*, and *Callable* record tables. Each record
+table entry is a byte offset from the start of `descriptorData` to that record's data. This keeps
+function selection and `input.record` access indexed by the same logical slots without exposing the
+physical buffer layout in shader source.
 
 **Gaps, Fixes, And Constraints**
 

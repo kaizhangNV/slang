@@ -233,10 +233,10 @@ Apply the corresponding requirement to _AnyHit_, _Intersection_, _Miss_, and _Ca
 each `invoke` witness and its reachable helpers against that logical stage. The metadata-only
 `IIntersectionStage` remains stage-neutral so it can also represent `NoIntersection`.
 
-All stage inputs are compiler-provided, zero-storage property views. Payload, built-ins, primitive
-data, and intersection reporting are properties or methods mapped to compiler-known operations;
-they are never stored fields. Put common properties on the input type and primitive-specific
-properties in constrained extensions.
+All stage inputs are compiler-provided, zero-storage property views. Payload, shader-record data,
+built-ins, primitive data, and intersection reporting are properties or methods mapped to
+compiler-known operations; they are never stored fields. Put common properties on the input type
+and primitive-specific properties in constrained extensions.
 
 Map properties to existing core ray tracing operations when they already express the required
 semantics. Add a new IR operation only for state or behavior with no existing representation.
@@ -455,7 +455,10 @@ Implement the following units:
    `ray_data` alongside the user payload. Rejected candidates never overwrite committed attributes.
 5. **Descriptor binding:** specialize `TraceProgramDescriptor<Layout>` into an existing
    parameter-group layout containing the IFT, visible-function tables, and record-data buffer. Reuse
-   the normal allocator, legalization, and binding reflection.
+   the normal allocator, legalization, and binding reflection. The initial record buffer starts
+   with word offsets for the instance-hit-offset, hit-record, _Miss_-record, and _Callable_-record
+   tables; record-table entries are byte offsets from the buffer base. Lower `input.record` to the
+   native shader-record ABI on D3D/Vulkan and to this table lookup on Metal.
 
 The private generated state is absent from source reflection and contributes no Metal tag. Target
 ABI size reporting must still account for it. Validate custom attribute types against the portable
