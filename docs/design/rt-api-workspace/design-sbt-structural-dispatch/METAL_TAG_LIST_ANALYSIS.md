@@ -64,9 +64,13 @@ interface ITraceContext
 {
     associatedtype Payload;
     associatedtype AccelerationStructure : IAccelerationStructure;
-    associatedtype Motion;
+    associatedtype Motion : IRayMotion;
 }
 ```
+
+The four motion markers are `NoMotion`, `PrimitiveMotion`, `InstanceMotion`, and
+`PrimitiveAndInstanceMotion`. The last three require Metal 2.4. `RayTraversalDesc.time` supplies
+the motion time when one of those modes is selected and is ignored for `NoMotion`.
 
 Each hit context fixes one primitive kind:
 
@@ -166,9 +170,9 @@ MultiLevelAccelerationStructure<N>, N >= 2
     -> instancing, max_levels<N>
 ```
 
-`TraceContext.Motion` supplies `primitive_motion`, `instance_motion`, both, or neither. Every group
-in a program layout is constrained to the same trace context, so all reachable stages have one
-topology and motion configuration.
+`TraceContext.Motion` supplies `primitive_motion`, `instance_motion`, both, or neither through the
+four marker types above. Every group in a program layout is constrained to the same trace context,
+so all reachable stages have one topology and motion configuration.
 
 `IHitContext.Primitive` selects `triangle`, `bounding_box`, or `curve` independently for each
 generated `[[intersection(...)]]` function. This primitive selector is not part of the shared tag
