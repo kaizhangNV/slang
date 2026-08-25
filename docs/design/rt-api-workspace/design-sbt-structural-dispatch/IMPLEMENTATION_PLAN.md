@@ -249,6 +249,9 @@ The primitive marker interfaces are sealed. Applications select `TrianglePrimiti
 `CurvePrimitive`, or `BoundingBoxPrimitive<Attributes>` so every accepted primitive has a defined
 native target mapping.
 
+The group-list interfaces are also sealed. Their canonical variadic and empty implementations keep
+the concrete group pack available to layout discovery.
+
 ### 3.2 Structural Use Rules
 
 These restrictions are hard semantic errors and remain active under `-ignore-capabilities`.
