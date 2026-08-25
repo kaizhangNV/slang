@@ -1354,8 +1354,9 @@ void rayGen()
 `rayFlags` uses the existing portable `RAY_FLAG` values. D3D and Vulkan receive the flag word
 directly. Metal has the same traversal controls, but exposes them as individual `intersector`
 settings: opacity, triangle and geometry culling, forced opacity, and first-hit termination. When
-the flag word is runtime-valued, Slang emits a small helper that decodes it into those settings
-before calling `intersect(...)`; constant flags allow the target compiler to fold that setup away.
+the flag word is runtime-valued, Slang emits a small setup sequence that decodes it into those
+settings before calling `intersect(...)`; constant flags allow the target compiler to fold that
+setup away.
 `RAY_FLAG_SKIP_CLOSEST_HIT_SHADER` instead suppresses the generated post-trace *ClosestHit*
 dispatch.
 
