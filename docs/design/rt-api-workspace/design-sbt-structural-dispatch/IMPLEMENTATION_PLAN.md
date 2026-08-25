@@ -265,6 +265,9 @@ These restrictions are hard semantic errors and remain active under `-ignore-cap
 | `TraceProgramDescriptor<Layout>`           | Opaque resource binding and trace argument                                                    | Shader construction, field access, or copies outside opaque-resource rules                           |
 | `RayTracer<Layout>`                        | Local zero-storage facade                                                                     | Calling `trace` from a stage where tracing is unavailable                                            |
 
+Apply the same runtime-type checks after generic invocation is resolved so specialization cannot
+hide a structural stage, stage-input, or metadata result.
+
 The descriptor type itself is stage-neutral. `RayTracer.trace` uses the same stage capability as the
 existing `TraceRay` operation, preserving recursive traces from _ClosestHit_ and _Miss_.
 
