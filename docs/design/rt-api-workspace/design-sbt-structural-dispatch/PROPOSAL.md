@@ -1197,10 +1197,11 @@ Because one trace context has one `AccelerationStructure` type, a program cannot
 different level counts.
 
 `TraceContext.Motion` similarly contributes `primitive_motion`, `instance_motion`, both, or
-neither. `RayTraversalDesc.time` supplies the motion time when motion is enabled and is ignored for
-`NoMotion`. `IHitContext.Primitive` selects exactly one of `triangle`, `bounding_box`, or `curve`
-for each generated `[[intersection(...)]]` function. The primitive selector belongs to that
-function; it is not unioned into the trace-wide tag list.
+neither. `RayTraversalDesc.time` supplies the motion time when motion is enabled, and the reachable
+hit and miss stages can read it through `input.time`. The property is absent for `NoMotion`.
+`IHitContext.Primitive` selects exactly one of `triangle`, `bounding_box`, or `curve` for each
+generated `[[intersection(...)]]` function. The primitive selector belongs to that function; it is
+not unioned into the trace-wide tag list.
 
 #### 2.5.2 Reachability-Directed Inference
 
