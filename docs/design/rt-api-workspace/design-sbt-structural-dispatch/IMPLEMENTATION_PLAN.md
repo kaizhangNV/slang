@@ -229,8 +229,10 @@ public interface IClosestHitShader<Context>
 ```
 
 Apply the corresponding requirement to _AnyHit_, _Intersection_, _Miss_, and _Callable_. Validate
-each `invoke` witness and its reachable helpers against that logical stage. The metadata-only
-`IIntersectionStage` remains stage-neutral so it can also represent `NoIntersection`.
+each `invoke` witness and its reachable helpers against that logical stage. The internal
+`IIntersectionStage` marker remains stage-neutral so it can represent either a real
+_Intersection_ implementation or the canonical `NoIntersection` placeholder without exposing a
+third user extension point.
 
 All stage inputs are compiler-provided, zero-storage property views. Payload, shader-record data,
 built-ins, primitive data, and intersection reporting are properties or methods mapped to
