@@ -76,7 +76,6 @@ source/standard-modules/
     ├── raytracing.slang          # Module declaration and ordered includes
     ├── ray-types.slang           # Rays, traversal, acceleration structures, primitives
     ├── contexts.slang            # Trace and shader-group contexts
-    ├── internal-operations.slang # Non-public compiler operations
     ├── stage-inputs.slang        # Zero-storage inputs and properties
     ├── stage-contracts.slang     # Executable interfaces and placeholders
     ├── program-layout.slang      # Slots, groups, lists, and layout
@@ -88,11 +87,11 @@ Each included source file uses `implementing raytracing;` and exposes public dec
 `namespace rt`. Keep compiler operations internal and expose them through typed properties or
 methods.
 
-The parent standard-module CMake file owns the common compiler selection, output directory,
-aggregate `slang-standard-modules` target, and one shared install rule. The ray-tracing child owns
-only its source list and `slang-raytracing-module` compile target. The installed artifact is named
-exactly `slang/raytracing.slang-module`, matching generic standard-module lookup. Do not add a
-ray-tracing-specific path or module-name field to the session.
+The parent standard-module CMake file owns the output root, aggregate `slang-standard-modules`
+target, and one shared install rule. Each child owns its source list, compiler selection, and module
+compile target. The installed artifact is named exactly `slang/raytracing.slang-module`, matching
+generic standard-module lookup. Do not add a ray-tracing-specific path or module-name field to the
+session.
 
 ### 2.2 Compiler Files
 
@@ -207,8 +206,8 @@ macOS runner    -> native Metal compilation and direct-host runtime, local only
 The runner recipe and logs remain outside the repository:
 
 ```text
-~/.codex/local-build-farm/projects/slang-structural-raytracing.json
-~/.codex/local-build-farm/runs/slang-structural-raytracing/<run-id>/
+~/.codex/local-build-farm/projects/another-slang-structural-rt-runtime.json
+~/.codex/local-build-farm/runs/another-slang-structural-rt-runtime/<run-id>/
 ```
 
 Workers receive disposable snapshots and return logs only; all fixes are made in the Linux
@@ -288,22 +287,21 @@ During semantic checking, classify each module as using the legacy API, the stru
 neither, and retain representative source locations. Diagnose a module that directly uses both APIs
 before IR generation. Imported declarations alone do not count as use.
 
-Serialize this summary with the module. After program composition, diagnose cross-module mixing in
-the selected linked program; legacy stages do not need to be ordinary call-graph callees. Legacy use
-includes user-authored _ClosestHit_, _AnyHit_, _Intersection_, _Miss_, and _Callable_ entry points or
-direct calls to `TraceRay` and `TraceMotionRay`. Ignore internal calls made by `slang.raytracing`,
-and allow ordinary ray-generation entry points that call `RayTracer<Layout>`. Structural use
-includes conformance to the canonical stage or layout contracts and use of a structural descriptor
-or trace call.
+After program composition, inspect the selected entry points and structural-trace reachability to
+diagnose cross-module mixing; legacy stages do not need to be ordinary call-graph callees. Legacy
+use includes user-authored _ClosestHit_, _AnyHit_, _Intersection_, _Miss_, and _Callable_ entry
+points or direct calls to `TraceRay` and `TraceMotionRay`. Ignore internal calls made by
+`slang.raytracing`, and allow ordinary ray-generation entry points that call `RayTracer<Layout>`.
+Structural use includes conformance to the canonical stage or layout contracts and use of a
+structural descriptor or trace call.
 
 ## 4. Compiler Representation
 
 ### 4.1 Canonical Stage Interfaces
 
-The compiler registers the exact executable interface declarations from the trusted
+The compiler registers the exact executable interface declarations from the trusted packaged
 `slang.raytracing` module. A user interface with the same name or structure remains ordinary.
-Only a compiler-designated build of that packaged standard module may create the special IR
-operations; source code and a user-shadowing module cannot request them.
+Source code and a user-shadowing module cannot request the compiler-owned operations.
 
 The canonical interfaces use normal interface requirements and witness tables, but lower to this IR
 hierarchy:
@@ -322,16 +320,16 @@ A stage implementation remains an `IRStructType`. Its ordinary `IRWitnessTable` 
 corresponding derived interface type. The selected witness, rather than a source name, determines
 the logical stage role.
 
-Create the derived operations when compiling the standard module. Preserve and register them when
-loading its serialized form. Audit interface factories, exact `kIROp_InterfaceType` checks, cloning,
-serialization, linking, specialization, and generic-wrapper resolution so the derived identity is
-never replaced by an ordinary interface type.
+The packaged module serializes ordinary interface requirements so it can be built by the standard
+module toolchain. At the trusted load boundary, replace the exact five interface operations with
+their compiler-owned derived operations and register their declarations. Preserve that identity
+through interface factories, cloning, linking, specialization, and generic-wrapper resolution.
 
 ### 4.2 Other Structural Identity
 
 | Source concept                    | Representation                                                                                     |
 | --------------------------------- | -------------------------------------------------------------------------------------------------- |
-| Stage input                       | Compiler-known zero-storage IR type carrying logical stage and concrete context                    |
+| Stage input                       | Ordinary zero-field generic struct; canonical accessors lower to structural stage-input operations |
 | Stage-input property              | Existing intrinsic IR, or a dedicated property operation when required                             |
 | Slots, groups, lists, and layouts | Ordinary types and witnesses canonicalized after specialization into compiler-side layout metadata |
 | `TraceProgramDescriptor<Layout>`  | Opaque resource associated with one specialized layout                                             |
@@ -475,7 +473,7 @@ the logical _AnyHit_ invocation, including when called through a helper.
 
 ## 7. Implementation Milestones
 
-### Phase 0: Prototype Integration Points
+### Phase 0: Prove Integration Points
 
 - Prototype a canonical stage-interface IR operation and preserve it through standard-module
   serialization and import.
