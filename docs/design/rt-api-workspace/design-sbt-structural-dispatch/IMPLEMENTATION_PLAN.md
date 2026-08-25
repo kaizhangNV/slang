@@ -259,14 +259,15 @@ These restrictions are hard semantic errors and remain active under `-ignore-cap
 
 | Kind                                       | Allowed                                                                                       | Rejected                                                                                             |
 | ------------------------------------------ | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| Stage implementation                       | Stateless methods, conformance, type-only layout use, reflection, and compiler-selected entry | Instance fields, user construction, runtime storage, existential conversion, or direct `invoke` call |
-| Stage input                                | Compiler-provided `invoke` parameter and same-stage by-value helper flow                      | User construction, binding, storage, non-value parameter directions, return, or cross-stage use      |
+| Stage implementation                       | Stateless methods, conformance, type-only layout use, reflection, and compiler-selected entry | Instance fields, construction, runtime storage, existential conversion, or direct `invoke` calls     |
+| Stage input                                | Compiler-provided `invoke` parameter and direct same-stage value helpers                      | Construction, storage, generic arguments, non-value parameters, return, or cross-stage use           |
 | Slot, group, group list, or program layout | Associated types and static metadata                                                          | Runtime materialization                                                                              |
 | `TraceProgramDescriptor<Layout>`           | Opaque resource binding and trace argument                                                    | Shader construction, field access, or copies outside opaque-resource rules                           |
 | `RayTracer<Layout>`                        | Local zero-storage facade                                                                     | Calling `trace` from a stage where tracing is unavailable                                            |
 
 Apply the same runtime-type checks after generic invocation is resolved so specialization cannot
-hide a structural stage, stage-input, or metadata result.
+hide a structural stage, stage-input, or metadata result. Reject stage-input generic arguments so
+a specialization cannot construct or store a compiler-provided input internally.
 
 The descriptor type itself is stage-neutral. `RayTracer.trace` uses the same stage capability as the
 existing `TraceRay` operation, preserving recursive traces from _ClosestHit_ and _Miss_.
