@@ -949,6 +949,55 @@ err(
 )
 
 err(
+    "compiler-owned-intrinsic-op",
+    20021,
+    "compiler-owned intrinsic operation",
+    span { loc = "location", message = "intrinsic operation '~operation' is reserved for compiler use" }
+)
+
+err(
+    "direct-structural-ray-tracing-stage-invoke",
+    20022,
+    "direct invocation of a structural ray-tracing stage",
+    span { loc = "location", message = "a structural ray-tracing stage method may only be invoked by compiler-generated dispatch" }
+)
+
+err(
+    "structural-ray-tracing-stage-runtime-value",
+    20023,
+    "runtime use of a structural ray-tracing stage type",
+    span { loc = "location", message = "structural ray-tracing stage type '~type:type' has no runtime representation" }
+)
+
+err(
+    "structural-ray-tracing-input-storage",
+    20024,
+    "storage of a structural ray-tracing stage input",
+    span { loc = "location", message = "ray-tracing stage input type '~type:type' is compiler-provided and may only be used as a value parameter" }
+)
+
+err(
+    "structural-ray-tracing-type-construction",
+    20025,
+    "construction of a structural ray-tracing type",
+    span { loc = "location", message = "structural ray-tracing type '~type:type' cannot be constructed by user code" }
+)
+
+err(
+    "structural-ray-tracing-metadata-runtime-value",
+    20026,
+    "runtime use of structural ray-tracing metadata",
+    span { loc = "location", message = "structural ray-tracing metadata type '~type:type' has no runtime representation" }
+)
+
+err(
+    "structural-ray-tracing-input-stage-mismatch",
+    20027,
+    "ray-tracing stage input used by the wrong stage",
+    span { loc = "location", message = "ray-tracing stage input type '~type:type' requires logical stage '~stage', but function '~function:Decl' is not restricted to that stage" }
+)
+
+err(
     "invalid-spirv-version",
     20012,
     "invalid SPIR-V version",
@@ -4252,6 +4301,49 @@ err(
     38007,
     "no stage specified for entry point",
     span { loc = "location", message = "no stage specified for entry point '~entryPoint'; use either a '[shader(\"name\")]' function attribute or the '-stage <name>' command-line option to specify a stage" }
+)
+
+err(
+    "structural-ray-tracing-entry-point-not-stage",
+    38053,
+    "invalid structural ray-tracing entry point",
+    span { loc = "stageType:Decl", message = "struct '~stageType' does not implement an executable structural ray-tracing stage interface" }
+)
+
+err(
+    "structural-ray-tracing-entry-point-stage-mismatch",
+    38054,
+    "structural ray-tracing entry point stage mismatch",
+    span { loc = "stageType:Decl", message = "struct '~stageType' does not implement the selected '~stage' stage" }
+)
+
+err(
+    "structural-ray-tracing-entry-point-ambiguous-stage",
+    38055,
+    "ambiguous structural ray-tracing entry point stage",
+    span { loc = "stageType:Decl", message = "struct '~stageType' implements more than one executable ray-tracing stage; use '-stage <name>' to select one" }
+)
+
+err(
+    "structural-ray-tracing-stage-instance-field",
+    38056,
+    "stateful structural ray-tracing stage",
+    span { loc = "field:Decl", message = "instance field '~field' is not allowed because structural ray-tracing stage implementations are compiler-created" }
+)
+
+err(
+    "mixed-ray-tracing-apis",
+    38057,
+    "cannot mix legacy and structural ray-tracing APIs in one module",
+    span { loc = "currentDecl:Decl", message = "this declaration uses the ~currentAPI API" },
+    note { message = "the same module also uses the ~otherAPI API", span { loc = "otherDecl:Decl" } }
+)
+
+err(
+    "structural-ray-tracing-callable-stage-mismatch",
+    38063,
+    "callable dispatch is not available from this ray-tracing stage",
+    span { loc = "location", message = "'callShader' cannot be reached from structural ~stage logic" }
 )
 
 err(
