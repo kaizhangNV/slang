@@ -36,7 +36,9 @@ endforeach()
 set(raytracing_module_file "${raytracing_output_dir}/raytracing.slang-module")
 
 # Use the configured bootstrap compiler for cross/build-generator configurations. A normal Slang
-# build uses its newly built slangc, while minimal builds fall back to the bootstrap target.
+# build uses its newly built slangc, while minimal builds fall back to the bootstrap target. The
+# selected compiler must know this revision's internal ray-tracing-module option and descriptor
+# opcode; an older bootstrap cannot produce the compiler-owned AST/IR identity.
 if(SLANG_GENERATORS_PATH)
     if(CMAKE_HOST_WIN32)
         set(CMAKE_HOST_EXECUTABLE_SUFFIX ".exe")
@@ -65,7 +67,7 @@ add_custom_command(
     OUTPUT ${raytracing_module_file}
     COMMAND
         ${RAYTRACING_SLANG_COMPILER}
-        ${RAYTRACING_SLANG_COMPILER_CORE_MODULE_ARGS} -I
+        ${RAYTRACING_SLANG_COMPILER_CORE_MODULE_ARGS} -compile-slang-raytracing-module -I
         ${CMAKE_CURRENT_SOURCE_DIR} raytracing.slang -o raytracing.slang-module
     DEPENDS
         ${raytracing_copied_files}

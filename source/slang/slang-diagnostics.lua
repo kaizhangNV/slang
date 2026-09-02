@@ -5729,6 +5729,13 @@ err(
 )
 
 err(
+    "trace-program-descriptor-not-supported-on-target",
+    55217,
+    "structural ray tracing is not supported on this target",
+    span { loc = "location", message = "the current code generation target has no lowering for structural ray-tracing program descriptors" }
+)
+
+err(
     "unsupported-recursion",
     55201,
     "recursion not allowed",

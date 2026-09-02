@@ -228,10 +228,10 @@ internal RayDesc getStageInputObjectSpaceRay()
     case glsl:
     case spirv:
     case cuda:
-        result.origin = ObjectRayOrigin();
-        result.tMin = RayTMin();
-        result.direction = ObjectRayDirection();
-        result.tMax = RayTCurrent();
+        result.Origin = ObjectRayOrigin();
+        result.TMin = RayTMin();
+        result.Direction = ObjectRayDirection();
+        result.TMax = RayTCurrent();
     default:
         break;
     }

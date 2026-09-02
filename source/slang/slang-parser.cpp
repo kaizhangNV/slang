@@ -100,6 +100,7 @@ struct ParserOptions
     bool allowGLSLInput = false;
     bool isInLanguageServer = false;
     bool isCoreModule = false;
+    bool isSlangRayTracingModule = false;
     ParsingStage stage = ParsingStage::Body;
     CompilerOptionSet optionSet;
 };
@@ -9987,6 +9988,8 @@ Stmt* parseUnparsedStmt(
     options.isInLanguageServer =
         translationUnit->compileRequest->getLinkage()->isInLanguageServer();
     options.isCoreModule = translationUnit->compileRequest->m_isCoreModuleCode;
+    options.isSlangRayTracingModule =
+        translationUnit->compileRequest->m_isSlangRayTracingModuleCode;
     options.optionSet = translationUnit->compileRequest->optionSet;
 
     Parser parser(astBuilder, tokens, sink, outerScope, options);
@@ -10019,6 +10022,8 @@ void parseSourceFile(
     options.isInLanguageServer =
         translationUnit->compileRequest->getLinkage()->isInLanguageServer();
     options.isCoreModule = translationUnit->compileRequest->m_isCoreModuleCode;
+    options.isSlangRayTracingModule =
+        translationUnit->compileRequest->m_isSlangRayTracingModuleCode;
     options.optionSet = translationUnit->compileRequest->optionSet;
 
     Parser parser(astBuilder, tokens, sink, outerScope, options);
@@ -10073,7 +10078,7 @@ static void addSimpleModifierSyntax(Session* session, Scope* scope, char const* 
         getSyntaxClass<T>());
 }
 
-static IROp parseIROp(Parser* parser, Token& outToken)
+static IROp parseIROp(Parser* parser, Token& outToken, bool allowRayTracingDescriptorType = false)
 {
     IROp op;
     if (AdvanceIf(parser, TokenType::OpSub))
@@ -10099,10 +10104,15 @@ static IROp parseIROp(Parser* parser, Token& outToken)
         }
     }
 
-    // Stage-interface opcodes are identities assigned only while lowering declarations from the
-    // trusted standard module. Reject both symbolic and numeric `__intrinsic_op` spellings so user
-    // code cannot forge that identity; the standard module itself does not name these ops.
-    if (op >= kIROp_FirstRaytracingStageInterface && op <= kIROp_LastRaytracingStageInterface)
+    // These identities belong only to the packaged structural ray-tracing module. Stage-interface
+    // opcodes are assigned by the compiler and are never named in source. The descriptor opcode is
+    // named while building that module so its AST and serialized IR use the direct intrinsic-type
+    // path, but ordinary source cannot request it. Check both symbolic and numeric spellings.
+    const bool isStageInterfaceOp =
+        op >= kIROp_FirstRaytracingStageInterface && op <= kIROp_LastRaytracingStageInterface;
+    const bool isDescriptorTypeOp = op == kIROp_TraceProgramDescriptorType;
+    if (isStageInterfaceOp || (isDescriptorTypeOp && (!parser->options.isSlangRayTracingModule ||
+                                                      !allowRayTracingDescriptorType)))
     {
         parser->sink->diagnose(Diagnostics::CompilerOwnedIntrinsicOp{
             .operation = outToken.getContent(),
@@ -10633,7 +10643,9 @@ static NodeBase* parseIntrinsicTypeModifier(Parser* parser, void* /*userData*/)
 {
     IntrinsicTypeModifier* modifier = parser->astBuilder->create<IntrinsicTypeModifier>();
     parser->ReadToken(TokenType::LParent);
-    modifier->irOp = parseIROp(parser, modifier->opToken);
+    // Only an intrinsic *type* declaration in the dedicated module build may name the descriptor
+    // opcode. Other modifiers call `parseIROp` without this permission.
+    modifier->irOp = parseIROp(parser, modifier->opToken, true);
     while (AdvanceIf(parser, TokenType::Comma))
     {
         auto operand =

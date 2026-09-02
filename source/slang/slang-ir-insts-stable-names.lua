@@ -879,5 +879,6 @@ return {
 	["Type.RaytracingStageInterface.any_hit_stage_interface"] = 903,
 	["Type.RaytracingStageInterface.intersection_stage_interface"] = 904,
 	["Type.RaytracingStageInterface.miss_stage_interface"] = 905,
-	["Type.RaytracingStageInterface.callable_stage_interface"] = 906
+	["Type.RaytracingStageInterface.callable_stage_interface"] = 906,
+	["Type.TraceProgramDescriptor"] = 907
 }

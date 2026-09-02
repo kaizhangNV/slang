@@ -2,6 +2,8 @@
 
 import slang.raytracing;
 
+using namespace rt;
+
 struct TestPayload {}
 struct TestRecord {}
 
@@ -42,4 +44,18 @@ struct TestLayout : rt::ITraceProgramLayout
 }
 
 [numthreads(1, 1, 1)]
-void main() {}
+void main()
+{
+    // The structural traversal descriptor uses the core RayDesc type and its existing field names
+    // directly; importing slang.raytracing does not introduce a second ray representation.
+    rt::RayTraversalDesc desc = {};
+    desc.ray.Origin = float3(0.0, 0.0, 0.0);
+    desc.ray.TMin = 0.001;
+    desc.ray.Direction = float3(0.0, 0.0, 1.0);
+    desc.ray.TMax = 1000.0;
+
+    // The namespace alias denotes the same core type, so importing it unqualified introduces no
+    // duplicate-type ambiguity and preserves ordinary assignment.
+    RayDesc ray = desc.ray;
+    desc.ray = ray;
+}

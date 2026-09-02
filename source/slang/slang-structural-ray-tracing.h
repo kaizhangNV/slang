@@ -18,6 +18,11 @@ class AggTypeDecl;
 class Decl;
 class ModuleDecl;
 
+/// Return whether `typeDecl` carries the compiler-owned AST identity of the opaque trace-program
+/// descriptor. The build-authority check controls which source declaration may acquire this
+/// identity; imported declarations retain it through AST serialization.
+bool isTraceProgramDescriptorDecl(AggTypeDecl* typeDecl);
+
 /// Identifies a shader stage declared through one of the canonical `slang.raytracing` stage
 /// interfaces. `Count` is both the number of recognized stages and the sentinel returned for a
 /// declaration that has no structural stage identity.
@@ -81,10 +86,10 @@ struct RayTracingAPIUsage
 class StructuralRayTracingDeclRegistry
 {
 public:
-    /// Resolve the canonical stage interfaces, stage-input types, and `invoke` requirements from
-    /// the packaged module. Returns false without publishing partial stage arrays if a required
-    /// declaration is absent; `outMissingStage`, when present, identifies the first incomplete
-    /// stage contract.
+    /// Resolve and validate the descriptor, `RayTracer`, and canonical stage/layout contracts from
+    /// the packaged module. Returns false without publishing any identities when a required
+    /// declaration is absent or invalid. `outMissingStage` identifies the first incomplete stage,
+    /// or is `Count` when another API contract fails validation.
     bool registerTrustedModule(
         Module* module,
         StructuralRayTracingStageKind* outMissingStage = nullptr);

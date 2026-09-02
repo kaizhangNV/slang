@@ -973,8 +973,9 @@ void SemanticsVisitor::diagnoseInvalidStructuralRayTracingPropertyType(PropertyD
         propertyDecl->type.exp ? propertyDecl->type.exp->loc : propertyDecl->loc);
 }
 
-// Diagnose construction of any structural stage, stage-input, or layout type. Returning true tells
-// ordinary invocation checking that this call shape was recognized and already diagnosed.
+// Diagnose construction of any compile-time-only structural stage, stage-input, or layout type.
+// Returning true tells ordinary invocation checking that this call shape was recognized and
+// already diagnosed.
 bool SemanticsVisitor::diagnoseInvalidStructuralRayTracingConstruction(InvokeExpr* invoke)
 {
     auto typeType = as<TypeType>(invoke->functionExpr->type);

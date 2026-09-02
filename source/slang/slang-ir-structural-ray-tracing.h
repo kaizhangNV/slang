@@ -10,12 +10,18 @@
 namespace Slang
 {
 
+class DiagnosticSink;
 struct IRModule;
 
 /// Return the compiler-owned interface-type opcode for `kind`, or `kIROp_Invalid` for an invalid
 /// kind. Distinct opcodes preserve structural stage identity after source declarations are linked
 /// or serialized and their AST pointers are no longer available.
 IROp getStructuralRayTracingStageInterfaceOp(StructuralRayTracingStageKind kind);
+
+/// Diagnose a trace-program descriptor type that target lowering did not consume. Supported
+/// backends must erase or materialize every descriptor before source/binary emission; keeping this
+/// final check independent of target lowering turns an unsupported path into a user diagnostic.
+void diagnoseUnloweredTraceProgramDescriptorTypes(IRModule* module, DiagnosticSink* sink);
 
 /// Give every structural stage interface in `module` its compiler-owned IR opcode.
 ///

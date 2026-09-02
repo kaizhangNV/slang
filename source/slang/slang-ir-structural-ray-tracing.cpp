@@ -1,9 +1,11 @@
 #include "slang-ir-structural-ray-tracing.h"
 
 #include "slang-ir-insts.h"
+#include "slang-ir-util.h"
 #include "slang-ir.h"
 #include "slang-mangle.h"
 #include "slang-module.h"
+#include "slang-rich-diagnostics.h"
 
 // Structural ray-tracing stage interfaces need identities that survive AST lifetime, module
 // serialization, linking, and specialization. The ordinary source module initially lowers every
@@ -32,6 +34,21 @@ IROp getStructuralRayTracingStageInterfaceOp(StructuralRayTracingStageKind kind)
         return kIROp_CallableStageInterface;
     default:
         return kIROp_Invalid;
+    }
+}
+
+void diagnoseUnloweredTraceProgramDescriptorTypes(IRModule* module, DiagnosticSink* sink)
+{
+    // Descriptor types are hoisted module-scope instructions, so an exact-op scan is sufficient;
+    // there is no need to rediscover them by walking operand or use graphs. Target lowering owns
+    // their physical representation and must remove every such instruction before emission.
+    for (auto inst : module->getGlobalInsts())
+    {
+        if (inst->getOp() != kIROp_TraceProgramDescriptorType)
+            continue;
+
+        sink->diagnose(Diagnostics::TraceProgramDescriptorNotSupportedOnTarget{
+            .location = findFirstUseLoc(inst)});
     }
 }
 

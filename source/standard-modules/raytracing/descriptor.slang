@@ -1,49 +1,29 @@
 implementing raytracing;
 
 // A program layout describes logical shader records at the type level; a trace program descriptor
-// is the corresponding bindable value. Its private resource block gives parameter binding and
-// reflection one stable container while later target lowering chooses the concrete contents.
+// is the corresponding bindable value.
 
 namespace rt
 {
-
-// This struct is the source-level schema for the descriptor's parameter block, not temporary API
-// scaffolding. The ByteAddressBuffer types let the front end represent each resource role before
-// the concrete program layout and target are known. Target lowering keeps those roles and
-// specializes their IR field types, so binding and reflection continue to use the ordinary
-// ParameterBlock model.
-internal struct TraceProgramDescriptorResources<ProgramLayout>
-    where ProgramLayout : ITraceProgramLayout
-{
-    // Candidate-intersection dispatch resources indexed by logical hit-group slot.
-    internal ByteAddressBuffer intersectionFunctions;
-
-    // Miss-stage dispatch resources indexed by logical miss-group slot.
-    internal ByteAddressBuffer missFunctions;
-
-    // Closest-hit dispatch resources indexed by logical hit-group slot.
-    internal ByteAddressBuffer closestHitFunctions;
-
-    // Callable-stage dispatch resources indexed by logical callable-group slot.
-    internal ByteAddressBuffer callableFunctions;
-
-    // Local shader-record data for the slots declared by ProgramLayout.
-    internal ByteAddressBuffer records;
-}
 
 /// A bindable ray-tracing program whose logical shader binding table (SBT) schema is described by
 /// `ProgramLayout`.
 ///
 /// Declare this opaque resource as a shader parameter or parameter-block field, populate the
 /// bindings reported by reflection, and pass it to `RayTracer.trace` or `RayTracer.callShader`.
-/// Shader code cannot inspect its target-specific representation.
+/// The type exposes no fields or public constructor; valid values are supplied through host
+/// binding. On targets with a native SBT, this value has no physical shader binding. Metal lowering
+/// materializes the function tables and record-data buffer required by the selected program layout.
 /// @category raytracing
+__magic_type(TraceProgramDescriptorType)
+__intrinsic_type(TraceProgramDescriptor)
 public struct TraceProgramDescriptor<ProgramLayout>
     where ProgramLayout : ITraceProgramLayout
 {
-    // The descriptor remains a single opaque source-level value while this private block carries
-    // the resource roles materialized by target specialization.
-    internal ParameterBlock<TraceProgramDescriptorResources<ProgramLayout>> resources;
+    // An explicit constructor suppresses the public member-initializer constructor that an empty
+    // struct would otherwise receive. Its required private argument also prevents containing
+    // aggregates from trying to call it as a default initializer.
+    private __init(int unavailable) {}
 }
 
 } // namespace rt

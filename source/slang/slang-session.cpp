@@ -1797,17 +1797,25 @@ RefPtr<Module> Linkage::findOrImportModule(
                         // the same import name remains ordinary source code and never reaches this
                         // registration point. Later semantic checking and IR lowering compare exact
                         // declarations from this registry instead of trusting names or attributes.
-                        StructuralRayTracingStageKind missingStage;
-                        if (!m_structuralRayTracingDeclRegistry.registerTrustedModule(
+                        StructuralRayTracingStageKind missingStage =
+                            StructuralRayTracingStageKind::Count;
+                        const bool declarationsRegistered =
+                            m_structuralRayTracingDeclRegistry.registerTrustedModule(
                                 module,
-                                &missingStage) ||
-                            !identifyStructuralRayTracingStageInterfaces(
-                                module,
-                                m_structuralRayTracingDeclRegistry,
-                                &missingStage))
+                                &missingStage);
+                        const bool stageTypesIdentified =
+                            declarationsRegistered && identifyStructuralRayTracingStageInterfaces(
+                                                          module,
+                                                          m_structuralRayTracingDeclRegistry,
+                                                          &missingStage);
+                        if (!declarationsRegistered || !stageTypesIdentified)
                         {
+                            const char* missingDeclName =
+                                missingStage == StructuralRayTracingStageKind::Count
+                                    ? "slang.raytracing API declaration"
+                                    : getStructuralRayTracingStageInterfaceName(missingStage);
                             sink->diagnose(Diagnostics::CannotResolveImportedDecl{
-                                .declName = getStructuralRayTracingStageInterfaceName(missingStage),
+                                .declName = missingDeclName,
                                 .moduleName = getText(moduleName)});
                         }
                     }

@@ -2281,8 +2281,8 @@ public:
     // anything to do with serialization format
     //
     const static UInt k_minSupportedModuleVersion = 4;
-    // Version 29 adds the compiler-owned structural ray-tracing stage-interface opcodes.
-    const static UInt k_maxSupportedModuleVersion = 29;
+    // Version 30 adds the compiler-owned structural ray-tracing program-descriptor type.
+    const static UInt k_maxSupportedModuleVersion = 30;
     static_assert(k_minSupportedModuleVersion <= k_maxSupportedModuleVersion);
 
 private:

@@ -43,46 +43,11 @@ public struct InstanceMotion : IEnabledRayMotion {}
 [require(metallib_2_4)]
 public struct PrimitiveAndInstanceMotion : IEnabledRayMotion {}
 
-// Alias the core module's existing RayDesc value type so the portable trace path can call TraceRay
-// without converting the ray. Lowercase properties provide the structural API spelling without
-// adding storage.
-/// Describes the origin, direction, and active distance interval of a ray.
-///
-/// This alias uses Slang's existing core-module value type. The structural API adds the lowercase
-/// properties below as equivalent spellings of its fields.
+// Re-export the core-module type in the ray-tracing namespace without introducing another ray
+// representation or changing its field names.
+/// The core-module ray description used by `RayTraversalDesc`.
 /// @category raytracing
 public typealias RayDesc = RayDesc;
-
-public extension RayDesc
-{
-    /// The ray origin in world space.
-    public property float3 origin
-    {
-        get { return Origin; }
-        set { Origin = newValue; }
-    }
-
-    /// The minimum distance from `origin` at which traversal may accept an intersection.
-    public property float tMin
-    {
-        get { return TMin; }
-        set { TMin = newValue; }
-    }
-
-    /// The ray direction in world space.
-    public property float3 direction
-    {
-        get { return Direction; }
-        set { Direction = newValue; }
-    }
-
-    /// The maximum distance from `origin` at which traversal may accept an intersection.
-    public property float tMax
-    {
-        get { return TMax; }
-        set { TMax = newValue; }
-    }
-}
 
 /// Collects the per-call arguments that control ray traversal and shader binding table (SBT)
 /// record selection.
@@ -93,7 +58,7 @@ public extension RayDesc
 /// @category raytracing
 public struct RayTraversalDesc
 {
-    /// The ray and distance interval to trace.
+    /// The core-module ray description and distance interval to trace.
     public RayDesc ray;
 
     /// The motion time used when the trace context selects an enabled motion mode.

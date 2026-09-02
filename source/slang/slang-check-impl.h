@@ -2610,8 +2610,8 @@ public:
     /// Rejects properties that expose compiler-only structural types.
     void diagnoseInvalidStructuralRayTracingPropertyType(PropertyDecl* propertyDecl);
 
-    /// Rejects source construction of structural stage, stage-input, and metadata types before
-    /// invocation resolution can rewrite the constructor-shaped expression.
+    /// Rejects source construction of compile-time-only structural types before invocation
+    /// resolution can rewrite the constructor-shaped expression.
     bool diagnoseInvalidStructuralRayTracingConstruction(InvokeExpr* invoke);
 
     /// Rejects a resolved invocation whose substituted result is a compiler-only structural type.

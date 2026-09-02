@@ -2,6 +2,7 @@
 
 #include "slang-ast-builder.h"
 #include "slang-ast-decl.h"
+#include "slang-ir-insts.h"
 #include "slang-module.h"
 
 // This file establishes the nominal bridge between the separately compiled `slang.raytracing`
@@ -19,6 +20,13 @@ namespace Slang
 {
 
 // ## Trusted declaration discovery
+
+bool isTraceProgramDescriptorDecl(AggTypeDecl* typeDecl)
+{
+    auto magicType = typeDecl ? typeDecl->findModifier<MagicTypeModifier>() : nullptr;
+    return magicType &&
+           magicType->magicNodeType.getTag() == ASTNodeType::TraceProgramDescriptorType;
+}
 
 // Return the public stage-interface name used to bootstrap `kind` from the trusted source module.
 const char* getStructuralRayTracingStageInterfaceName(StructuralRayTracingStageKind kind)
@@ -163,6 +171,43 @@ static FunctionDeclBase* _findStageInvokeRequirement(InterfaceDecl* interfaceDec
     return nullptr;
 }
 
+// Validate the source shape that produces the descriptor IR type's two operands.
+//
+// Consider the canonical declaration:
+//
+//     struct TraceProgramDescriptor<ProgramLayout>
+//         where ProgramLayout : ITraceProgramLayout
+//
+// Lowering emits the `ProgramLayout` type followed by its conformance witness. Requiring exactly
+// that parameter and constraint here prevents a stale or accidentally edited standard module from
+// publishing a descriptor opcode with missing or additional operands.
+static bool _isValidTraceProgramDescriptorShape(
+    AggTypeDecl* descriptorDecl,
+    InterfaceDecl* traceProgramLayoutInterface)
+{
+    auto genericDecl = descriptorDecl ? as<GenericDecl>(descriptorDecl->parentDecl) : nullptr;
+    if (!genericDecl || genericDecl->inner != descriptorDecl ||
+        genericDecl->getDirectMemberDeclsOfType<GenericTypeParamDecl>().getCount() != 1 ||
+        genericDecl->getDirectMemberDeclsOfType<GenericTypePackParamDecl>().getCount() != 0 ||
+        genericDecl->getDirectMemberDeclsOfType<GenericValueParamDecl>().getCount() != 0 ||
+        genericDecl->getDirectMemberDeclsOfType<GenericValuePackParamDecl>().getCount() != 0)
+    {
+        return false;
+    }
+
+    auto typeParam = genericDecl->getDirectMemberDeclsOfType<GenericTypeParamDecl>()[0];
+    auto constraints = genericDecl->getDirectMemberDeclsOfType<GenericTypeConstraintDecl>();
+    if (constraints.getCount() != 1)
+        return false;
+
+    auto constraint = constraints[0];
+    auto subType = as<DeclRefType>(constraint->sub.type);
+    auto supType = as<DeclRefType>(constraint->sup.type);
+    return !constraint->isEqualityConstraint && subType && supType &&
+           subType->getDeclRef().getDecl() == typeParam &&
+           supType->getDeclRef().getDecl() == traceProgramLayoutInterface;
+}
+
 bool StructuralRayTracingDeclRegistry::registerTrustedModule(
     Module* module,
     StructuralRayTracingStageKind* outMissingStage)
@@ -170,9 +215,18 @@ bool StructuralRayTracingDeclRegistry::registerTrustedModule(
     // Resolve into local arrays first. Publishing only a complete set ensures `isInitialized()` is
     // a reliable invariant for consumers: if it is true, every stage has an interface, input view,
     // and exact `invoke` requirement.
-    m_trustedModuleDecl = module->getModuleDecl();
-    m_intersectionStageInterface = as<InterfaceDecl>(_findNamedDecl(module, "IIntersectionStage"));
-    m_rayTracerType = as<AggTypeDecl>(_findNamedDecl(module, "RayTracer"));
+    auto trustedModuleDecl = module->getModuleDecl();
+    auto intersectionStageInterface =
+        as<InterfaceDecl>(_findNamedDecl(module, "IIntersectionStage"));
+    auto rayTracerType = as<AggTypeDecl>(_findNamedDecl(module, "RayTracer"));
+    auto traceProgramDescriptorType =
+        as<AggTypeDecl>(_findNamedDecl(module, "TraceProgramDescriptor"));
+    if (!intersectionStageInterface || !rayTracerType)
+    {
+        if (outMissingStage)
+            *outMissingStage = StructuralRayTracingStageKind::Count;
+        return false;
+    }
 
     InterfaceDecl* interfaces[int(StructuralRayTracingStageKind::Count)] = {};
     AggTypeDecl* inputTypes[int(StructuralRayTracingStageKind::Count)] = {};
@@ -183,7 +237,7 @@ bool StructuralRayTracingDeclRegistry::registerTrustedModule(
         interfaces[i] = _findStageInterface(module, kind);
         inputTypes[i] = _findStageInputType(module, kind);
         auto invokeInterface = kind == StructuralRayTracingStageKind::Intersection
-                                   ? m_intersectionStageInterface
+                                   ? intersectionStageInterface
                                    : interfaces[i];
         if (invokeInterface)
             invokeRequirements[i] = _findStageInvokeRequirement(invokeInterface);
@@ -194,7 +248,46 @@ bool StructuralRayTracingDeclRegistry::registerTrustedModule(
             return false;
         }
     }
+    InterfaceDecl* metadataInterfaces[int(StructuralRayTracingMetadataKind::Count)] = {};
+    for (int i = 0; i < int(StructuralRayTracingMetadataKind::Count); ++i)
+    {
+        auto kind = StructuralRayTracingMetadataKind(i);
+        metadataInterfaces[i] =
+            as<InterfaceDecl>(_findNamedDecl(module, _getMetadataInterfaceName(kind)));
+        if (!metadataInterfaces[i])
+        {
+            if (outMissingStage)
+                *outMissingStage = StructuralRayTracingStageKind::Count;
+            return false;
+        }
+    }
 
+    // The authorized module build records both identities directly on the declaration. Check the
+    // serialized modifiers and generic shape before publishing it: a stale package must not create
+    // an ordinary AST struct or a descriptor IR type with the wrong operands.
+    auto descriptorIntrinsicType =
+        traceProgramDescriptorType
+            ? traceProgramDescriptorType->findModifier<IntrinsicTypeModifier>()
+            : nullptr;
+    auto traceProgramLayoutInterface =
+        metadataInterfaces[int(StructuralRayTracingMetadataKind::TraceProgramLayout)];
+    if (!isTraceProgramDescriptorDecl(traceProgramDescriptorType) || !descriptorIntrinsicType ||
+        descriptorIntrinsicType->irOp != kIROp_TraceProgramDescriptorType ||
+        descriptorIntrinsicType->irOperands.getCount() != 0 ||
+        !_isValidTraceProgramDescriptorShape(
+            traceProgramDescriptorType,
+            traceProgramLayoutInterface))
+    {
+        if (outMissingStage)
+            *outMissingStage = StructuralRayTracingStageKind::Count;
+        return false;
+    }
+
+    // Publish only after every required declaration has passed validation. Consumers use
+    // `isInitialized()` as the guarantee that all canonical identities are available together.
+    m_trustedModuleDecl = trustedModuleDecl;
+    m_intersectionStageInterface = intersectionStageInterface;
+    m_rayTracerType = rayTracerType;
     for (int i = 0; i < int(StructuralRayTracingStageKind::Count); ++i)
     {
         m_stageInterfaces[i] = interfaces[i];
@@ -203,9 +296,7 @@ bool StructuralRayTracingDeclRegistry::registerTrustedModule(
     }
     for (int i = 0; i < int(StructuralRayTracingMetadataKind::Count); ++i)
     {
-        auto kind = StructuralRayTracingMetadataKind(i);
-        m_metadataInterfaces[i] =
-            as<InterfaceDecl>(_findNamedDecl(module, _getMetadataInterfaceName(kind)));
+        m_metadataInterfaces[i] = metadataInterfaces[i];
     }
     return true;
 }
