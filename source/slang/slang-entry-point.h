@@ -231,6 +231,17 @@ public:
         m_inferredCapabilityRequirements = caps;
     }
 
+    /// Associates a compiler-created structural entry-point declaration with the source `invoke`
+    /// method selected from its stage conformance. A null value identifies an ordinary entry point.
+    void setStructuralRayTracingInvokeMethod(FuncDecl* invokeMethod)
+    {
+        m_structuralRayTracingInvokeMethod = invokeMethod;
+    }
+    FuncDecl* getStructuralRayTracingInvokeMethod() const
+    {
+        return m_structuralRayTracingInvokeMethod;
+    }
+
     /// Get the module that contains the entry point.
     Module* getModule();
 
@@ -331,6 +342,10 @@ private:
     // The declaration of the entry-point function itself.
     //
     DeclRef<FuncDecl> m_funcDeclRef;
+
+    /// The source dispatch method represented by a structural entry-point proxy, or null for a
+    /// source-declared entry-point function.
+    FuncDecl* m_structuralRayTracingInvokeMethod = nullptr;
 
     /// The mangled name of the entry point function
     String m_mangledName;

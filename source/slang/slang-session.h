@@ -23,6 +23,7 @@
 #include "slang-compiler-options.h"
 #include "slang-content-assist-info.h"
 #include "slang-global-session.h"
+#include "slang-structural-ray-tracing.h"
 
 #include <mutex>
 #include <slang.h>
@@ -405,6 +406,18 @@ public:
 
     SourceManager* getSourceManager() { return m_sourceManager; }
 
+    /// Returns the linkage-local identities and semantic facts derived from the packaged
+    /// `slang.raytracing` module. Keeping this state on `Linkage` prevents declarations from one
+    /// session from being compared by name or reused in another AST.
+    StructuralRayTracingDeclRegistry& getStructuralRayTracingDeclRegistry()
+    {
+        return m_structuralRayTracingDeclRegistry;
+    }
+    const StructuralRayTracingDeclRegistry& getStructuralRayTracingDeclRegistry() const
+    {
+        return m_structuralRayTracingDeclRegistry;
+    }
+
     /// Override the source manager for the linkage.
     ///
     /// This is only used to install a temporary override when
@@ -490,5 +503,8 @@ private:
     List<Type*> m_specializedTypes;
 
     RefPtr<SharedSemanticsContext> m_semanticsForReflection;
+
+    /// Populated only when `findOrImportModule` loads the packaged `slang.raytracing` fallback.
+    StructuralRayTracingDeclRegistry m_structuralRayTracingDeclRegistry;
 };
 } // namespace Slang

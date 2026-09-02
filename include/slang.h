@@ -1333,6 +1333,11 @@ typedef uint32_t SlangSizeT;
                  //   at pipeline creation instead would remove that constraint;
                  //   see issue #12541. SPIR-V and GLSL only.
 
+        // Internal build authority used only when compiling the packaged slang.raytracing module.
+        // It is intentionally narrower than core-module compilation: it permits only that
+        // module's dedicated descriptor AST/IR type and grants no core-module semantics.
+        CompileSlangRayTracingModule = 159,
+
         // Do not assign an explicit value to CountOf. It must remain one past the last option,
         // which it derives implicitly from the preceding (highest-valued) enumerator.
         CountOf,

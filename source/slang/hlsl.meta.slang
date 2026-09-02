@@ -20013,7 +20013,7 @@ void __traceMotionRay(
 /// @remarks Extended version of TraceRay with motion blur support
 /// @category raytracing
 [ForceInline]
-[require(glsl_spirv, raytracing_motionblur_raygen_closesthit_miss)]
+[require(cuda_glsl_spirv, raytracing_motionblur_raygen_closesthit_miss)]
 __generic<payload_t>
 void TraceMotionRay(
     RaytracingAccelerationStructure AccelerationStructure,
@@ -20028,6 +20028,7 @@ void TraceMotionRay(
 {
     __target_switch
     {
+    case cuda: __intrinsic_asm "optixTrace";
     case glsl:
     {
         [__vulkanRayPayload]
@@ -20557,11 +20558,12 @@ float4x3 WorldToObject4x3()
 __glsl_extension(GL_EXT_ray_tracing)
 __glsl_extension(GL_NV_ray_tracing_motion_blur)
 [NonUniformReturn]
-[require(glsl_spirv, raytracing_motionblur_anyhit_closesthit_intersection_miss)]
+[require(cuda_glsl_spirv, raytracing_motionblur_anyhit_closesthit_intersection_miss)]
 float RayCurrentTime()
 {
     __target_switch
     {
+    case cuda: __intrinsic_asm "optixGetRayTime";
     case glsl:  __intrinsic_asm "(gl_CurrentRayTimeNV)";
     case spirv:
         return spirv_asm

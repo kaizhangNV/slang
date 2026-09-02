@@ -5,6 +5,7 @@
 #include "core/slang-shared-library.h"
 #include "slang-check-impl.h"
 #include "slang-compiler.h"
+#include "slang-ir-structural-ray-tracing.h"
 #include "slang-lower-to-ir.h"
 #include "slang-mangle.h"
 #include "slang-markdown.h"
@@ -1788,6 +1789,36 @@ RefPtr<Module> Linkage::findOrImportModule(
                     ModuleBlobType::IR);
                 if (module)
                 {
+                    if (moduleName->text == "slang/raytracing")
+                    {
+                        // Only the module loaded from Slang's packaged standard-module directory is
+                        // trusted to define the compiler-owned structural ray-tracing interfaces.
+                        // Normal user search paths run before this fallback, so a user module with
+                        // the same import name remains ordinary source code and never reaches this
+                        // registration point. Later semantic checking and IR lowering compare exact
+                        // declarations from this registry instead of trusting names or attributes.
+                        StructuralRayTracingStageKind missingStage =
+                            StructuralRayTracingStageKind::Count;
+                        const bool declarationsRegistered =
+                            m_structuralRayTracingDeclRegistry.registerTrustedModule(
+                                module,
+                                &missingStage);
+                        const bool stageTypesIdentified =
+                            declarationsRegistered && identifyStructuralRayTracingStageInterfaces(
+                                                          module,
+                                                          m_structuralRayTracingDeclRegistry,
+                                                          &missingStage);
+                        if (!declarationsRegistered || !stageTypesIdentified)
+                        {
+                            const char* missingDeclName =
+                                missingStage == StructuralRayTracingStageKind::Count
+                                    ? "slang.raytracing API declaration"
+                                    : getStructuralRayTracingStageInterfaceName(missingStage);
+                            sink->diagnose(Diagnostics::CannotResolveImportedDecl{
+                                .declName = missingDeclName,
+                                .moduleName = getText(moduleName)});
+                        }
+                    }
                     if (auto irModule = module->getIRModule())
                     {
                         if (irModule->getModuleInst()

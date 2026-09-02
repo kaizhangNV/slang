@@ -119,6 +119,7 @@
 #include "slang-ir-strip-debug-info.h"
 #include "slang-ir-strip-default-construct.h"
 #include "slang-ir-strip-legalization-insts.h"
+#include "slang-ir-structural-ray-tracing.h"
 #include "slang-ir-synthesize-active-mask.h"
 #include "slang-ir-thread-switch-on-constant-phi.h"
 #include "slang-ir-transform-params-to-constref.h"
@@ -2864,6 +2865,11 @@ Result linkAndOptimizeIR(
         }
     }
     SLANG_PASS(collectMetadata, targetProgram, *metadata);
+
+    // A supported structural ray-tracing lowering consumes the opaque source descriptor and
+    // replaces it with the target's physical representation. Check this invariant unconditionally
+    // (including under `-minimum-slang-optimization`) before an emitter can see the dedicated type.
+    SLANG_PASS(diagnoseUnloweredTraceProgramDescriptorTypes, sink);
 
     if (!targetProgram->getOptionSet().shouldPerformMinimumOptimizations())
         SLANG_PASS(checkUnsupportedInst, codeGenContext->getTargetReq(), sink);

@@ -1778,6 +1778,10 @@ void validateEntryPoint(EntryPoint* entryPoint, DiagnosticSink* sink)
 
     auto module = getModule(entryPointFuncDecl);
     auto linkage = entryPoint->getLinkage();
+    // Explicit entry-point selection can be the first observable ray-tracing use in a module. Mark
+    // it here so mixing diagnostics do not depend on whether the entry point was source-attributed
+    // or selected with `-entry` and `-stage`.
+    diagnoseMixedRayTracingAPIUse(entryPoint, sink);
 
     // Check if the return type is valid for a shader entry point
     auto returnType = entryPointFuncDecl->returnType.type;
@@ -2697,6 +2701,34 @@ RefPtr<EntryPoint> findAndValidateEntryPoint(FrontEndEntryPointRequest* entryPoi
     auto sink = compileRequest->getSink();
 
     auto entryPointName = entryPointReq->getName();
+
+    // The structural API deliberately uses the stage struct's name as its external entry-point
+    // name. Try that interpretation before ordinary function lookup. The helper returns a
+    // compiler-owned function declaration for the existing entry-point pipeline and separately
+    // retains the source `invoke` witness that later lowering will dispatch.
+    auto entryPointProfile = entryPointReq->getProfile();
+    bool foundStructuralStage = false;
+    FuncDecl* structuralInvokeMethod = nullptr;
+    auto structuralEntryPointDeclRef = findStructuralRayTracingEntryPointByName(
+        linkage,
+        translationUnit->getModule(),
+        entryPointName,
+        entryPointProfile,
+        sink,
+        &foundStructuralStage,
+        &structuralInvokeMethod);
+    if (foundStructuralStage)
+    {
+        if (!structuralEntryPointDeclRef)
+            return nullptr;
+
+        auto entryPoint =
+            EntryPoint::create(linkage, structuralEntryPointDeclRef, entryPointProfile);
+        entryPoint->setStructuralRayTracingInvokeMethod(structuralInvokeMethod);
+        validateEntryPoint(entryPoint, sink);
+        return sink->getErrorCount() ? nullptr : entryPoint;
+    }
+
     DeclRef<FuncDecl> entryPointFuncDeclRef =
         findFunctionDeclByName(translationUnit->getModule(), entryPointName, sink);
 
@@ -2717,7 +2749,6 @@ RefPtr<EntryPoint> findAndValidateEntryPoint(FrontEndEntryPointRequest* entryPoi
     // then we might be able to infer a stage for the entry point request if
     // it didn't have one, *or* issue a diagnostic if there is a mismatch with the profile.
 
-    auto entryPointProfile = entryPointReq->getProfile();
     resolveStageOfProfileWithEntryPoint(
         entryPointProfile,
         linkage->m_optionSet,
@@ -3200,6 +3231,14 @@ void FrontEndCompileRequest::checkEntryPoints()
             auto translationUnit = translationUnits[tt];
             translationUnit->getModule()->_discoverEntryPoints(sink, this->getLinkage()->targets);
         }
+    }
+
+    // Some relevant declarations are not necessarily selected as entry points. Scan each checked
+    // module after discovery so attributed legacy stages, transitive structural calls, and invalid
+    // stage-input signatures are diagnosed consistently for every compilation mode.
+    for (auto translationUnit : translationUnits)
+    {
+        diagnoseMixedRayTracingAPIsInModule(linkage, translationUnit->getModule(), sink);
     }
 }
 

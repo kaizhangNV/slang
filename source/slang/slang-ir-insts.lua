@@ -735,6 +735,19 @@ local insts = {
 				},
 			},
 			{
+				TraceProgramDescriptor = {
+					-- An opaque structural ray-tracing program descriptor. Its operands retain the
+					-- program-layout type argument and conformance witness without exposing any
+					-- target-specific resource representation in source or IR.
+					struct_name = "TraceProgramDescriptorType",
+					operands = {
+						{ "programLayout", "IRType" },
+						{ "programLayoutWitness" },
+					},
+					hoistable = true,
+				},
+			},
+			{
 				struct = {
 					-- A user-defined structure declaration at the IR level.
 					-- Unlike in the AST where there is a distinction between
@@ -752,6 +765,41 @@ local insts = {
 				class = { struct_name = "ClassType", parent = true },
 			},
 			{ interface = { struct_name = "InterfaceType", global = true } },
+			-- The trusted structural ray-tracing stage interfaces retain ordinary interface
+			-- requirements and witness-table behavior, but distinct opcodes preserve each stage's
+			-- compiler-owned identity through serialization and linking. Source lowering emits these
+			-- ops only for declarations registered from the packaged slang.raytracing module; user
+			-- interfaces with the same spelling continue to lower to `interface`.
+			{
+				RaytracingStageInterface = {
+					global = true,
+					{
+						closest_hit_stage_interface = {
+							struct_name = "ClosestHitStageInterface",
+						},
+					},
+					{
+						any_hit_stage_interface = {
+							struct_name = "AnyHitStageInterface",
+						},
+					},
+					{
+						intersection_stage_interface = {
+							struct_name = "IntersectionStageInterface",
+						},
+					},
+					{
+						miss_stage_interface = {
+							struct_name = "MissStageInterface",
+						},
+					},
+					{
+						callable_stage_interface = {
+							struct_name = "CallableStageInterface",
+						},
+					},
+				},
+			},
 			{
 				associated_type = {
 					struct_name = "AssociatedType",

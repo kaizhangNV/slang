@@ -47,3 +47,6 @@ add_subdirectory(neural)
 
 # Build experimental modules
 add_subdirectory(experimental)
+
+# Build the structural ray-tracing module.
+add_subdirectory(raytracing)
