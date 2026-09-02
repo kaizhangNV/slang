@@ -176,6 +176,7 @@ public struct TriangleData
             case hlsl:
             case glsl:
             case spirv:
+            case cuda:
                 return HitKind() == HIT_KIND_TRIANGLE_FRONT_FACE;
             default:
                 return false;
