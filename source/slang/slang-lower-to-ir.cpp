@@ -12383,8 +12383,11 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
             operandCount++;
         }
 
-        // Preserve compiler-owned stage identity when lowering the exact declarations
-        // registered from the trusted slang.raytracing standard module.
+        // Preserve compiler-owned stage identity when lowering the exact declarations registered
+        // from the trusted `slang.raytracing` standard module. The distinct opcode changes only the
+        // nominal identity: requirements and witness-table lowering remain ordinary interface IR.
+        // A user module that shadows these names is absent from the registry and therefore cannot
+        // manufacture a structural stage-interface instruction.
         auto interfaceOp = kIROp_InterfaceType;
         auto stageKind =
             context->getLinkage()->getStructuralRayTracingDeclRegistry().getStageKind(decl);

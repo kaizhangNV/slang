@@ -1,25 +1,40 @@
 implementing raytracing;
 
+// Stage-input structs present ray-tracing system values as typed, storage-free views. A context
+// determines the payload, record, topology, motion, and primitive-specific properties that are
+// legal for a stage. Properties in the base structs are generally available for that stage;
+// constrained extensions add values that exist only for a selected motion, topology, or primitive.
+
 namespace rt
 {
 
-// These are compiler-provided, zero-storage views. The compiler recognizes the exact accessors
-// below, maps storage-free properties such as payload to the target ABI, and retains the ordinary
-// source bodies where they already express the D3D/Vulkan implementation.
+// These types must remain storage-free. The compiler maps an accessed property to the corresponding
+// entry-point parameter or system value instead of constructing an input object in memory. A
+// default target-switch arm is only a well-formed source placeholder for a property that target
+// lowering must replace before emission; it is not the property's runtime value.
+/// Provides the values available while processing the closest accepted hit for `Context`.
+///
+/// The compiler supplies this type as the value parameter of `IClosestHitShader.invoke`. It may be
+/// passed by value to helpers that are valid for the closest-hit stage, but it cannot be
+/// constructed, stored, returned, or passed by reference.
+/// @category raytracing
 [require(structural_raytracing_closesthit)]
 public struct ClosestHitInput<Context>
     where Context : IHitContext
 {
+    /// A mutable reference to the ray payload shared with the trace caller.
     public property Context.TraceContext.Payload payload
     {
         ref;
     }
 
+    /// The read-only local shader-record data for the selected hit-group slot.
     public property Context.Record record
     {
         get;
     }
 
+    /// The minimum valid intersection distance for the current ray.
     public property float minDistance
     {
         get
@@ -37,6 +52,7 @@ public struct ClosestHitInput<Context>
         }
     }
 
+    /// The distance along the ray to the committed closest hit.
     public property float distance
     {
         get
@@ -54,6 +70,7 @@ public struct ClosestHitInput<Context>
         }
     }
 
+    /// The hit classification reported by traversal or by the procedural intersection stage.
     public property uint hitKind
     {
         get
@@ -71,6 +88,7 @@ public struct ClosestHitInput<Context>
         }
     }
 
+    /// The `RAY_FLAG` values used for the current trace.
     public property uint rayFlags
     {
         get
@@ -88,6 +106,7 @@ public struct ClosestHitInput<Context>
         }
     }
 
+    /// The zero-based index of the intersected primitive within its geometry.
     public property uint primitiveIndex
     {
         get
@@ -105,6 +124,8 @@ public struct ClosestHitInput<Context>
         }
     }
 
+    /// The zero-based index of the intersected geometry within its primitive acceleration
+    /// structure.
     public property uint geometryIndex
     {
         get
@@ -121,6 +142,7 @@ public struct ClosestHitInput<Context>
         }
     }
 
+    /// The origin of the current ray in world space.
     public property float3 worldSpaceOrigin
     {
         get
@@ -138,6 +160,7 @@ public struct ClosestHitInput<Context>
         }
     }
 
+    /// The direction of the current ray in world space.
     public property float3 worldSpaceDirection
     {
         get
@@ -155,6 +178,7 @@ public struct ClosestHitInput<Context>
         }
     }
 
+    /// The three-dimensional launch index of the ray-generation invocation.
     public property uint3 dispatchRaysIndex
     {
         get
@@ -172,6 +196,7 @@ public struct ClosestHitInput<Context>
         }
     }
 
+    /// The dimensions of the ray dispatch that launched the current trace.
     public property uint3 dispatchRaysDimensions
     {
         get
@@ -194,6 +219,7 @@ public extension<Context> ClosestHitInput<Context>
     where Context : IHitContext
     where Context.TraceContext.Motion : IEnabledRayMotion
 {
+    /// The motion-interpolation time of the current ray.
     public property float time
     {
         get
@@ -214,6 +240,7 @@ public extension<Context> ClosestHitInput<Context>
     where Context : IHitContext
     where Context.TraceContext.AccelerationStructure == AccelerationStructure
 {
+    /// The zero-based index of the current instance in its acceleration structure.
     public property uint instanceIndex
     {
         get
@@ -231,6 +258,7 @@ public extension<Context> ClosestHitInput<Context>
         }
     }
 
+    /// The application-provided identifier of the current instance.
     public property uint instanceID
     {
         get
@@ -248,6 +276,9 @@ public extension<Context> ClosestHitInput<Context>
         }
     }
 
+    /// The current ray transformed into the object space of the hit instance.
+    ///
+    /// Its maximum distance is the committed hit distance.
     public property RayDesc objectSpaceRay
     {
         get
@@ -270,6 +301,7 @@ public extension<Context> ClosestHitInput<Context>
         }
     }
 
+    /// The transform from the current instance's object space to world space.
     public property float4x3 objectToWorld
     {
         get
@@ -287,6 +319,7 @@ public extension<Context> ClosestHitInput<Context>
         }
     }
 
+    /// The transform from world space to the current instance's object space.
     public property float4x3 worldToObject
     {
         get
@@ -309,6 +342,7 @@ public extension<Context> ClosestHitInput<Context>
     where Context : IHitContext
     where Context.Primitive : ICustomIntersectionPrimitive
 {
+    /// The custom attributes reported for the committed procedural intersection.
     public property Context.Primitive.Attributes attributes
     {
         get;
@@ -319,6 +353,7 @@ public extension<Context> ClosestHitInput<Context>
     where Context : IHitContext
     where Context.Primitive == TrianglePrimitive
 {
+    /// The built-in data for the committed triangle intersection.
     public property TriangleData triangle
     {
         get { return {}; }
@@ -329,26 +364,39 @@ public extension<Context> ClosestHitInput<Context>
     where Context : IHitContext
     where Context.Primitive == CurvePrimitive
 {
+    /// The built-in data for the committed curve intersection.
     public property CurveData curve
     {
         get { return {}; }
     }
 }
 
+/// Provides the values and traversal controls available while filtering a candidate hit for
+/// `Context`.
+///
+/// The compiler supplies this type as the value parameter of `IAnyHitShader.invoke`. It may be
+/// passed by value to helpers that are valid for the any-hit stage, but it cannot be constructed,
+/// stored, returned, or passed by reference. Calling `ignoreHit` rejects the candidate, while
+/// `acceptHitAndEndSearch` accepts it and terminates traversal. Returning normally accepts the
+/// candidate and permits traversal to continue.
+/// @category raytracing
 [require(structural_raytracing_anyhit)]
 public struct AnyHitInput<Context>
     where Context : IHitContext
 {
+    /// A mutable reference to the ray payload shared with the trace caller.
     public property Context.TraceContext.Payload payload
     {
         ref;
     }
 
+    /// The read-only local shader-record data for the selected hit-group slot.
     public property Context.Record record
     {
         get;
     }
 
+    /// The minimum valid intersection distance for the current ray.
     public property float minDistance
     {
         get
@@ -366,6 +414,7 @@ public struct AnyHitInput<Context>
         }
     }
 
+    /// The distance along the ray to the candidate intersection.
     public property float distance
     {
         get
@@ -383,6 +432,7 @@ public struct AnyHitInput<Context>
         }
     }
 
+    /// The hit classification reported by traversal or by the procedural intersection stage.
     public property uint hitKind
     {
         get
@@ -400,6 +450,7 @@ public struct AnyHitInput<Context>
         }
     }
 
+    /// The `RAY_FLAG` values used for the current trace.
     public property uint rayFlags
     {
         get
@@ -417,6 +468,7 @@ public struct AnyHitInput<Context>
         }
     }
 
+    /// The zero-based index of the candidate primitive within its geometry.
     public property uint primitiveIndex
     {
         get
@@ -434,6 +486,7 @@ public struct AnyHitInput<Context>
         }
     }
 
+    /// The zero-based index of the candidate geometry within its primitive acceleration structure.
     public property uint geometryIndex
     {
         get
@@ -450,6 +503,7 @@ public struct AnyHitInput<Context>
         }
     }
 
+    /// The origin of the current ray in world space.
     public property float3 worldSpaceOrigin
     {
         get
@@ -467,6 +521,7 @@ public struct AnyHitInput<Context>
         }
     }
 
+    /// The direction of the current ray in world space.
     public property float3 worldSpaceDirection
     {
         get
@@ -484,6 +539,7 @@ public struct AnyHitInput<Context>
         }
     }
 
+    /// The three-dimensional launch index of the ray-generation invocation.
     public property uint3 dispatchRaysIndex
     {
         get
@@ -501,6 +557,7 @@ public struct AnyHitInput<Context>
         }
     }
 
+    /// The dimensions of the ray dispatch that launched the current trace.
     public property uint3 dispatchRaysDimensions
     {
         get
@@ -518,6 +575,7 @@ public struct AnyHitInput<Context>
         }
     }
 
+    /// Rejects the current candidate intersection and continues traversal.
     public void ignoreHit()
     {
         __target_switch
@@ -532,6 +590,7 @@ public struct AnyHitInput<Context>
         }
     }
 
+    /// Accepts the current candidate intersection and terminates traversal immediately.
     public void acceptHitAndEndSearch()
     {
         __target_switch
@@ -551,6 +610,7 @@ public extension<Context> AnyHitInput<Context>
     where Context : IHitContext
     where Context.TraceContext.Motion : IEnabledRayMotion
 {
+    /// The motion-interpolation time of the current ray.
     public property float time
     {
         get
@@ -571,6 +631,7 @@ public extension<Context> AnyHitInput<Context>
     where Context : IHitContext
     where Context.TraceContext.AccelerationStructure == AccelerationStructure
 {
+    /// The zero-based index of the current instance in its acceleration structure.
     public property uint instanceIndex
     {
         get
@@ -588,6 +649,7 @@ public extension<Context> AnyHitInput<Context>
         }
     }
 
+    /// The application-provided identifier of the current instance.
     public property uint instanceID
     {
         get
@@ -605,6 +667,9 @@ public extension<Context> AnyHitInput<Context>
         }
     }
 
+    /// The current ray transformed into the object space of the candidate instance.
+    ///
+    /// Its maximum distance is the candidate intersection distance.
     public property RayDesc objectSpaceRay
     {
         get
@@ -627,6 +692,7 @@ public extension<Context> AnyHitInput<Context>
         }
     }
 
+    /// The transform from the current instance's object space to world space.
     public property float4x3 objectToWorld
     {
         get
@@ -644,6 +710,7 @@ public extension<Context> AnyHitInput<Context>
         }
     }
 
+    /// The transform from world space to the current instance's object space.
     public property float4x3 worldToObject
     {
         get
@@ -666,6 +733,7 @@ public extension<Context> AnyHitInput<Context>
     where Context : IHitContext
     where Context.Primitive : ICustomIntersectionPrimitive
 {
+    /// The custom attributes reported for the candidate procedural intersection.
     public property Context.Primitive.Attributes attributes
     {
         get;
@@ -676,6 +744,7 @@ public extension<Context> AnyHitInput<Context>
     where Context : IHitContext
     where Context.Primitive == TrianglePrimitive
 {
+    /// The built-in data for the candidate triangle intersection.
     public property TriangleData triangle
     {
         get { return {}; }
@@ -686,21 +755,33 @@ public extension<Context> AnyHitInput<Context>
     where Context : IHitContext
     where Context.Primitive == CurvePrimitive
 {
+    /// The built-in data for the candidate curve intersection.
     public property CurveData curve
     {
         get { return {}; }
     }
 }
 
+/// Provides the values and reporting operation available while testing a procedural primitive for
+/// `Context`.
+///
+/// The compiler supplies this type as the value parameter of `IIntersectionShader.invoke`. It may
+/// be passed by value to helpers that are valid for the intersection stage, but it cannot be
+/// constructed, stored, returned, or passed by reference. The shader may test and report multiple
+/// candidate intersections; traversal determines which accepted candidate eventually becomes the
+/// closest hit.
+/// @category raytracing
 [require(structural_raytracing_intersection)]
 public struct IntersectionInput<Context>
     where Context : IHitContext
 {
+    /// The read-only local shader-record data for the selected hit-group slot.
     public property Context.Record record
     {
         get;
     }
 
+    /// The minimum valid intersection distance for the current ray.
     public property float minDistance
     {
         get
@@ -718,6 +799,7 @@ public struct IntersectionInput<Context>
         }
     }
 
+    /// The `RAY_FLAG` values used for the current trace.
     public property uint rayFlags
     {
         get
@@ -735,6 +817,10 @@ public struct IntersectionInput<Context>
         }
     }
 
+    /// The current ray transformed into the object space of the tested instance.
+    ///
+    /// Its maximum distance is the current traversal upper bound. A reported candidate outside the
+    /// ray's active interval is not accepted.
     public property RayDesc objectSpaceRay
     {
         get
@@ -757,6 +843,7 @@ public struct IntersectionInput<Context>
         }
     }
 
+    /// The zero-based index of the tested primitive within its geometry.
     public property uint primitiveIndex
     {
         get
@@ -774,6 +861,7 @@ public struct IntersectionInput<Context>
         }
     }
 
+    /// The zero-based index of the tested geometry within its primitive acceleration structure.
     public property uint geometryIndex
     {
         get
@@ -790,6 +878,7 @@ public struct IntersectionInput<Context>
         }
     }
 
+    /// The origin of the current ray in world space.
     public property float3 worldSpaceOrigin
     {
         get
@@ -807,6 +896,7 @@ public struct IntersectionInput<Context>
         }
     }
 
+    /// The direction of the current ray in world space.
     public property float3 worldSpaceDirection
     {
         get
@@ -824,6 +914,7 @@ public struct IntersectionInput<Context>
         }
     }
 
+    /// The three-dimensional launch index of the ray-generation invocation.
     public property uint3 dispatchRaysIndex
     {
         get
@@ -841,6 +932,7 @@ public struct IntersectionInput<Context>
         }
     }
 
+    /// The dimensions of the ray dispatch that launched the current trace.
     public property uint3 dispatchRaysDimensions
     {
         get
@@ -858,6 +950,11 @@ public struct IntersectionInput<Context>
         }
     }
 
+    /// Reports a candidate intersection with hit kind zero.
+    /// @param distance The candidate distance along the current ray.
+    /// @param attributes The primitive's custom data to provide to any-hit and closest-hit stages.
+    /// @return `true` if traversal accepted the candidate, or `false` if it was outside the active
+    /// ray interval or rejected by any-hit processing.
     public bool reportHit(float distance, Context.Primitive.Attributes attributes)
     {
         __target_switch
@@ -871,6 +968,12 @@ public struct IntersectionInput<Context>
         }
     }
 
+    /// Reports a candidate intersection with an application-defined hit classification.
+    /// @param distance The candidate distance along the current ray.
+    /// @param hitKind The classification exposed to subsequent any-hit and closest-hit stages.
+    /// @param attributes The primitive's custom data to provide to any-hit and closest-hit stages.
+    /// @return `true` if traversal accepted the candidate, or `false` if it was outside the active
+    /// ray interval or rejected by any-hit processing.
     public bool reportHit(
         float distance,
         uint hitKind,
@@ -892,6 +995,7 @@ public extension<Context> IntersectionInput<Context>
     where Context : IHitContext
     where Context.TraceContext.Motion : IEnabledRayMotion
 {
+    /// The motion-interpolation time of the current ray.
     public property float time
     {
         get
@@ -912,6 +1016,7 @@ public extension<Context> IntersectionInput<Context>
     where Context : IHitContext
     where Context.TraceContext.AccelerationStructure == AccelerationStructure
 {
+    /// The zero-based index of the current instance in its acceleration structure.
     public property uint instanceIndex
     {
         get
@@ -929,6 +1034,7 @@ public extension<Context> IntersectionInput<Context>
         }
     }
 
+    /// The application-provided identifier of the current instance.
     public property uint instanceID
     {
         get
@@ -946,6 +1052,7 @@ public extension<Context> IntersectionInput<Context>
         }
     }
 
+    /// The transform from the current instance's object space to world space.
     public property float4x3 objectToWorld
     {
         get
@@ -963,6 +1070,7 @@ public extension<Context> IntersectionInput<Context>
         }
     }
 
+    /// The transform from world space to the current instance's object space.
     public property float4x3 worldToObject
     {
         get
@@ -981,20 +1089,29 @@ public extension<Context> IntersectionInput<Context>
     }
 }
 
+/// Provides the values available when a ray completes without an accepted hit for `Context`.
+///
+/// The compiler supplies this type as the value parameter of `IMissShader.invoke`. It may be passed
+/// by value to helpers that are valid for the miss stage, but it cannot be constructed, stored,
+/// returned, or passed by reference.
+/// @category raytracing
 [require(structural_raytracing_miss)]
 public struct MissInput<Context>
     where Context : IMissGroupContext
 {
+    /// A mutable reference to the ray payload shared with the trace caller.
     public property Context.TraceContext.Payload payload
     {
         ref;
     }
 
+    /// The read-only local shader-record data for the selected miss-group slot.
     public property Context.Record record
     {
         get;
     }
 
+    /// The minimum valid intersection distance for the current ray.
     public property float minDistance
     {
         get
@@ -1012,6 +1129,7 @@ public struct MissInput<Context>
         }
     }
 
+    /// The maximum distance of the ray that completed without a hit.
     public property float distance
     {
         get
@@ -1029,6 +1147,7 @@ public struct MissInput<Context>
         }
     }
 
+    /// The `RAY_FLAG` values used for the current trace.
     public property uint rayFlags
     {
         get
@@ -1046,6 +1165,7 @@ public struct MissInput<Context>
         }
     }
 
+    /// The origin of the current ray in world space.
     public property float3 worldSpaceOrigin
     {
         get
@@ -1063,6 +1183,7 @@ public struct MissInput<Context>
         }
     }
 
+    /// The direction of the current ray in world space.
     public property float3 worldSpaceDirection
     {
         get
@@ -1080,6 +1201,7 @@ public struct MissInput<Context>
         }
     }
 
+    /// The three-dimensional launch index of the ray-generation invocation.
     public property uint3 dispatchRaysIndex
     {
         get
@@ -1097,6 +1219,7 @@ public struct MissInput<Context>
         }
     }
 
+    /// The dimensions of the ray dispatch that launched the current trace.
     public property uint3 dispatchRaysDimensions
     {
         get
@@ -1119,6 +1242,7 @@ public extension<Context> MissInput<Context>
     where Context : IMissGroupContext
     where Context.TraceContext.Motion : IEnabledRayMotion
 {
+    /// The motion-interpolation time of the current ray.
     public property float time
     {
         get
@@ -1135,20 +1259,29 @@ public extension<Context> MissInput<Context>
     }
 }
 
+/// Provides the data and dispatch coordinates available to a callable shader for `Context`.
+///
+/// The compiler supplies this type as the value parameter of `ICallableShader.invoke`. It may be
+/// passed by value to helpers that are valid for the callable stage, but it cannot be constructed,
+/// stored, returned, or passed by reference.
+/// @category raytracing
 [require(structural_raytracing_callable)]
 public struct CallableInput<Context>
     where Context : ICallableGroupContext
 {
+    /// A mutable reference to the application-defined value exchanged with the caller.
     public property Context.CallableData data
     {
         ref;
     }
 
+    /// The read-only local shader-record data for the selected callable-group slot.
     public property Context.Record record
     {
         get;
     }
 
+    /// The three-dimensional launch index of the ray-generation invocation.
     public property uint3 dispatchRaysIndex
     {
         get
@@ -1166,6 +1299,7 @@ public struct CallableInput<Context>
         }
     }
 
+    /// The dimensions of the ray dispatch that launched the current trace.
     public property uint3 dispatchRaysDimensions
     {
         get

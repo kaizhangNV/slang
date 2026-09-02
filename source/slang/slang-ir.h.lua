@@ -353,7 +353,9 @@ local function getBasicTypesForBuilderMethods()
 
 	if type_insts then
 		walk_instructions(type_insts, function(key, value, struct_name, parent_struct)
-			-- Only process leaf instructions (not base classes) that are not excluded
+			-- Auto-generated `getXxxType` methods structurally deduplicate their results. Global
+			-- instructions instead have nominal identity and must use an explicit creator that adds
+			-- each declaration to the module, so exclude them along with non-leaf base classes.
 			if
 				struct_name
 				and value.is_leaf

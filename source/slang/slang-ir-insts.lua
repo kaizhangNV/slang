@@ -752,6 +752,11 @@ local insts = {
 				class = { struct_name = "ClassType", parent = true },
 			},
 			{ interface = { struct_name = "InterfaceType", global = true } },
+			-- The trusted structural ray-tracing stage interfaces retain ordinary interface
+			-- requirements and witness-table behavior, but distinct opcodes preserve each stage's
+			-- compiler-owned identity through serialization and linking. Source lowering emits these
+			-- ops only for declarations registered from the packaged slang.raytracing module; user
+			-- interfaces with the same spelling continue to lower to `interface`.
 			{
 				RaytracingStageInterface = {
 					global = true,

@@ -1,4 +1,6 @@
-# Build the experimental slang.raytracing standard module.
+# Build the experimental slang.raytracing standard module as a separately imported artifact. It is
+# compiled after the core module, so the ray-tracing API can use core declarations without adding a
+# dependency from core back to this optional module.
 
 set(raytracing_shader_sources
     raytracing.slang
@@ -17,6 +19,8 @@ set(raytracing_output_dir
 
 set(raytracing_copied_files)
 foreach(shader_file ${raytracing_shader_sources})
+    # Ship the source files beside the compiled module. The root module uses source-level includes,
+    # and retaining those sources also makes the installed standard module inspectable.
     set(source_file "${CMAKE_CURRENT_SOURCE_DIR}/${shader_file}")
     set(dest_file "${raytracing_output_dir}/${shader_file}")
     add_custom_command(
@@ -31,6 +35,8 @@ endforeach()
 
 set(raytracing_module_file "${raytracing_output_dir}/raytracing.slang-module")
 
+# Use the configured bootstrap compiler for cross/build-generator configurations. A normal Slang
+# build uses its newly built slangc, while minimal builds fall back to the bootstrap target.
 if(SLANG_GENERATORS_PATH)
     if(CMAKE_HOST_WIN32)
         set(CMAKE_HOST_EXECUTABLE_SUFFIX ".exe")
@@ -53,6 +59,8 @@ set(RAYTRACING_SLANG_COMPILER_CORE_MODULE_ARGS
     ${core_module_archive_without_timestamp}
 )
 
+# Load the already generated core archive explicitly. This keeps slang.raytracing out of the core
+# bootstrap dependency graph while still compiling it with the same built-in declarations users see.
 add_custom_command(
     OUTPUT ${raytracing_module_file}
     COMMAND
@@ -67,6 +75,8 @@ add_custom_command(
     VERBATIM
 )
 
+# Make the binary artifact part of an ordinary build and install it with its source files as one
+# standard-module package.
 add_custom_target(slang-raytracing-module ALL DEPENDS ${raytracing_module_file})
 set_target_properties(slang-raytracing-module PROPERTIES FOLDER generated)
 

@@ -5,9 +5,17 @@
 #include "slang-mangle.h"
 #include "slang-module.h"
 
+// Structural ray-tracing stage interfaces need identities that survive AST lifetime, module
+// serialization, linking, and specialization. The ordinary source module initially lowers every
+// interface to `IRInterfaceType`. Once the compiler has verified that it loaded the packaged
+// `slang.raytracing` module, this file replaces those ordinary opcodes with stage-specific
+// interface opcodes. Downstream IR code can then recognize a stage contract from the instruction
+// class instead of depending on source names or AST declaration pointers.
+
 namespace Slang
 {
 
+// Map the shared source/AST stage classification to its persistent IR identity.
 IROp getStructuralRayTracingStageInterfaceOp(StructuralRayTracingStageKind kind)
 {
     switch (kind)
@@ -27,6 +35,8 @@ IROp getStructuralRayTracingStageInterfaceOp(StructuralRayTracingStageKind kind)
     }
 }
 
+// Return the interface type represented by a mangled symbol. A generic interface's symbol names the
+// enclosing `IRGeneric`, whose return value is the actual interface-type instruction.
 static IRInterfaceType* _findInterfaceType(IRInst* inst)
 {
     if (auto generic = as<IRGeneric>(inst))
@@ -52,6 +62,9 @@ bool identifyStructuralRayTracingStageInterfaces(
         auto expectedOp = getStructuralRayTracingStageInterfaceOp(kind);
         bool found = false;
 
+        // Mangled-name lookup can return more than one symbol after module composition. Retag only
+        // an ordinary interface or an interface already carrying this exact stage identity; an
+        // unrelated instruction with the same symbol is never a valid normalization candidate.
         for (auto symbol : symbols)
         {
             auto interfaceType = _findInterfaceType(symbol);

@@ -406,6 +406,9 @@ public:
 
     SourceManager* getSourceManager() { return m_sourceManager; }
 
+    /// Returns the linkage-local identities and semantic facts derived from the packaged
+    /// `slang.raytracing` module. Keeping this state on `Linkage` prevents declarations from one
+    /// session from being compared by name or reused in another AST.
     StructuralRayTracingDeclRegistry& getStructuralRayTracingDeclRegistry()
     {
         return m_structuralRayTracingDeclRegistry;
@@ -501,6 +504,7 @@ private:
 
     RefPtr<SharedSemanticsContext> m_semanticsForReflection;
 
+    /// Populated only when `findOrImportModule` loads the packaged `slang.raytracing` fallback.
     StructuralRayTracingDeclRegistry m_structuralRayTracingDeclRegistry;
 };
 } // namespace Slang

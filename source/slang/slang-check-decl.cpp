@@ -2745,6 +2745,10 @@ void SemanticsDeclHeaderVisitor::checkVarDeclCommon(VarDeclBase* varDecl)
         validateArrayElementTypeForVariable(varDecl);
     }
 
+    // Structural stage and metadata types describe compiler work; they are not runtime values.
+    // Stage-input types are similarly valid only as direct, read-only stage parameters. Check the
+    // final inferred or explicit type here so aliases and nested aggregate types cannot bypass that
+    // contract.
     diagnoseInvalidStructuralRayTracingVariableType(varDecl);
 
     // If there is a matrix layout modifier or texture format modifier, we will modify the type now.
@@ -10644,6 +10648,9 @@ RefPtr<WitnessTable> SemanticsVisitor::checkInterfaceConformance(
     RefPtr<WitnessTable> witnessTable;
     if (context->mapInterfaceToWitnessTable.tryGetValue(superInterfaceDeclRef, witnessTable))
     {
+        // Registration must not depend on whether this request checked the conformance or reused a
+        // cached witness. The registry operation is idempotent and extracts an implementation only
+        // when the cached table already contains the required `invoke` witness.
         registerStructuralRayTracingStageConformance(superInterfaceDeclRef, witnessTable);
         return witnessTable;
     }
@@ -10680,6 +10687,8 @@ RefPtr<WitnessTable> SemanticsVisitor::checkInterfaceConformance(
             witnessTable))
         return nullptr;
 
+    // Do not expose a stage implementation until the complete conformance has succeeded. Later
+    // entry-point lookup relies on this witness table as the source of truth for `invoke`.
     registerStructuralRayTracingStageConformance(superInterfaceDeclRef, witnessTable);
     return witnessTable;
 }
@@ -10998,6 +11007,8 @@ bool SemanticsVisitor::checkInterfaceConformance(
 
     // The conformance was satisfied if all the requirements were satisfied.
     //
+    // This overload is also called directly with a caller-owned witness table, so it performs the
+    // same registration as the wrapper above. Registration is intentionally idempotent.
     if (result)
         registerStructuralRayTracingStageConformance(superInterfaceDeclRef, witnessTable);
     return result;
@@ -15592,9 +15603,12 @@ void SemanticsDeclHeaderVisitor::checkCallableDeclCommon(CallableDecl* decl)
     for (auto paramDecl : decl->getParameters())
     {
         ensureDecl(paramDecl, DeclCheckState::ReadyForReference);
+        // Parameters pass through the ordinary variable-type gate. It permits only the direct,
+        // read-only stage-input parameter that the compiler will supply to a synthesized stage.
         diagnoseInvalidStructuralRayTracingVariableType(paramDecl);
     }
 
+    // Return types have no `VarDeclBase`, so check them at the callable declaration boundary.
     diagnoseInvalidStructuralRayTracingCallableResult(decl);
 
     maybeInferPrefixModifierForOperator(decl);
@@ -16652,6 +16666,8 @@ void SemanticsDeclHeaderVisitor::visitPropertyDecl(PropertyDecl* decl)
 {
     SemanticsVisitor subVisitor(withDeclToExcludeFromLookup(decl));
     decl->type = subVisitor.CheckUsableType(decl->type, decl);
+    // A property can otherwise expose a compiler-only structural type without passing through the
+    // variable or callable-result checks.
     diagnoseInvalidStructuralRayTracingPropertyType(decl);
     visitAbstractStorageDeclCommon(decl);
     checkVisibility(decl);

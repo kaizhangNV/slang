@@ -10099,6 +10099,9 @@ static IROp parseIROp(Parser* parser, Token& outToken)
         }
     }
 
+    // Stage-interface opcodes are identities assigned only while lowering declarations from the
+    // trusted standard module. Reject both symbolic and numeric `__intrinsic_op` spellings so user
+    // code cannot forge that identity; the standard module itself does not name these ops.
     if (op >= kIROp_FirstRaytracingStageInterface && op <= kIROp_LastRaytracingStageInterface)
     {
         parser->sink->diagnose(Diagnostics::CompilerOwnedIntrinsicOp{

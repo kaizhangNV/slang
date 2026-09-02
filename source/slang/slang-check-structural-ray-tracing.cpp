@@ -3,8 +3,26 @@
 #include "slang-session.h"
 #include "slang-syntax.h"
 
+// The structural ray-tracing API uses ordinary Slang interfaces as a source-facing vocabulary,
+// but several of its types describe compiler structure rather than runtime data. This file adds the
+// semantic rules that cannot be expressed by interface constraints alone:
+//
+// * a struct's conformance to a canonical stage interface identifies its `invoke` implementation;
+// * a source module cannot mix the structural pipeline model with legacy stage entry points or
+//   top-level `TraceRay` intrinsics;
+// * a stage-input view is valid only as a read-only, by-value parameter of compatible stage code,
+//   while stage implementations and layout metadata never become runtime values; and
+// * an entry-point request may name a stage struct, with the requested native stage selecting its
+//   `invoke` witness.
+//
+// All classification begins with declaration pointers from `StructuralRayTracingDeclRegistry`.
+// Names and structural similarity are deliberately insufficient, so user-defined lookalike types
+// retain ordinary language semantics.
+
 namespace Slang
 {
+
+// ## Shared stage and witness queries
 
 static Stage _getNativeStage(StructuralRayTracingStageKind kind);
 static StructuralRayTracingStageKind _getStructuralStage(Stage stage);
@@ -12,6 +30,10 @@ static StructuralRayTracingStageKind _getDirectStageInputKind(
     const StructuralRayTracingDeclRegistry& registry,
     Type* type);
 
+// Return the concrete function that a checked conformance uses for the canonical stage `invoke`
+// requirement. Witness tables are key-to-value maps, so look up the exact requirement declaration
+// rather than depending on requirement order. A generic function is stored through its outer
+// `GenericDecl`; callers need the inner function declaration that actually owns the body.
 static FunctionDeclBase* _getStageImplementation(
     const StructuralRayTracingDeclRegistry& registry,
     StructuralRayTracingStageKind stageKind,
@@ -32,6 +54,11 @@ static FunctionDeclBase* _getStageImplementation(
     return as<FunctionDeclBase>(implementation);
 }
 
+// ## Structural-versus-legacy API validation
+
+// Record a use of one ray-tracing API family and diagnose the first conflict with the other family
+// in the same source module. The registry retains the two originating declarations so the
+// diagnostic can explain both sides of the conflict.
 static void _registerRayTracingAPIUse(
     Linkage* linkage,
     Module* module,
@@ -56,6 +83,9 @@ static void _registerRayTracingAPIUse(
         .otherDecl = otherDecl});
 }
 
+// Return whether `functionDecl` is one of the legacy, top-level core-module trace intrinsics.
+// Inline ray queries and hit-object methods also contain `TraceRay` in their API, but they do not
+// select the legacy shader-entry-point model and are therefore intentionally excluded.
 static bool _isCoreLegacyTraceMethod(FunctionDeclBase* functionDecl)
 {
     if (!functionDecl || !functionDecl->getName())
@@ -78,6 +108,9 @@ static bool _isCoreLegacyTraceMethod(FunctionDeclBase* functionDecl)
     return false;
 }
 
+// Record a checked source call for later reachability analysis and classify calls that select a
+// ray-tracing API family. Call edges are recorded before API classification because even an
+// ordinary helper call may connect a stage implementation to `RayTracer.callShader` transitively.
 void registerRayTracingAPICall(
     Linkage* linkage,
     FunctionDeclBase* caller,
@@ -109,6 +142,9 @@ void registerRayTracingAPICall(
     }
 }
 
+// Record compiler-owned semantics when conformance checking encounters a canonical structural
+// interface. Any stage or layout-metadata conformance marks the module as structural; stage
+// conformances additionally map the exact `invoke` witness back to its native stage.
 void SemanticsVisitor::registerStructuralRayTracingStageConformance(
     DeclRef<InterfaceDecl> superInterfaceDeclRef,
     WitnessTable* witnessTable)
@@ -141,6 +177,7 @@ void SemanticsVisitor::registerStructuralRayTracingStageConformance(
         stageKind);
 }
 
+// Return whether `stage` participates in the legacy ray-tracing pipeline entry-point model.
 static bool _isLegacyRayTracingStage(Stage stage)
 {
     switch (stage)
@@ -156,6 +193,9 @@ static bool _isLegacyRayTracingStage(Stage stage)
     }
 }
 
+// Classify a validated ray-tracing entry point as structural when it carries a separately retained
+// `invoke` method, and as legacy otherwise. This catches mixed use introduced through explicit
+// command-line or API entry-point requests rather than source attributes or calls.
 void diagnoseMixedRayTracingAPIUse(EntryPoint* entryPoint, DiagnosticSink* sink)
 {
     if (!_isLegacyRayTracingStage(entryPoint->getStage()))
@@ -173,6 +213,9 @@ void diagnoseMixedRayTracingAPIUse(EntryPoint* entryPoint, DiagnosticSink* sink)
         sink);
 }
 
+// Recursively register legacy ray-tracing entry points declared with source-level `[shader]`
+// attributes. These declarations need no entry-point request to establish which API family their
+// module uses.
 static void _registerAttributedLegacyEntryPoints(
     Linkage* linkage,
     Module* module,
@@ -208,6 +251,9 @@ static void _registerAttributedLegacyEntryPoints(
     }
 }
 
+// Diagnose an any-hit or intersection implementation that can transitively call
+// `RayTracer.callShader`. The structural stage contracts deliberately permit callable dispatch from
+// other stages, so only these two prohibited native stages need this focused reachability check.
 static void _diagnoseInvalidCallableDispatchStages(
     StructuralRayTracingDeclRegistry& registry,
     ContainerDecl* containerDecl,
@@ -243,6 +289,10 @@ static void _diagnoseInvalidCallableDispatchStages(
     }
 }
 
+// Diagnose inferred requirements that cannot execute in the native stage represented by a
+// structural `invoke` method. A reachable `callShader` from any-hit or intersection code already
+// receives the more precise diagnostic above, so suppress the generic capability diagnostic for
+// that same violation.
 static void _diagnoseInvalidStructuralStageCapabilities(
     StructuralRayTracingDeclRegistry& registry,
     ContainerDecl* containerDecl,
@@ -280,6 +330,9 @@ static void _diagnoseInvalidStructuralStageCapabilities(
     }
 }
 
+// Return the stage in which `functionDecl` is required to execute. A canonical `invoke`
+// implementation has an intrinsic structural stage. For an ordinary helper, lexical `[require]`
+// attributes may provide one uniquely implied stage; no unique stage returns `Count`.
 static StructuralRayTracingStageKind _getRequiredStructuralStage(
     StructuralRayTracingDeclRegistry& registry,
     FunctionDeclBase* functionDecl)
@@ -303,6 +356,11 @@ static StructuralRayTracingStageKind _getRequiredStructuralStage(
     return _getStructuralStage(getStageFromAtom(stageAtom));
 }
 
+// Diagnose direct stage-input parameters that disagree with the function's execution stage.
+//
+// Consider an unannotated helper whose first parameter is `ClosestHitInput<C>`. That input itself
+// restricts the helper to closest-hit code. A later `AnyHitInput<C>` parameter therefore conflicts,
+// just as it would if the helper had explicitly declared `[require(closesthit)]`.
 static void _diagnoseInvalidStructuralStageInputParameters(
     StructuralRayTracingDeclRegistry& registry,
     ContainerDecl* containerDecl,
@@ -346,6 +404,9 @@ static void _diagnoseInvalidStructuralStageInputParameters(
     }
 }
 
+// Run validations that require all declarations and call edges in `module` to be available. The
+// individual expression and conformance hooks populate the registry during checking; this function
+// consumes those records once per module.
 void diagnoseMixedRayTracingAPIsInModule(Linkage* linkage, Module* module, DiagnosticSink* sink)
 {
     auto& registry = linkage->getStructuralRayTracingDeclRegistry();
@@ -357,13 +418,23 @@ void diagnoseMixedRayTracingAPIsInModule(Linkage* linkage, Module* module, Diagn
     _diagnoseInvalidStructuralStageInputParameters(registry, module->getModuleDecl(), sink);
 }
 
+// Identify an `invoke` implementation from its enclosing conformance when the implementation body
+// is checked before that conformance has been registered globally.
+//
+// Consider this source:
+//
+//     struct Hit : rt::IClosestHitShader<Context>
+//     {
+//         void invoke(rt::ClosestHitInput<Context> input) { invoke(input); }
+//     }
+//
+// While checking the recursive call, `registerStructuralRayTracingStageConformance` may not have
+// run yet. The checked inheritance declaration already owns the canonical witness table, so use
+// that table's exact `invoke` requirement and cache the result for subsequent calls.
 static StructuralRayTracingStageKind _findStageImplementationFromParentConformance(
     StructuralRayTracingDeclRegistry& registry,
     FunctionDeclBase* functionDecl)
 {
-    // The body of `invoke` can be checked before its enclosing conformance has returned and
-    // registered the implementation. In that ordering, the checked inheritance witness table is
-    // already the source of truth, so read the exact `invoke` requirement from that table.
     Decl* parent = functionDecl->parentDecl;
     while (auto genericDecl = as<GenericDecl>(parent))
         parent = genericDecl->parentDecl;
@@ -391,6 +462,10 @@ static StructuralRayTracingStageKind _findStageImplementationFromParentConforman
     return StructuralRayTracingStageKind::Count;
 }
 
+// Return the concrete `invoke` implementation reached through a subtype witness. Entry-point
+// discovery uses inheritance facets, whose subtype witness may compose declared and transitive
+// conformances; `tryLookUpRequirementWitness` is the canonical operation for resolving the exact
+// interface requirement through that composition.
 static FunctionDeclBase* _getStageImplementationFromSubtypeWitness(
     ASTBuilder* astBuilder,
     const StructuralRayTracingDeclRegistry& registry,
@@ -407,6 +482,9 @@ static FunctionDeclBase* _getStageImplementationFromSubtypeWitness(
     return as<FunctionDeclBase>(invokeWitness.getDeclRef().getDecl());
 }
 
+// ## Struct-named entry-point discovery
+
+// Map the structural stage vocabulary to the compiler's established entry-point stage vocabulary.
 static Stage _getNativeStage(StructuralRayTracingStageKind kind)
 {
     switch (kind)
@@ -426,6 +504,8 @@ static Stage _getNativeStage(StructuralRayTracingStageKind kind)
     }
 }
 
+// Map a requested native entry-point stage back to a structural stage, returning `Count` for stages
+// that cannot be implemented by a structural ray-tracing stage struct.
 static StructuralRayTracingStageKind _getStructuralStage(Stage stage)
 {
     switch (stage)
@@ -445,6 +525,14 @@ static StructuralRayTracingStageKind _getStructuralStage(Stage stage)
     }
 }
 
+// Create the function-shaped adapter declaration required by the existing `EntryPoint` machinery.
+//
+// The user names a type such as `ClosestHit` as the entry point, while the rest of the front end
+// expects a `FuncDecl`. The adapter therefore inherits the type's source name and location and has
+// an intentionally empty, already-checked body. `findStructuralRayTracingEntryPointByName` returns
+// the real `invoke` declaration separately, and `EntryPoint` retains it as the semantic source of
+// the stage implementation. Later structural entry-point synthesis can derive target parameters
+// from that method without treating the empty adapter body as user code.
 static FuncDecl* _createStructuralEntryPointDecl(
     Linkage* linkage,
     Module* module,
@@ -477,6 +565,20 @@ static FuncDecl* _createStructuralEntryPointDecl(
     return funcDecl;
 }
 
+// Resolve a source-module type named by an entry-point request and select one canonical stage
+// conformance. `outFoundStruct` distinguishes "the name is not a local struct" (so ordinary
+// function lookup should continue) from "the struct is not a valid requested stage" (already
+// diagnosed). On success, the returned adapter uses the struct's name, `outInvokeMethod` receives
+// the selected witness, and `ioProfile` is inferred when the struct implements exactly one stage.
+//
+// Consider this source and request:
+//
+//     struct Shading : rt::IClosestHitShader<HitContext>, rt::IAnyHitShader<HitContext> { ... }
+//     // Command line: -entry Shading -stage closesthit
+//
+// Inheritance facets provide the canonical subtype witnesses for both interfaces. The requested
+// profile selects the closest-hit witness. Omitting `-stage` is diagnosed as ambiguous, whereas a
+// struct with only one stage conformance can infer the profile.
 DeclRef<FuncDecl> findStructuralRayTracingEntryPointByName(
     Linkage* linkage,
     Module* module,
@@ -496,10 +598,15 @@ DeclRef<FuncDecl> findStructuralRayTracingEntryPointByName(
     auto declRefExpr = as<DeclRefExpr>(expr);
     auto stageTypeDeclRef =
         declRefExpr ? declRefExpr->declRef.as<AggTypeDecl>() : DeclRef<AggTypeDecl>();
+    // Imported types are not entry points of this translation unit. Restricting discovery to the
+    // requested module also matches ordinary function entry-point lookup.
     if (!stageTypeDeclRef || getModule(stageTypeDeclRef.getDecl()) != module)
         return DeclRef<FuncDecl>();
 
     *outFoundStruct = true;
+
+    // Build a semantic context equivalent to the translation unit's normal checker context so
+    // conformance facets include witnesses supplied by imported modules.
     SharedSemanticsContext sharedContext(linkage, module, sink);
     for (auto dependency : module->getModuleDependencies())
     {
@@ -512,6 +619,8 @@ DeclRef<FuncDecl> findStructuralRayTracingEntryPointByName(
 
     FunctionDeclBase* stageImplementations[int(StructuralRayTracingStageKind::Count)] = {};
     auto stageType = DeclRefType::create(linkage->getASTBuilder(), stageTypeDeclRef);
+    // Inheritance facets, rather than direct base syntax, are the source of truth because a stage
+    // conformance can be inherited or composed through another interface.
     for (auto facet : visitor.getShared()->getInheritanceInfo(stageType).facets)
     {
         auto interfaceDeclRef = facet->origin.declRef.as<InterfaceDecl>();
@@ -548,6 +657,8 @@ DeclRef<FuncDecl> findStructuralRayTracingEntryPointByName(
 
     auto requestedStage = ioProfile.getStage();
     auto selectedStage = _getStructuralStage(requestedStage);
+    // An explicit stage must name one of the struct's implemented stage contracts. With no stage,
+    // inference is sound only when there is exactly one possible implementation.
     if (requestedStage != Stage::Unknown)
     {
         if (selectedStage == StructuralRayTracingStageKind::Count ||
@@ -572,6 +683,9 @@ DeclRef<FuncDecl> findStructuralRayTracingEntryPointByName(
     }
 
     bool hasInstanceField = false;
+    // Structural stages are invoked from their type and are never constructed as runtime objects.
+    // Reject instance state now because there would be no instance from which synthesized entry
+    // code could load it; effectively-static declarations remain valid configuration data.
     for (auto field : stageTypeDeclRef.getDecl()->getFields())
     {
         if (!isEffectivelyStatic(field))
@@ -586,6 +700,8 @@ DeclRef<FuncDecl> findStructuralRayTracingEntryPointByName(
     auto invokeMethod = as<FuncDecl>(stageImplementations[int(selectedStage)]);
     if (!invokeMethod)
     {
+        // Stage interfaces require ordinary methods. Reaching another callable declaration kind
+        // means the checked witness-table invariant was violated, rather than a user error.
         sink->diagnose(Diagnostics::InternalCompilerError{.location = stageTypeDeclRef.getLoc()});
         return DeclRef<FuncDecl>();
     }
@@ -595,6 +711,11 @@ DeclRef<FuncDecl> findStructuralRayTracingEntryPointByName(
     return makeDeclRef(funcDecl);
 }
 
+// ## Compile-time-only structural types
+
+// Classifies why a type cannot be represented as ordinary shader data. Stage structs name entry
+// points, stage inputs are zero-storage views of native built-ins, and metadata interfaces describe
+// program layout. `None` means the type has ordinary runtime semantics.
 enum class StructuralRayTracingRuntimeTypeKind
 {
     None,
@@ -603,6 +724,9 @@ enum class StructuralRayTracingRuntimeTypeKind
     Metadata,
 };
 
+// Return the stage for an exact canonical input-view type after removing source modifiers. This
+// deliberately does not classify arbitrary conforming or containing types; those shapes have
+// separate rules in `_findStructuralRuntimeType`.
 static StructuralRayTracingStageKind _getDirectStageInputKind(
     const StructuralRayTracingDeclRegistry& registry,
     Type* type)
@@ -614,6 +738,7 @@ static StructuralRayTracingStageKind _getDirectStageInputKind(
     return registry.getStageInputKind(typeDecl);
 }
 
+// Classify a canonical stage or layout-metadata interface by declaration identity.
 static StructuralRayTracingRuntimeTypeKind _getInterfaceRuntimeTypeKind(
     const StructuralRayTracingDeclRegistry& registry,
     InterfaceDecl* interfaceDecl)
@@ -625,6 +750,10 @@ static StructuralRayTracingRuntimeTypeKind _getInterfaceRuntimeTypeKind(
     return StructuralRayTracingRuntimeTypeKind::None;
 }
 
+// Classify `type` itself when it is a structural interface or conforms to one. Direct declared
+// bases cover declarations whose cached inheritance facets are not ready yet; the facet query then
+// covers transitive and composed conformances. Both paths ultimately compare canonical interface
+// declaration pointers through the registry.
 static StructuralRayTracingRuntimeTypeKind _getDirectStructuralRuntimeTypeKind(
     SemanticsVisitor* visitor,
     const StructuralRayTracingDeclRegistry& registry,
@@ -640,9 +769,9 @@ static StructuralRayTracingRuntimeTypeKind _getDirectStructuralRuntimeTypeKind(
             if (kind != StructuralRayTracingRuntimeTypeKind::None)
                 return kind;
 
-            // A parameter can be checked before inheritance facets have been cached for its
-            // concrete type. Inspect the declared bases as well so that the restriction does not
-            // depend on declaration-checking order.
+            // A variable can be checked before inheritance facets have been cached for its concrete
+            // type. Inspect checked base declarations as well so classification does not depend on
+            // declaration-checking order.
             for (auto inheritanceDecl :
                  typeDecl.getDecl()->getDirectMemberDeclsOfType<InheritanceDecl>())
             {
@@ -667,6 +796,19 @@ static StructuralRayTracingRuntimeTypeKind _getDirectStructuralRuntimeTypeKind(
     return StructuralRayTracingRuntimeTypeKind::None;
 }
 
+// Find the first compile-time-only structural type contained in `type`. The recursion follows every
+// shape that can introduce runtime storage: type packs, specialized struct fields, arrays,
+// optionals, pointers, and tuples.
+//
+// Consider `struct Wrapper<T> { T value; }` specialized as
+// `Wrapper<ClosestHitInput<Context>>`. The field must be queried through a member declaration
+// reference specialized to `Wrapper<...>`; reading the unspecialized field declaration would see
+// only `T` and allow the input view to acquire storage. `getMemberDeclRef` and `getType` preserve
+// that canonical substitution rather than reconstructing a parallel type shape.
+//
+// `seenDecls` is the active field-expansion stack. A declaration, rather than a runtime object, is
+// the unit that owns fields; stopping when the same declaration is reached prevents ordinary
+// recursive structures from causing unbounded semantic checking.
 static StructuralRayTracingRuntimeTypeKind _findStructuralRuntimeType(
     SemanticsVisitor* visitor,
     Type* type,
@@ -737,6 +879,7 @@ static StructuralRayTracingRuntimeTypeKind _findStructuralRuntimeType(
     return StructuralRayTracingRuntimeTypeKind::None;
 }
 
+// Start a fresh containment search for one independently checked type.
 static StructuralRayTracingRuntimeTypeKind _findStructuralRuntimeType(
     SemanticsVisitor* visitor,
     Type* type)
@@ -747,6 +890,8 @@ static StructuralRayTracingRuntimeTypeKind _findStructuralRuntimeType(
     return _findStructuralRuntimeType(visitor, type, seenDecls);
 }
 
+// Emit the diagnostic corresponding to a non-runtime structural category. `None` intentionally
+// emits nothing, allowing callers that already have a type to use this as their common final step.
 static void _diagnoseInvalidStructuralRayTracingRuntimeType(
     SemanticsVisitor* visitor,
     StructuralRayTracingRuntimeTypeKind kind,
@@ -771,6 +916,11 @@ static void _diagnoseInvalidStructuralRayTracingRuntimeType(
     }
 }
 
+// Diagnose a variable whose type would store a structural stage, input view, or layout value. The
+// only permitted variable form is an exact stage-input view passed as a read-only value parameter;
+// it models the compiler-provided input to stage code and therefore has no backing storage. Nested
+// views and `out`, `ref`, borrowed, or payload parameters would expose an address or write channel
+// and remain invalid.
 void SemanticsVisitor::diagnoseInvalidStructuralRayTracingVariableType(VarDeclBase* varDecl)
 {
     auto type = varDecl->type.type;
@@ -793,6 +943,9 @@ void SemanticsVisitor::diagnoseInvalidStructuralRayTracingVariableType(VarDeclBa
     _diagnoseInvalidStructuralRayTracingRuntimeType(this, kind, type, varDecl->loc);
 }
 
+// Diagnose a user-declared callable result that exposes a compile-time-only structural type.
+// Constructors have no explicit result channel: their constructed type is checked at the invoke
+// expression, which also provides the useful source location and avoids a duplicate diagnostic.
 void SemanticsVisitor::diagnoseInvalidStructuralRayTracingCallableResult(CallableDecl* callableDecl)
 {
     if (as<ConstructorDecl>(callableDecl))
@@ -807,6 +960,9 @@ void SemanticsVisitor::diagnoseInvalidStructuralRayTracingCallableResult(Callabl
     _diagnoseInvalidStructuralRayTracingRuntimeType(this, kind, type, location);
 }
 
+// Diagnose a property whose value type would expose any compile-time-only structural type. Unlike a
+// stage-input parameter, a property is a reusable value-producing API and cannot represent a native
+// stage input view safely.
 void SemanticsVisitor::diagnoseInvalidStructuralRayTracingPropertyType(PropertyDecl* propertyDecl)
 {
     auto type = propertyDecl->type.type;
@@ -817,6 +973,8 @@ void SemanticsVisitor::diagnoseInvalidStructuralRayTracingPropertyType(PropertyD
         propertyDecl->type.exp ? propertyDecl->type.exp->loc : propertyDecl->loc);
 }
 
+// Diagnose construction of any structural stage, stage-input, or layout type. Returning true tells
+// ordinary invocation checking that this call shape was recognized and already diagnosed.
 bool SemanticsVisitor::diagnoseInvalidStructuralRayTracingConstruction(InvokeExpr* invoke)
 {
     auto typeType = as<TypeType>(invoke->functionExpr->type);
@@ -832,6 +990,9 @@ bool SemanticsVisitor::diagnoseInvalidStructuralRayTracingConstruction(InvokeExp
     return true;
 }
 
+// Diagnose an invocation whose resolved result reveals a compile-time-only structural type. This
+// check is needed even when the generic callable's unspecialized return type was only a type
+// parameter; the invocation has the fully substituted result and is the canonical source of truth.
 bool SemanticsVisitor::diagnoseInvalidStructuralRayTracingInvokeResult(InvokeExpr* invoke)
 {
     auto kind = _findStructuralRuntimeType(this, invoke->type);
@@ -842,6 +1003,11 @@ bool SemanticsVisitor::diagnoseInvalidStructuralRayTracingInvokeResult(InvokeExp
     return true;
 }
 
+// Find the first resolved generic argument or nested argument whose type contains a stage-input
+// view. Runtime-storage traversal alone is insufficient here: a generic argument can carry a
+// forbidden type into specialization even when it does not appear in a value field. Resolved
+// `Type*` identity bounds the search across recursive substitutions, and concrete type packs are
+// expanded explicitly.
 static Type* _findStructuralStageInputInGenericArgument(
     SemanticsVisitor* visitor,
     Type* type,
@@ -896,6 +1062,12 @@ static Type* _findStructuralStageInputInGenericArgument(
     return nullptr;
 }
 
+// Diagnose a call whose substitution arguments contain a structural stage-input view.
+//
+// Consider `consume<Wrapper<ClosestHitInput<Context>>>()`. The invocation has no stage-input value
+// parameter, but its `DeclRef` substitution still specializes user code with the compiler-provided
+// view. Walking the resolved substitution arguments closes that escape path; returning true tells
+// the caller that invocation checking should stop after this diagnostic.
 bool SemanticsVisitor::diagnoseInvalidStructuralRayTracingGenericArguments(InvokeExpr* invoke)
 {
     auto functionDeclRef = as<DeclRefExpr>(invoke->functionExpr);
@@ -925,6 +1097,11 @@ bool SemanticsVisitor::diagnoseInvalidStructuralRayTracingGenericArguments(Invok
     return true;
 }
 
+// Diagnose an ordinary source call to a compiler-managed stage `invoke` implementation. The
+// compiler calls this method only through a selected structural entry point; direct calls would
+// bypass native stage scheduling and make its built-in input view unavailable. If global
+// conformance registration has not run yet, inspect the enclosing checked witness table so the rule
+// is independent of declaration-checking order.
 bool SemanticsVisitor::diagnoseDirectStructuralRayTracingStageInvoke(
     InvokeExpr* invoke,
     FunctionDeclBase* functionDecl)

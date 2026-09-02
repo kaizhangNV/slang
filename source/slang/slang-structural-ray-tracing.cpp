@@ -4,9 +4,23 @@
 #include "slang-ast-decl.h"
 #include "slang-module.h"
 
+// This file establishes the nominal bridge between the separately compiled `slang.raytracing`
+// source module and compiler semantics. Declaration names are used only while loading the packaged,
+// trusted module. The resulting declaration pointers become the source of truth for every later
+// AST query, which prevents an identically named declaration in user code from being mistaken for
+// a compiler-owned ray-tracing contract.
+//
+// The same per-linkage registry also joins facts produced at different points in semantic checking.
+// Conformance checking records stage implementations, expression checking records call edges and
+// ray-tracing API uses, and module-level validation consumes those records after declarations have
+// been checked.
+
 namespace Slang
 {
 
+// ## Trusted declaration discovery
+
+// Return the public stage-interface name used to bootstrap `kind` from the trusted source module.
 const char* getStructuralRayTracingStageInterfaceName(StructuralRayTracingStageKind kind)
 {
     switch (kind)
@@ -26,6 +40,7 @@ const char* getStructuralRayTracingStageInterfaceName(StructuralRayTracingStageK
     }
 }
 
+// Return the canonical input-view type name associated with `kind`.
 static const char* _getStageInputTypeName(StructuralRayTracingStageKind kind)
 {
     switch (kind)
@@ -45,6 +60,7 @@ static const char* _getStageInputTypeName(StructuralRayTracingStageKind kind)
     }
 }
 
+// Return the canonical layout-metadata interface name associated with `kind`.
 static const char* _getMetadataInterfaceName(StructuralRayTracingMetadataKind kind)
 {
     switch (kind)
@@ -70,6 +86,10 @@ static const char* _getMetadataInterfaceName(StructuralRayTracingMetadataKind ki
     }
 }
 
+// Find `declName` below an `rt` namespace in `container`. Generic declarations are represented by
+// an outer `GenericDecl`, so compare the name of their inner declaration while continuing recursion
+// through the original container. This name-based search is safe only because its caller supplies
+// the trusted packaged module; all subsequent recognition uses the returned declaration pointer.
 static Decl* _findNamedDeclInContainer(
     ContainerDecl* container,
     Name* rtName,
@@ -100,6 +120,7 @@ static Decl* _findNamedDeclInContainer(
     return nullptr;
 }
 
+// Find a canonical declaration by source name in the trusted module's `rt` namespace.
 static Decl* _findNamedDecl(Module* module, const char* name)
 {
     auto namePool = module->getASTBuilder()->getNamePool();
@@ -110,17 +131,22 @@ static Decl* _findNamedDecl(Module* module, const char* name)
         false);
 }
 
+// Find the public stage interface that defines the source contract for `kind`.
 static InterfaceDecl* _findStageInterface(Module* module, StructuralRayTracingStageKind kind)
 {
     return as<InterfaceDecl>(
         _findNamedDecl(module, getStructuralRayTracingStageInterfaceName(kind)));
 }
 
+// Find the zero-storage input-view type passed to the `invoke` requirement for `kind`.
 static AggTypeDecl* _findStageInputType(Module* module, StructuralRayTracingStageKind kind)
 {
     return as<AggTypeDecl>(_findNamedDecl(module, _getStageInputTypeName(kind)));
 }
 
+// Find the direct `invoke` requirement declared by `interfaceDecl`. The registry calls this with
+// the internal `IIntersectionStage` interface for intersection shaders because the public
+// `IIntersectionShader` inherits that common requirement instead of redeclaring it.
 static FunctionDeclBase* _findStageInvokeRequirement(InterfaceDecl* interfaceDecl)
 {
     for (auto member : interfaceDecl->getDirectMemberDecls())
@@ -141,6 +167,9 @@ bool StructuralRayTracingDeclRegistry::registerTrustedModule(
     Module* module,
     StructuralRayTracingStageKind* outMissingStage)
 {
+    // Resolve into local arrays first. Publishing only a complete set ensures `isInitialized()` is
+    // a reliable invariant for consumers: if it is true, every stage has an interface, input view,
+    // and exact `invoke` requirement.
     m_trustedModuleDecl = module->getModuleDecl();
     m_intersectionStageInterface = as<InterfaceDecl>(_findNamedDecl(module, "IIntersectionStage"));
     m_rayTracerType = as<AggTypeDecl>(_findNamedDecl(module, "RayTracer"));
@@ -180,6 +209,8 @@ bool StructuralRayTracingDeclRegistry::registerTrustedModule(
     }
     return true;
 }
+
+// ## Canonical declaration queries
 
 bool StructuralRayTracingDeclRegistry::isTrustedModule(Module* module) const
 {
@@ -245,6 +276,9 @@ StructuralRayTracingMetadataKind StructuralRayTracingDeclRegistry::getMetadataKi
     return StructuralRayTracingMetadataKind::Count;
 }
 
+// Return whether `functionDecl` is a method with `expectedName` declared in an extension of the
+// canonical `RayTracer` type in the trusted module. Both provenance checks matter: matching only
+// the method and receiver names would let user code spoof a compiler-recognized trace operation.
 static bool _isRayTracerMethod(
     FunctionDeclBase* functionDecl,
     ModuleDecl* trustedModuleDecl,
@@ -259,6 +293,8 @@ static bool _isRayTracerMethod(
 
     ExtensionDecl* extensionDecl = nullptr;
     ModuleDecl* moduleDecl = nullptr;
+    // A generic method may have wrapper declarations between the function and its extension. Walk
+    // to the module while retaining the nearest enclosing extension that supplies the receiver.
     for (auto parent = functionDecl->parentDecl; parent; parent = parent->parentDecl)
     {
         if (!extensionDecl)
@@ -322,6 +358,8 @@ StructuralRayTracingStageKind StructuralRayTracingDeclRegistry::getStageKind(
     return StructuralRayTracingStageKind::Count;
 }
 
+// ## Cross-checker semantic records
+
 bool StructuralRayTracingDeclRegistry::registerAPIUse(
     Module* module,
     RayTracingAPIFamily family,
@@ -337,6 +375,9 @@ bool StructuralRayTracingDeclRegistry::registerAPIUse(
         family == RayTracingAPIFamily::Structural ? usage.structuralDecl : usage.legacyDecl;
     auto otherDecl =
         family == RayTracingAPIFamily::Structural ? usage.legacyDecl : usage.structuralDecl;
+
+    // Preserve the first declaration from each family. It gives a stable pair of locations for the
+    // one mixed-API diagnostic regardless of how many later declarations use either API.
     if (!currentDecl)
         currentDecl = decl;
     if (!otherDecl || usage.diagnosed)
@@ -356,6 +397,9 @@ void StructuralRayTracingDeclRegistry::registerFunctionCall(
         return;
 
     m_functionCallees.getOrAddValue(caller, HashSet<FunctionDeclBase*>()).add(callee);
+
+    // A location is needed only for `callShader`, where the eventual diagnostic should identify
+    // the prohibited operation rather than the stage function from which reachability started.
     if (isCallShaderMethod(callee))
         m_callShaderCallers[caller] = callLoc;
 }
@@ -370,6 +414,8 @@ bool StructuralRayTracingDeclRegistry::findReachableCallShader(
     HashSet<FunctionDeclBase*> visited;
     List<FunctionDeclBase*> workList;
     workList.add(function);
+    // Traverse each recorded function at most once. The call graph may contain recursion, while a
+    // work-list index gives deterministic termination without requiring recursive C++ calls.
     for (Index i = 0; i < workList.getCount(); ++i)
     {
         auto current = workList[i];

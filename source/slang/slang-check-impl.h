@@ -2594,14 +2594,30 @@ public:
         DeclRef<InterfaceDecl> superInterfaceDeclRef,
         SubtypeWitness* subTypeConformsToSuperInterfaceWitness);
 
+    /// Records a successfully checked conformance to a compiler-owned structural ray-tracing
+    /// interface. For stage interfaces, the exact `invoke` witness becomes the dispatch target.
     void registerStructuralRayTracingStageConformance(
         DeclRef<InterfaceDecl> superInterfaceDeclRef,
         WitnessTable* witnessTable);
+
+    /// Rejects compiler-only structural types in stored variables and parameter directions. A
+    /// direct, read-only stage-input value parameter is the sole runtime-facing exception.
     void diagnoseInvalidStructuralRayTracingVariableType(VarDeclBase* varDecl);
+
+    /// Rejects compiler-only structural types returned from a callable declaration.
     void diagnoseInvalidStructuralRayTracingCallableResult(CallableDecl* callableDecl);
+
+    /// Rejects properties that expose compiler-only structural types.
     void diagnoseInvalidStructuralRayTracingPropertyType(PropertyDecl* propertyDecl);
+
+    /// Rejects source construction of structural stage, stage-input, and metadata types before
+    /// invocation resolution can rewrite the constructor-shaped expression.
     bool diagnoseInvalidStructuralRayTracingConstruction(InvokeExpr* invoke);
+
+    /// Rejects a resolved invocation whose substituted result is a compiler-only structural type.
     bool diagnoseInvalidStructuralRayTracingInvokeResult(InvokeExpr* invoke);
+
+    /// Rejects structural stage-input types hidden inside resolved generic arguments.
     bool diagnoseInvalidStructuralRayTracingGenericArguments(InvokeExpr* invoke);
 
     void _checkDifferentialConformance(
@@ -3667,6 +3683,7 @@ public:
         InvokeExpr* invoke,
         FuncType* funcType,
         FunctionDeclBase* funcDeclBase);
+    /// Rejects a direct user call to an `invoke` implementation reserved for compiler dispatch.
     bool diagnoseDirectStructuralRayTracingStageInvoke(
         InvokeExpr* invoke,
         FunctionDeclBase* functionDecl);
@@ -3795,6 +3812,13 @@ public:
     SubtypeWitness* isFuncBackwardDifferentiable(DeclRef<CallableDecl> declRef);
 };
 
+/// Resolves an entry-point name that denotes a module-local structural stage `struct`.
+///
+/// The requested profile selects one of the stage interfaces implemented by the struct. On
+/// success, the result is a compiler-created entry-point declaration named after the struct, while
+/// `outInvokeMethod` identifies the source method that will eventually be dispatched. A true
+/// `outFoundStruct` distinguishes an invalid structural-stage request from an ordinary function
+/// name so callers do not silently fall back to legacy entry-point lookup.
 DeclRef<FuncDecl> findStructuralRayTracingEntryPointByName(
     Linkage* linkage,
     Module* module,
@@ -3803,8 +3827,17 @@ DeclRef<FuncDecl> findStructuralRayTracingEntryPointByName(
     DiagnosticSink* sink,
     bool* outFoundStruct,
     FuncDecl** outInvokeMethod);
+/// Records an explicitly selected ray-tracing entry point and diagnoses mixed legacy/structural
+/// API use in its module.
 void diagnoseMixedRayTracingAPIUse(EntryPoint* entryPoint, DiagnosticSink* sink);
+
+/// Completes module-wide structural-stage checks after declarations and entry points are known.
+/// This scan catches attributed legacy stages that were not explicitly selected, as well as
+/// invalid reachable calls and stage-input parameters.
 void diagnoseMixedRayTracingAPIsInModule(Linkage* linkage, Module* module, DiagnosticSink* sink);
+
+/// Records a resolved call edge for transitive structural-stage validation and classifies direct
+/// calls to structural dispatch or legacy `TraceRay` operations for same-module API diagnostics.
 void registerRayTracingAPICall(
     Linkage* linkage,
     FunctionDeclBase* caller,

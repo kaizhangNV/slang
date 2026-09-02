@@ -4246,6 +4246,9 @@ void SemanticsVisitor::_checkAliasedOutArguments(
 
 Expr* SemanticsVisitor::CheckInvokeExprWithCheckedOperands(InvokeExpr* expr)
 {
+    // Diagnose construction while the callee still denotes a type. Overload resolution can rewrite
+    // a constructor-shaped invocation into a conversion or its argument, which would otherwise
+    // hide an attempt to create a compiler-provided stage input or metadata object.
     if (diagnoseInvalidStructuralRayTracingConstruction(expr))
         return CreateErrorExpr(expr);
 
@@ -4265,6 +4268,8 @@ Expr* SemanticsVisitor::CheckInvokeExprWithCheckedOperands(InvokeExpr* expr)
         if (expr->arguments.getCount() == 1 && invoke == expr->arguments[0])
             return rs;
 
+        // Check the resolved invocation, not only its source declaration. Generic substitution can
+        // reveal a compiler-only result type or hide a stage input inside a generic argument.
         if (diagnoseInvalidStructuralRayTracingInvokeResult(invoke))
             return CreateErrorExpr(invoke);
 
@@ -4288,6 +4293,9 @@ Expr* SemanticsVisitor::CheckInvokeExprWithCheckedOperands(InvokeExpr* expr)
             if (funcDeclRefExpr)
                 funcDeclBase = as<FunctionDeclBase>(funcDeclRefExpr->declRef.getDecl());
 
+            // Record the resolved caller-to-callee edge. The structural registry uses canonical
+            // declarations to find transitive stage requirements and to diagnose a module that
+            // combines structural dispatch with the legacy pipeline API.
             registerRayTracingAPICall(
                 getLinkage(),
                 m_parentFunc,
@@ -4295,6 +4303,8 @@ Expr* SemanticsVisitor::CheckInvokeExprWithCheckedOperands(InvokeExpr* expr)
                 invoke->functionExpr->loc,
                 getSink());
 
+            // A stage's `invoke` method is a compiler dispatch target, even when the current shader
+            // happens to have a compatible native stage. User code must not call it directly.
             if (funcDeclBase && diagnoseDirectStructuralRayTracingStageInvoke(invoke, funcDeclBase))
             {
                 return CreateErrorExpr(invoke);

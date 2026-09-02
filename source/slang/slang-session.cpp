@@ -1791,10 +1791,12 @@ RefPtr<Module> Linkage::findOrImportModule(
                 {
                     if (moduleName->text == "slang/raytracing")
                     {
-                        // Only the packaged standard-module fallback is trusted to define the
-                        // compiler-owned structural ray-tracing interfaces. A module found through
-                        // an ordinary user search path must remain an ordinary source module even
-                        // if it uses the same import name.
+                        // Only the module loaded from Slang's packaged standard-module directory is
+                        // trusted to define the compiler-owned structural ray-tracing interfaces.
+                        // Normal user search paths run before this fallback, so a user module with
+                        // the same import name remains ordinary source code and never reaches this
+                        // registration point. Later semantic checking and IR lowering compare exact
+                        // declarations from this registry instead of trusting names or attributes.
                         StructuralRayTracingStageKind missingStage;
                         if (!m_structuralRayTracingDeclRegistry.registerTrustedModule(
                                 module,

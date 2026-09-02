@@ -5372,6 +5372,8 @@ IRInterfaceType* IRBuilder::createInterfaceType(UInt operandCount, IRInst* const
 
 IRInterfaceType* IRBuilder::createInterfaceType(IROp op, UInt operandCount, IRInst* const* operands)
 {
+    // Interface subclasses share the same operand representation and nominal allocation path. The
+    // assertion prevents this overload from becoming a general way to create unrelated type ops.
     SLANG_ASSERT(IRInterfaceType::isaImpl(op));
     IRInterfaceType* interfaceType =
         createInst<IRInterfaceType>(this, op, getTypeKind(), operandCount, operands);
@@ -7886,6 +7888,8 @@ static bool shouldFoldInstIntoUses(IRDumpContext* context, IRInst* inst)
     if (as<IRConstant>(inst))
         return true;
 
+    // Interface declarations are nominal globals, including compiler-owned structural-stage
+    // subclasses. Keep their definition visible instead of folding it into each use in IR dumps.
     if (as<IRInterfaceType>(inst))
         return false;
 
@@ -8575,6 +8579,8 @@ static bool _areTypeOperandsEqual(IRInst* a, IRInst* b)
 
 bool isNominalOp(IROp op)
 {
+    // The structural stage-interface opcodes have the same nominal identity rules as an ordinary
+    // interface even though an exact-op switch would not match `kIROp_InterfaceType`.
     if (IRInterfaceType::isaImpl(op))
         return true;
 
