@@ -66,7 +66,6 @@ public interface IHitGroup
     /// The procedural intersection stage, or `NoIntersection<Context>` when traversal supplies the
     /// primitive intersection.
     associatedtype Intersection : IIntersectionStage<Context>;
-
 }
 
 /// Describes one logical miss-group record and its miss stage.
@@ -107,7 +106,7 @@ public interface ICallableGroup
 /// program has no hit groups.
 /// @category raytracing
 [sealed]
-public interface IHitGroupList<TraceContext>
+internal interface IHitGroupList<TraceContext>
     where TraceContext : ITraceContext
 {
     /// The number of group types in the list, independent of their explicit slot indices.
@@ -120,7 +119,7 @@ public interface IHitGroupList<TraceContext>
 /// program has no miss groups.
 /// @category raytracing
 [sealed]
-public interface IMissGroupList<TraceContext>
+internal interface IMissGroupList<TraceContext>
     where TraceContext : ITraceContext
 {
     /// The number of group types in the list, independent of their explicit slot indices.
@@ -133,7 +132,7 @@ public interface IMissGroupList<TraceContext>
 /// `NoCallableGroups` when the program has no callable groups.
 /// @category raytracing
 [sealed]
-public interface ICallableGroupList<TraceContext>
+internal interface ICallableGroupList<TraceContext>
     where TraceContext : ITraceContext
 {
     /// The number of group types in the list, independent of their explicit slot indices.

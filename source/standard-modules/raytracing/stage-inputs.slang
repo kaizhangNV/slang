@@ -8,6 +8,268 @@ implementing raytracing;
 namespace rt
 {
 
+// Keep each native system-value lookup in one helper so every stage-input property uses the same
+// target mapping. Force-inlining preserves the original property behavior: the native intrinsic
+// remains at the property-use site, and its capability requirement is propagated to that caller.
+
+/// Returns the minimum valid distance for the current ray.
+[ForceInline]
+internal float getStageInputMinDistance()
+{
+    __target_switch
+    {
+    case hlsl:
+    case glsl:
+    case spirv:
+    case cuda:
+        return RayTMin();
+    default:
+        return 0.0;
+    }
+}
+
+/// Returns the current hit distance or traversal upper bound, depending on the stage.
+[ForceInline]
+internal float getStageInputCurrentDistance()
+{
+    __target_switch
+    {
+    case hlsl:
+    case glsl:
+    case spirv:
+    case cuda:
+        return RayTCurrent();
+    default:
+        return 0.0;
+    }
+}
+
+/// Returns the classification of the current candidate or committed hit.
+[ForceInline]
+internal uint getStageInputHitKind()
+{
+    __target_switch
+    {
+    case hlsl:
+    case glsl:
+    case spirv:
+    case cuda:
+        return HitKind();
+    default:
+        return 0;
+    }
+}
+
+/// Returns the flags supplied to the current trace operation.
+[ForceInline]
+internal uint getStageInputRayFlags()
+{
+    __target_switch
+    {
+    case hlsl:
+    case glsl:
+    case spirv:
+    case cuda:
+        return RayFlags();
+    default:
+        return 0;
+    }
+}
+
+/// Returns the index of the current primitive within its geometry.
+[ForceInline]
+internal uint getStageInputPrimitiveIndex()
+{
+    __target_switch
+    {
+    case hlsl:
+    case glsl:
+    case spirv:
+    case cuda:
+        return PrimitiveIndex();
+    default:
+        return 0;
+    }
+}
+
+/// Returns the index of the current geometry within its primitive acceleration structure.
+[ForceInline]
+internal uint getStageInputGeometryIndex()
+{
+    __target_switch
+    {
+    case hlsl:
+    case glsl:
+    case spirv:
+        return GeometryIndex();
+    default:
+        return 0;
+    }
+}
+
+/// Returns the origin of the current ray in world space.
+[ForceInline]
+internal float3 getStageInputWorldSpaceOrigin()
+{
+    __target_switch
+    {
+    case hlsl:
+    case glsl:
+    case spirv:
+    case cuda:
+        return WorldRayOrigin();
+    default:
+        return 0.0;
+    }
+}
+
+/// Returns the direction of the current ray in world space.
+[ForceInline]
+internal float3 getStageInputWorldSpaceDirection()
+{
+    __target_switch
+    {
+    case hlsl:
+    case glsl:
+    case spirv:
+    case cuda:
+        return WorldRayDirection();
+    default:
+        return 0.0;
+    }
+}
+
+/// Returns the three-dimensional launch index of the current ray dispatch.
+[ForceInline]
+internal uint3 getStageInputDispatchRaysIndex()
+{
+    __target_switch
+    {
+    case hlsl:
+    case glsl:
+    case spirv:
+    case cuda:
+        return DispatchRaysIndex();
+    default:
+        return 0;
+    }
+}
+
+/// Returns the dimensions of the current ray dispatch.
+[ForceInline]
+internal uint3 getStageInputDispatchRaysDimensions()
+{
+    __target_switch
+    {
+    case hlsl:
+    case glsl:
+    case spirv:
+    case cuda:
+        return DispatchRaysDimensions();
+    default:
+        return 0;
+    }
+}
+
+/// Returns the motion-interpolation time of the current ray.
+[ForceInline]
+internal float getStageInputRayTime()
+{
+    __target_switch
+    {
+    case glsl:
+    case spirv:
+        return RayCurrentTime();
+    default:
+        return 0.0;
+    }
+}
+
+/// Returns the index of the current instance in its acceleration structure.
+[ForceInline]
+internal uint getStageInputInstanceIndex()
+{
+    __target_switch
+    {
+    case hlsl:
+    case glsl:
+    case spirv:
+    case cuda:
+        return InstanceIndex();
+    default:
+        return 0;
+    }
+}
+
+/// Returns the application-provided identifier of the current instance.
+[ForceInline]
+internal uint getStageInputInstanceID()
+{
+    __target_switch
+    {
+    case hlsl:
+    case glsl:
+    case spirv:
+    case cuda:
+        return InstanceID();
+    default:
+        return 0;
+    }
+}
+
+/// Returns the current ray transformed into object space.
+[ForceInline]
+internal RayDesc getStageInputObjectSpaceRay()
+{
+    RayDesc result = {};
+    __target_switch
+    {
+    case hlsl:
+    case glsl:
+    case spirv:
+    case cuda:
+        result.origin = ObjectRayOrigin();
+        result.tMin = RayTMin();
+        result.direction = ObjectRayDirection();
+        result.tMax = RayTCurrent();
+    default:
+        break;
+    }
+    return result;
+}
+
+/// Returns the transform from the current instance's object space to world space.
+[ForceInline]
+internal float4x3 getStageInputObjectToWorld()
+{
+    __target_switch
+    {
+    case hlsl:
+    case glsl:
+    case spirv:
+    case cuda:
+        return ObjectToWorld4x3();
+    default:
+        return 0.0;
+    }
+}
+
+/// Returns the transform from world space to the current instance's object space.
+[ForceInline]
+internal float4x3 getStageInputWorldToObject()
+{
+    __target_switch
+    {
+    case hlsl:
+    case glsl:
+    case spirv:
+    case cuda:
+        return WorldToObject4x3();
+    default:
+        return 0.0;
+    }
+}
+
 // These types must remain storage-free. The compiler maps an accessed property to the corresponding
 // entry-point parameter or system value instead of constructing an input object in memory. A
 // default target-switch arm is only a well-formed source placeholder for a property that target
@@ -37,181 +299,62 @@ public struct ClosestHitInput<Context>
     /// The minimum valid intersection distance for the current ray.
     public property float minDistance
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return RayTMin();
-            default:
-                return 0.0;
-            }
-        }
+        get { return getStageInputMinDistance(); }
     }
 
     /// The distance along the ray to the committed closest hit.
     public property float distance
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return RayTCurrent();
-            default:
-                return 0.0;
-            }
-        }
+        get { return getStageInputCurrentDistance(); }
     }
 
     /// The hit classification reported by traversal or by the procedural intersection stage.
     public property uint hitKind
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return HitKind();
-            default:
-                return 0;
-            }
-        }
+        get { return getStageInputHitKind(); }
     }
 
     /// The `RAY_FLAG` values used for the current trace.
     public property uint rayFlags
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return RayFlags();
-            default:
-                return 0;
-            }
-        }
+        get { return getStageInputRayFlags(); }
     }
 
     /// The zero-based index of the intersected primitive within its geometry.
     public property uint primitiveIndex
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return PrimitiveIndex();
-            default:
-                return 0;
-            }
-        }
+        get { return getStageInputPrimitiveIndex(); }
     }
 
     /// The zero-based index of the intersected geometry within its primitive acceleration
     /// structure.
     public property uint geometryIndex
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-                return GeometryIndex();
-            default:
-                return 0;
-            }
-        }
+        get { return getStageInputGeometryIndex(); }
     }
 
     /// The origin of the current ray in world space.
     public property float3 worldSpaceOrigin
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return WorldRayOrigin();
-            default:
-                return 0.0;
-            }
-        }
+        get { return getStageInputWorldSpaceOrigin(); }
     }
 
     /// The direction of the current ray in world space.
     public property float3 worldSpaceDirection
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return WorldRayDirection();
-            default:
-                return 0.0;
-            }
-        }
+        get { return getStageInputWorldSpaceDirection(); }
     }
 
     /// The three-dimensional launch index of the ray-generation invocation.
     public property uint3 dispatchRaysIndex
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return DispatchRaysIndex();
-            default:
-                return 0;
-            }
-        }
+        get { return getStageInputDispatchRaysIndex(); }
     }
 
     /// The dimensions of the ray dispatch that launched the current trace.
     public property uint3 dispatchRaysDimensions
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return DispatchRaysDimensions();
-            default:
-                return 0;
-            }
-        }
+        get { return getStageInputDispatchRaysDimensions(); }
     }
 }
 
@@ -222,17 +365,7 @@ public extension<Context> ClosestHitInput<Context>
     /// The motion-interpolation time of the current ray.
     public property float time
     {
-        get
-        {
-            __target_switch
-            {
-            case glsl:
-            case spirv:
-                return RayCurrentTime();
-            default:
-                return 0.0;
-            }
-        }
+        get { return getStageInputRayTime(); }
     }
 }
 
@@ -243,37 +376,13 @@ public extension<Context> ClosestHitInput<Context>
     /// The zero-based index of the current instance in its acceleration structure.
     public property uint instanceIndex
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return InstanceIndex();
-            default:
-                return 0;
-            }
-        }
+        get { return getStageInputInstanceIndex(); }
     }
 
     /// The application-provided identifier of the current instance.
     public property uint instanceID
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return InstanceID();
-            default:
-                return 0;
-            }
-        }
+        get { return getStageInputInstanceID(); }
     }
 
     /// The current ray transformed into the object space of the hit instance.
@@ -281,60 +390,19 @@ public extension<Context> ClosestHitInput<Context>
     /// Its maximum distance is the committed hit distance.
     public property RayDesc objectSpaceRay
     {
-        get
-        {
-            RayDesc result = {};
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                result.origin = ObjectRayOrigin();
-                result.tMin = RayTMin();
-                result.direction = ObjectRayDirection();
-                result.tMax = RayTCurrent();
-            default:
-                break;
-            }
-            return result;
-        }
+        get { return getStageInputObjectSpaceRay(); }
     }
 
     /// The transform from the current instance's object space to world space.
     public property float4x3 objectToWorld
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return ObjectToWorld4x3();
-            default:
-                return 0.0;
-            }
-        }
+        get { return getStageInputObjectToWorld(); }
     }
 
     /// The transform from world space to the current instance's object space.
     public property float4x3 worldToObject
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return WorldToObject4x3();
-            default:
-                return 0.0;
-            }
-        }
+        get { return getStageInputWorldToObject(); }
     }
 }
 
@@ -399,180 +467,61 @@ public struct AnyHitInput<Context>
     /// The minimum valid intersection distance for the current ray.
     public property float minDistance
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return RayTMin();
-            default:
-                return 0.0;
-            }
-        }
+        get { return getStageInputMinDistance(); }
     }
 
     /// The distance along the ray to the candidate intersection.
     public property float distance
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return RayTCurrent();
-            default:
-                return 0.0;
-            }
-        }
+        get { return getStageInputCurrentDistance(); }
     }
 
     /// The hit classification reported by traversal or by the procedural intersection stage.
     public property uint hitKind
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return HitKind();
-            default:
-                return 0;
-            }
-        }
+        get { return getStageInputHitKind(); }
     }
 
     /// The `RAY_FLAG` values used for the current trace.
     public property uint rayFlags
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return RayFlags();
-            default:
-                return 0;
-            }
-        }
+        get { return getStageInputRayFlags(); }
     }
 
     /// The zero-based index of the candidate primitive within its geometry.
     public property uint primitiveIndex
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return PrimitiveIndex();
-            default:
-                return 0;
-            }
-        }
+        get { return getStageInputPrimitiveIndex(); }
     }
 
     /// The zero-based index of the candidate geometry within its primitive acceleration structure.
     public property uint geometryIndex
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-                return GeometryIndex();
-            default:
-                return 0;
-            }
-        }
+        get { return getStageInputGeometryIndex(); }
     }
 
     /// The origin of the current ray in world space.
     public property float3 worldSpaceOrigin
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return WorldRayOrigin();
-            default:
-                return 0.0;
-            }
-        }
+        get { return getStageInputWorldSpaceOrigin(); }
     }
 
     /// The direction of the current ray in world space.
     public property float3 worldSpaceDirection
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return WorldRayDirection();
-            default:
-                return 0.0;
-            }
-        }
+        get { return getStageInputWorldSpaceDirection(); }
     }
 
     /// The three-dimensional launch index of the ray-generation invocation.
     public property uint3 dispatchRaysIndex
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return DispatchRaysIndex();
-            default:
-                return 0;
-            }
-        }
+        get { return getStageInputDispatchRaysIndex(); }
     }
 
     /// The dimensions of the ray dispatch that launched the current trace.
     public property uint3 dispatchRaysDimensions
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return DispatchRaysDimensions();
-            default:
-                return 0;
-            }
-        }
+        get { return getStageInputDispatchRaysDimensions(); }
     }
 
     /// Rejects the current candidate intersection and continues traversal.
@@ -613,17 +562,7 @@ public extension<Context> AnyHitInput<Context>
     /// The motion-interpolation time of the current ray.
     public property float time
     {
-        get
-        {
-            __target_switch
-            {
-            case glsl:
-            case spirv:
-                return RayCurrentTime();
-            default:
-                return 0.0;
-            }
-        }
+        get { return getStageInputRayTime(); }
     }
 }
 
@@ -634,37 +573,13 @@ public extension<Context> AnyHitInput<Context>
     /// The zero-based index of the current instance in its acceleration structure.
     public property uint instanceIndex
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return InstanceIndex();
-            default:
-                return 0;
-            }
-        }
+        get { return getStageInputInstanceIndex(); }
     }
 
     /// The application-provided identifier of the current instance.
     public property uint instanceID
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return InstanceID();
-            default:
-                return 0;
-            }
-        }
+        get { return getStageInputInstanceID(); }
     }
 
     /// The current ray transformed into the object space of the candidate instance.
@@ -672,60 +587,19 @@ public extension<Context> AnyHitInput<Context>
     /// Its maximum distance is the candidate intersection distance.
     public property RayDesc objectSpaceRay
     {
-        get
-        {
-            RayDesc result = {};
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                result.origin = ObjectRayOrigin();
-                result.tMin = RayTMin();
-                result.direction = ObjectRayDirection();
-                result.tMax = RayTCurrent();
-            default:
-                break;
-            }
-            return result;
-        }
+        get { return getStageInputObjectSpaceRay(); }
     }
 
     /// The transform from the current instance's object space to world space.
     public property float4x3 objectToWorld
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return ObjectToWorld4x3();
-            default:
-                return 0.0;
-            }
-        }
+        get { return getStageInputObjectToWorld(); }
     }
 
     /// The transform from world space to the current instance's object space.
     public property float4x3 worldToObject
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return WorldToObject4x3();
-            default:
-                return 0.0;
-            }
-        }
+        get { return getStageInputWorldToObject(); }
     }
 }
 
@@ -784,37 +658,13 @@ public struct IntersectionInput<Context>
     /// The minimum valid intersection distance for the current ray.
     public property float minDistance
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return RayTMin();
-            default:
-                return 0.0;
-            }
-        }
+        get { return getStageInputMinDistance(); }
     }
 
     /// The `RAY_FLAG` values used for the current trace.
     public property uint rayFlags
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return RayFlags();
-            default:
-                return 0;
-            }
-        }
+        get { return getStageInputRayFlags(); }
     }
 
     /// The current ray transformed into the object space of the tested instance.
@@ -823,131 +673,43 @@ public struct IntersectionInput<Context>
     /// ray's active interval is not accepted.
     public property RayDesc objectSpaceRay
     {
-        get
-        {
-            RayDesc result = {};
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                result.origin = ObjectRayOrigin();
-                result.tMin = RayTMin();
-                result.direction = ObjectRayDirection();
-                result.tMax = RayTCurrent();
-            default:
-                break;
-            }
-            return result;
-        }
+        get { return getStageInputObjectSpaceRay(); }
     }
 
     /// The zero-based index of the tested primitive within its geometry.
     public property uint primitiveIndex
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return PrimitiveIndex();
-            default:
-                return 0;
-            }
-        }
+        get { return getStageInputPrimitiveIndex(); }
     }
 
     /// The zero-based index of the tested geometry within its primitive acceleration structure.
     public property uint geometryIndex
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-                return GeometryIndex();
-            default:
-                return 0;
-            }
-        }
+        get { return getStageInputGeometryIndex(); }
     }
 
     /// The origin of the current ray in world space.
     public property float3 worldSpaceOrigin
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return WorldRayOrigin();
-            default:
-                return 0.0;
-            }
-        }
+        get { return getStageInputWorldSpaceOrigin(); }
     }
 
     /// The direction of the current ray in world space.
     public property float3 worldSpaceDirection
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return WorldRayDirection();
-            default:
-                return 0.0;
-            }
-        }
+        get { return getStageInputWorldSpaceDirection(); }
     }
 
     /// The three-dimensional launch index of the ray-generation invocation.
     public property uint3 dispatchRaysIndex
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return DispatchRaysIndex();
-            default:
-                return 0;
-            }
-        }
+        get { return getStageInputDispatchRaysIndex(); }
     }
 
     /// The dimensions of the ray dispatch that launched the current trace.
     public property uint3 dispatchRaysDimensions
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return DispatchRaysDimensions();
-            default:
-                return 0;
-            }
-        }
+        get { return getStageInputDispatchRaysDimensions(); }
     }
 
     /// Reports a candidate intersection with hit kind zero.
@@ -998,17 +760,7 @@ public extension<Context> IntersectionInput<Context>
     /// The motion-interpolation time of the current ray.
     public property float time
     {
-        get
-        {
-            __target_switch
-            {
-            case glsl:
-            case spirv:
-                return RayCurrentTime();
-            default:
-                return 0.0;
-            }
-        }
+        get { return getStageInputRayTime(); }
     }
 }
 
@@ -1019,73 +771,25 @@ public extension<Context> IntersectionInput<Context>
     /// The zero-based index of the current instance in its acceleration structure.
     public property uint instanceIndex
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return InstanceIndex();
-            default:
-                return 0;
-            }
-        }
+        get { return getStageInputInstanceIndex(); }
     }
 
     /// The application-provided identifier of the current instance.
     public property uint instanceID
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return InstanceID();
-            default:
-                return 0;
-            }
-        }
+        get { return getStageInputInstanceID(); }
     }
 
     /// The transform from the current instance's object space to world space.
     public property float4x3 objectToWorld
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return ObjectToWorld4x3();
-            default:
-                return 0.0;
-            }
-        }
+        get { return getStageInputObjectToWorld(); }
     }
 
     /// The transform from world space to the current instance's object space.
     public property float4x3 worldToObject
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return WorldToObject4x3();
-            default:
-                return 0.0;
-            }
-        }
+        get { return getStageInputWorldToObject(); }
     }
 }
 
@@ -1114,127 +818,43 @@ public struct MissInput<Context>
     /// The minimum valid intersection distance for the current ray.
     public property float minDistance
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return RayTMin();
-            default:
-                return 0.0;
-            }
-        }
+        get { return getStageInputMinDistance(); }
     }
 
     /// The maximum distance of the ray that completed without a hit.
     public property float distance
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return RayTCurrent();
-            default:
-                return 0.0;
-            }
-        }
+        get { return getStageInputCurrentDistance(); }
     }
 
     /// The `RAY_FLAG` values used for the current trace.
     public property uint rayFlags
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return RayFlags();
-            default:
-                return 0;
-            }
-        }
+        get { return getStageInputRayFlags(); }
     }
 
     /// The origin of the current ray in world space.
     public property float3 worldSpaceOrigin
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return WorldRayOrigin();
-            default:
-                return 0.0;
-            }
-        }
+        get { return getStageInputWorldSpaceOrigin(); }
     }
 
     /// The direction of the current ray in world space.
     public property float3 worldSpaceDirection
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return WorldRayDirection();
-            default:
-                return 0.0;
-            }
-        }
+        get { return getStageInputWorldSpaceDirection(); }
     }
 
     /// The three-dimensional launch index of the ray-generation invocation.
     public property uint3 dispatchRaysIndex
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return DispatchRaysIndex();
-            default:
-                return 0;
-            }
-        }
+        get { return getStageInputDispatchRaysIndex(); }
     }
 
     /// The dimensions of the ray dispatch that launched the current trace.
     public property uint3 dispatchRaysDimensions
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return DispatchRaysDimensions();
-            default:
-                return 0;
-            }
-        }
+        get { return getStageInputDispatchRaysDimensions(); }
     }
 }
 
@@ -1245,17 +865,7 @@ public extension<Context> MissInput<Context>
     /// The motion-interpolation time of the current ray.
     public property float time
     {
-        get
-        {
-            __target_switch
-            {
-            case glsl:
-            case spirv:
-                return RayCurrentTime();
-            default:
-                return 0.0;
-            }
-        }
+        get { return getStageInputRayTime(); }
     }
 }
 
@@ -1284,37 +894,13 @@ public struct CallableInput<Context>
     /// The three-dimensional launch index of the ray-generation invocation.
     public property uint3 dispatchRaysIndex
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return DispatchRaysIndex();
-            default:
-                return 0;
-            }
-        }
+        get { return getStageInputDispatchRaysIndex(); }
     }
 
     /// The dimensions of the ray dispatch that launched the current trace.
     public property uint3 dispatchRaysDimensions
     {
-        get
-        {
-            __target_switch
-            {
-            case hlsl:
-            case glsl:
-            case spirv:
-            case cuda:
-                return DispatchRaysDimensions();
-            default:
-                return 0;
-            }
-        }
+        get { return getStageInputDispatchRaysDimensions(); }
     }
 }
 

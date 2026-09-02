@@ -7,9 +7,11 @@ implementing raytracing;
 namespace rt
 {
 
-// These placeholders reserve distinct resource roles until the concrete program layout and target
-// are known. Keeping them in a ParameterBlock makes specialization compatible with ordinary
-// parameter binding and reflection.
+// This struct is the source-level schema for the descriptor's parameter block, not temporary API
+// scaffolding. The ByteAddressBuffer types let the front end represent each resource role before
+// the concrete program layout and target are known. Target lowering keeps those roles and
+// specializes their IR field types, so binding and reflection continue to use the ordinary
+// ParameterBlock model.
 internal struct TraceProgramDescriptorResources<ProgramLayout>
     where ProgramLayout : ITraceProgramLayout
 {

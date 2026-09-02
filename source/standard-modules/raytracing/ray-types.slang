@@ -43,12 +43,13 @@ public struct InstanceMotion : IEnabledRayMotion {}
 [require(metallib_2_4)]
 public struct PrimitiveAndInstanceMotion : IEnabledRayMotion {}
 
-// Reuse the native ray representation so the portable D3D/Vulkan trace path needs no conversion.
-// Lowercase properties provide the structural API spelling without adding storage.
+// Alias the core module's existing RayDesc value type so the portable trace path can call TraceRay
+// without converting the ray. Lowercase properties provide the structural API spelling without
+// adding storage.
 /// Describes the origin, direction, and active distance interval of a ray.
 ///
-/// This alias uses Slang's existing ray-description representation. The structural API adds the
-/// lowercase properties below as equivalent spellings of its native fields.
+/// This alias uses Slang's existing core-module value type. The structural API adds the lowercase
+/// properties below as equivalent spellings of its fields.
 /// @category raytracing
 public typealias RayDesc = RayDesc;
 

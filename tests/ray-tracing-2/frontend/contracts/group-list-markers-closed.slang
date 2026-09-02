@@ -12,19 +12,22 @@ struct MyTraceContext : rt::ITraceContext
 }
 
 struct FakeHitGroups : rt::IHitGroupList<MyTraceContext>
-//CHECK:                   ^^^^^^^^^^^^^ cannot inherit from type 'rt.IHitGroupList<MyTraceContext>' marked 'sealed' in module 'raytracing'
+//CHECK:                   ^^^^^^^^^^^^^ declaration not accessible
+//CHECK:                   ^^^^^^^^^^^^^ 'IHitGroupList' is not accessible from the current context.
 {
     static const int count = 1;
 }
 
 struct FakeMissGroups : rt::IMissGroupList<MyTraceContext>
-//CHECK:                    ^^^^^^^^^^^^^^ cannot inherit from type 'rt.IMissGroupList<MyTraceContext>' marked 'sealed' in module 'raytracing'
+//CHECK:                    ^^^^^^^^^^^^^^ declaration not accessible
+//CHECK:                    ^^^^^^^^^^^^^^ 'IMissGroupList' is not accessible from the current context.
 {
     static const int count = 1;
 }
 
 struct FakeCallableGroups : rt::ICallableGroupList<MyTraceContext>
-//CHECK:                        ^^^^^^^^^^^^^^^^^^ cannot inherit from type 'rt.ICallableGroupList<MyTraceContext>' marked 'sealed' in module 'raytracing'
+//CHECK:                        ^^^^^^^^^^^^^^^^^^ declaration not accessible
+//CHECK:                        ^^^^^^^^^^^^^^^^^^ 'ICallableGroupList' is not accessible from the current context.
 {
     static const int count = 1;
 }
@@ -32,7 +35,7 @@ struct FakeCallableGroups : rt::ICallableGroupList<MyTraceContext>
 struct Layout : rt::ITraceProgramLayout
 {
     typealias TraceContext = MyTraceContext;
-    typealias HitGroups = FakeHitGroups;
+    typealias HitGroups = rt::NoHitGroups<TraceContext>;
     typealias MissGroups = rt::NoMissGroups<TraceContext>;
     typealias CallableGroups = rt::NoCallableGroups<TraceContext>;
 }
