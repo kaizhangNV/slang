@@ -177,6 +177,7 @@ internal float getStageInputRayTime()
 {
     __target_switch
     {
+    case cuda:
     case glsl:
     case spirv:
         return RayCurrentTime();

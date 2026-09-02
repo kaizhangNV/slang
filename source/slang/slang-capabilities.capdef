@@ -1596,6 +1596,10 @@ alias structural_raytracing_trace = cuda_glsl_hlsl_spirv + raygen_closesthit_mis
                                     | _closesthit + metal
                                     | _miss + metal;
 
+/// Targets that can sample motion-enabled acceleration structures at a per-ray time.
+/// [Compound]
+alias structural_raytracing_motion = raytracing_motionblur | metallib_2_4;
+
 /// Collection of shader stages
 /// [Compound]
 alias anyhit_closesthit_intersection = anyhit | closesthit | intersection;

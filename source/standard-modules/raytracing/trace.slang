@@ -58,14 +58,15 @@ public extension<ProgramLayout> RayTracer<ProgramLayout>
     }
 }
 
-// Motion modes are separate extensions because their associated-type constraints make invalid
-// trace/context combinations unavailable during overload resolution.
+// Every enabled motion mode has the same source trace operation. The concrete motion type remains
+// available to target lowering, which uses it to distinguish primitive motion, instance motion,
+// or both when the target ABI requires that distinction.
 public extension<ProgramLayout> RayTracer<ProgramLayout>
     where ProgramLayout : ITraceProgramLayout
     where ProgramLayout.TraceContext.AccelerationStructure == AccelerationStructure
-    where ProgramLayout.TraceContext.Motion == PrimitiveMotion
+    where ProgramLayout.TraceContext.Motion : IEnabledRayMotion
 {
-    /// Traces a ray through a portable two-level acceleration structure with primitive motion.
+    /// Traces a ray through a portable two-level acceleration structure with motion.
     ///
     /// `desc.time` selects the motion sample used by traversal.
     /// @param desc The ray, motion time, traversal flags, visibility mask, and logical SBT indices.
@@ -74,65 +75,32 @@ public extension<ProgramLayout> RayTracer<ProgramLayout>
     /// @param payload The value shared with the selected hit or miss stages and returned to the
     /// caller after they finish.
     [ForceInline]
-    [require(structural_raytracing_trace, metallib_2_4)]
+    [require(structural_raytracing_trace, structural_raytracing_motion)]
     public void trace(
         RayTraversalDesc desc,
         ProgramLayout.TraceContext.AccelerationStructure accelerationStructure,
         TraceProgramDescriptor<ProgramLayout> descriptor,
         inout ProgramLayout.TraceContext.Payload payload)
     {
-        // The compiler consumes this call as a structural trace operation before emission.
-    }
-}
-
-public extension<ProgramLayout> RayTracer<ProgramLayout>
-    where ProgramLayout : ITraceProgramLayout
-    where ProgramLayout.TraceContext.AccelerationStructure == AccelerationStructure
-    where ProgramLayout.TraceContext.Motion == InstanceMotion
-{
-    /// Traces a ray through a portable two-level acceleration structure with instance motion.
-    ///
-    /// `desc.time` selects the motion sample used by traversal.
-    /// @param desc The ray, motion time, traversal flags, visibility mask, and logical SBT indices.
-    /// @param accelerationStructure The scene selected by the program's trace context.
-    /// @param descriptor The bound program resources for `ProgramLayout`.
-    /// @param payload The value shared with the selected hit or miss stages and returned to the
-    /// caller after they finish.
-    [ForceInline]
-    [require(structural_raytracing_trace, metallib_2_4)]
-    public void trace(
-        RayTraversalDesc desc,
-        ProgramLayout.TraceContext.AccelerationStructure accelerationStructure,
-        TraceProgramDescriptor<ProgramLayout> descriptor,
-        inout ProgramLayout.TraceContext.Payload payload)
-    {
-        // The compiler consumes this call as a structural trace operation before emission.
-    }
-}
-
-public extension<ProgramLayout> RayTracer<ProgramLayout>
-    where ProgramLayout : ITraceProgramLayout
-    where ProgramLayout.TraceContext.AccelerationStructure == AccelerationStructure
-    where ProgramLayout.TraceContext.Motion == PrimitiveAndInstanceMotion
-{
-    /// Traces a ray through a portable two-level acceleration structure with primitive and
-    /// instance motion.
-    ///
-    /// `desc.time` selects the motion sample used by traversal.
-    /// @param desc The ray, motion time, traversal flags, visibility mask, and logical SBT indices.
-    /// @param accelerationStructure The scene selected by the program's trace context.
-    /// @param descriptor The bound program resources for `ProgramLayout`.
-    /// @param payload The value shared with the selected hit or miss stages and returned to the
-    /// caller after they finish.
-    [ForceInline]
-    [require(structural_raytracing_trace, metallib_2_4)]
-    public void trace(
-        RayTraversalDesc desc,
-        ProgramLayout.TraceContext.AccelerationStructure accelerationStructure,
-        TraceProgramDescriptor<ProgramLayout> descriptor,
-        inout ProgramLayout.TraceContext.Payload payload)
-    {
-        // The compiler consumes this call as a structural trace operation before emission.
+        __target_switch
+        {
+        case metal:
+            // The compiler consumes this call as a structural trace operation before emission.
+            break;
+        case cuda:
+        case glsl:
+        case spirv:
+            TraceMotionRay(
+                accelerationStructure,
+                desc.rayFlags,
+                desc.instanceMask,
+                desc.sbtOffset,
+                desc.sbtStride,
+                desc.missIndex,
+                desc.ray,
+                desc.time,
+                payload);
+        }
     }
 }
 
@@ -165,9 +133,9 @@ public extension<ProgramLayout> RayTracer<ProgramLayout>
 
 public extension<ProgramLayout> RayTracer<ProgramLayout>
     where ProgramLayout : ITraceProgramLayout
-    where ProgramLayout.TraceContext.Motion == PrimitiveMotion
+    where ProgramLayout.TraceContext.Motion : IEnabledRayMotion
 {
-    /// Traces a ray through a multi-level acceleration structure with primitive motion.
+    /// Traces a ray through a multi-level acceleration structure with motion.
     ///
     /// `desc.time` selects the motion sample used by traversal.
     /// @param desc The ray, motion time, traversal flags, visibility mask, and logical SBT indices.
@@ -176,60 +144,7 @@ public extension<ProgramLayout> RayTracer<ProgramLayout>
     /// @param payload The value shared with the selected hit or miss stages and returned to the
     /// caller after they finish.
     [ForceInline]
-    [require(structural_raytracing_trace, metal)]
-    public void trace<let maxLevelCount : int>(
-        RayTraversalDesc desc,
-        MultiLevelAccelerationStructure<maxLevelCount> accelerationStructure,
-        TraceProgramDescriptor<ProgramLayout> descriptor,
-        inout ProgramLayout.TraceContext.Payload payload)
-        where ProgramLayout.TraceContext.AccelerationStructure ==
-            MultiLevelAccelerationStructure<maxLevelCount>
-    {
-        // The compiler consumes this call as a structural trace operation before emission.
-    }
-}
-
-public extension<ProgramLayout> RayTracer<ProgramLayout>
-    where ProgramLayout : ITraceProgramLayout
-    where ProgramLayout.TraceContext.Motion == InstanceMotion
-{
-    /// Traces a ray through a multi-level acceleration structure with instance motion.
-    ///
-    /// `desc.time` selects the motion sample used by traversal.
-    /// @param desc The ray, motion time, traversal flags, visibility mask, and logical SBT indices.
-    /// @param accelerationStructure The hierarchy whose maximum depth is `maxLevelCount`.
-    /// @param descriptor The bound program resources for `ProgramLayout`.
-    /// @param payload The value shared with the selected hit or miss stages and returned to the
-    /// caller after they finish.
-    [ForceInline]
-    [require(structural_raytracing_trace, metal)]
-    public void trace<let maxLevelCount : int>(
-        RayTraversalDesc desc,
-        MultiLevelAccelerationStructure<maxLevelCount> accelerationStructure,
-        TraceProgramDescriptor<ProgramLayout> descriptor,
-        inout ProgramLayout.TraceContext.Payload payload)
-        where ProgramLayout.TraceContext.AccelerationStructure ==
-            MultiLevelAccelerationStructure<maxLevelCount>
-    {
-        // The compiler consumes this call as a structural trace operation before emission.
-    }
-}
-
-public extension<ProgramLayout> RayTracer<ProgramLayout>
-    where ProgramLayout : ITraceProgramLayout
-    where ProgramLayout.TraceContext.Motion == PrimitiveAndInstanceMotion
-{
-    /// Traces a ray through a multi-level acceleration structure with primitive and instance
-    /// motion.
-    ///
-    /// `desc.time` selects the motion sample used by traversal.
-    /// @param desc The ray, motion time, traversal flags, visibility mask, and logical SBT indices.
-    /// @param accelerationStructure The hierarchy whose maximum depth is `maxLevelCount`.
-    /// @param descriptor The bound program resources for `ProgramLayout`.
-    /// @param payload The value shared with the selected hit or miss stages and returned to the
-    /// caller after they finish.
-    [ForceInline]
-    [require(structural_raytracing_trace, metal)]
+    [require(structural_raytracing_trace, structural_raytracing_motion)]
     public void trace<let maxLevelCount : int>(
         RayTraversalDesc desc,
         MultiLevelAccelerationStructure<maxLevelCount> accelerationStructure,

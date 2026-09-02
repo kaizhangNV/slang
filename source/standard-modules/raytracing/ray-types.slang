@@ -28,19 +28,30 @@ public interface IEnabledRayMotion : IRayMotion {}
 /// @category raytracing
 public struct NoMotion : IRayMotion {}
 
-/// Selects traversal with motion applied to primitive geometry.
+/// Describes an acceleration structure whose primitive geometry can move over trace time.
+///
+/// Metal represents this choice with its `primitive_motion` intersector tag. Vulkan and OptiX
+/// encode primitive motion in the acceleration structure and use their shared timed-trace
+/// operation to sample it.
 /// @category raytracing
-[require(metallib_2_4)]
+[require(structural_raytracing_motion)]
 public struct PrimitiveMotion : IEnabledRayMotion {}
 
-/// Selects traversal with motion applied to acceleration-structure instances.
+/// Describes an acceleration structure whose instances can move over trace time.
+///
+/// Metal represents this choice with its `instance_motion` intersector tag. Vulkan and OptiX
+/// encode instance or transform motion in the acceleration-structure graph and use their shared
+/// timed-trace operation to sample it.
 /// @category raytracing
-[require(metallib_2_4)]
+[require(structural_raytracing_motion)]
 public struct InstanceMotion : IEnabledRayMotion {}
 
-/// Selects traversal with motion applied to both primitive geometry and instances.
+/// Describes an acceleration structure containing both primitive and instance motion.
+///
+/// Metal represents this choice with both motion tags. Vulkan and OptiX allow the two kinds of
+/// motion data in one acceleration-structure graph and sample them with one timed trace.
 /// @category raytracing
-[require(metallib_2_4)]
+[require(structural_raytracing_motion)]
 public struct PrimitiveAndInstanceMotion : IEnabledRayMotion {}
 
 // Re-export the core-module type in the ray-tracing namespace without introducing another ray

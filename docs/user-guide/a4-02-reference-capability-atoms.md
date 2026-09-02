@@ -1528,6 +1528,9 @@ Compound Capabilities
 `structural_raytracing_miss`
 > Logical miss role used by the structural ray-tracing API.
 
+`structural_raytracing_motion`
+> Targets that can sample motion-enabled acceleration structures at a per-ray time.
+
 `structural_raytracing_trace`
 > Stages that may trace a ray through the structural ray-tracing API.
 
