@@ -1,12 +1,13 @@
 # Structural Ray Tracing API Implementation Plan
 
-Status: implementation plan for [PROPOSAL.md](PROPOSAL.md).
+Status: implementation plan for [PROPOSAL.md](PROPOSAL.md), with the revisions in
+[proposal-revised.md](proposal-revised.md). When the two documents differ, the revision is current.
 
-The proposal defines the source API and its semantics. This document defines the implementation
-boundaries, compiler order, milestones, and acceptance requirements.
+The revised API describes a compile-time **trace program schema**. The host creates the runtime
+shader binding table (SBT) from that schema. Shader source no longer declares record slots.
 
 Stable implementation slices use the commit subject `(Checkpoint Commit) <message>`. A checkpoint
-means its relevant tests pass; it does not imply that the complete feature is finished.
+means its focused tests pass; it does not mean that the complete feature is finished.
 
 ## 1. Fixed Decisions
 
@@ -25,618 +26,594 @@ user module -> core
 user module -> slang.raytracing -> core
 ```
 
-`core` never depends on `slang.raytracing`. The compiler loads the module only after an explicit
+`core` never imports `slang.raytracing`. The compiler loads the module only after an explicit
 import, and the import requires `-experimental-feature`. Build and install it after `core`, following
-the `slang.neural` standard-module model; it does not need to participate in core bootstrap.
+the `slang.neural` standard-module model. It does not participate in core bootstrap.
 
-### 1.2 Implementation Boundary
+### 1.2 Ownership Boundary
 
-| `slang.raytracing` owns                                             | Compiler owns                                          |
-| ------------------------------------------------------------------- | ------------------------------------------------------ |
-| Public interfaces, contexts, primitives, groups, slots, and layouts | Canonical role recognition and illegal-use diagnostics |
-| Generic constraints and placeholder stages                          | Structural entry-point lookup and layout discovery     |
-| Zero-storage stage-input properties                                 | Reachable property-use analysis and adapter synthesis  |
-| Shader-side wrappers over existing intrinsics                       | Metal tags, tables, descriptor resources, and dispatch |
+`slang.raytracing` owns:
 
-Implement behavior in the module unless it requires compiler-owned entry points, unavailable target
-ABI state, or a restriction ordinary Slang cannot express. Reuse existing ray tracing operations,
-capability propagation, legalization, and emission wherever possible.
+- Context, primitive, stage, hit-group, section-list, schema, descriptor, and trace declarations.
+- Closed, open, and empty section-list forms.
+- Generic constraints and placeholder stages.
+- Property-only stage inputs and shader-side wrappers over existing intrinsics.
 
-All compiler behavior is guarded by use of the canonical standard-module declarations. Without the
-import, the module is not loaded. Without a selected structural entry or trace program, the new
-lowering phases do no work.
+The compiler owns only semantics ordinary Slang cannot express:
 
-Version one excludes SER, `intersection_function_buffer`, and `user_data`. Target-specific features,
-including curves and Metal multilevel acceleration structures, remain capability-gated.
+- Unforgeable identity for the five structural stage interfaces and structural runtime types.
+- Retention and synthesis of interface-conforming stage entry points.
+- Canonical schema discovery after linking, including open-section entries.
+- Payload partitioning, deterministic function indices, and schema reflection.
+- Demand-driven native stage signatures and Metal tag inference.
+- Metal descriptor resources, candidate dispatchers, and post-trace/callable dispatch.
+- Structural-only use restrictions and mixed-API diagnostics.
 
-### 1.3 Expected Compiler Impact
+The host owns each SBT instance:
 
-| Area                            | Impact | Constraint                                                    |
-| ------------------------------- | ------ | ------------------------------------------------------------- |
-| Front end                       | Medium | Add canonical-role checks and structural stage entry lookup   |
-| IR, linking, and specialization | Medium | Preserve derived interface identity and selected witnesses    |
-| D3D/Vulkan lowering             | Low    | Reuse native ray tracing paths                                |
-| Binding and reflection          | Medium | Extend parameter groups for Metal function-table resources    |
-| Metal lowering                  | High   | Generate tables, candidate functions, and post-trace dispatch |
+- Record counts, record positions, and the entry selected by each record.
+- Per-record data.
+- Acceleration-structure record contributions.
+- The `sbtOffset`, `sbtStride`, and `missIndex` convention used by trace calls.
+
+The implementation must not reintroduce a shader-side slot or another declaration of this runtime
+mapping.
+
+Version one excludes SER, Metal `intersection_function_buffer`, and Metal `user_data`. Curves and
+Metal multilevel acceleration structures remain capability-gated.
+
+### 1.3 Compiler-Bug Policy
+
+Do not add a structural-ray-tracing workaround for an independent compiler defect. Reduce and file
+the defect, fix it in a separate PR/branch when it blocks this work, then rebase the implementation
+on that fix. Record nonblocking defects in PR #12691 without changing unrelated compiler behavior.
+
+The revised contracts currently depend on:
+
+- The merged fix for stable linkage of multiple associated-type equality requirements (#12817).
+- The open fix for generic type specialization with associated-type equality constraints
+  (#12822 / PR #12827) before generic stage coverage can be accepted.
+
+Use a separate `__constraint` declaration for associated-type relationships. Reserve `where`
+clauses for generic parameters and other ordinary generic constraints.
+
+The removed variadic list constraint is not replaced with a compiler special case. Schema
+canonicalization checks every listed and linked entry uniformly.
 
 ## 2. Repository Layout
-
-Keep feature logic in owned files and limit existing compiler files to narrow scheduling or query
-hooks. The layout below is part of the implementation contract.
 
 ### 2.1 Standard Module
 
 ```text
-source/standard-modules/
+source/standard-modules/raytracing/
 ├── CMakeLists.txt
-├── README.md
-├── slang-standard-module-config.h.in
-└── raytracing/
-    ├── CMakeLists.txt             # Build raytracing.slang-module
-    ├── raytracing.slang          # Module declaration and ordered includes
-    ├── ray-types.slang           # Rays, traversal, acceleration structures, primitives
-    ├── contexts.slang            # Trace and shader-group contexts
-    ├── stage-inputs.slang        # Zero-storage inputs and properties
-    ├── stage-contracts.slang     # Executable interfaces and placeholders
-    ├── program-layout.slang      # Slots, groups, lists, and layout
-    ├── descriptor.slang          # Opaque descriptor resource
-    └── trace.slang               # RayTracer trace and callable-dispatch operations
+├── raytracing.slang          # Module declaration and ordered includes
+├── ray-types.slang           # Rays, traversal, acceleration structures, primitives
+├── contexts.slang            # ITraceContext and the stage-context hierarchy
+├── stage-inputs.slang        # Zero-storage inputs and intrinsic properties
+├── stage-contracts.slang     # Stage interfaces and placeholders
+├── program-schema.slang      # Hit groups, section lists, and ITraceProgramSchema
+├── descriptor.slang          # Opaque TraceProgramDescriptor<Schema>
+└── trace.slang               # RayTracer<Schema>, trace, and callShader
 ```
 
-Each included source file uses `implementing raytracing;` and exposes public declarations only in
-`namespace rt`. Keep compiler operations internal and expose them through typed properties or
+Each included file uses `implementing raytracing;` and publishes declarations only in
+`namespace rt`. Keep compiler operations internal and surface them through typed properties or
 methods.
 
-The parent standard-module CMake file owns the output root, aggregate `slang-standard-modules`
-target, and one shared install rule. Each child owns its source list, compiler selection, and module
-compile target. The installed artifact is named exactly `slang/raytracing.slang-module`, matching
-generic standard-module lookup. Do not add a ray-tracing-specific path or module-name field to the
-session.
+The installed artifact remains `slang/raytracing.slang-module`. Do not add a special session lookup
+path or make `core` depend on it.
 
 ### 2.2 Compiler Files
 
-New feature-owned files under the existing flat `source/slang` convention:
+Keep the existing feature-owned files:
 
 ```text
 source/slang/
-├── slang-structural-ray-tracing.{h,cpp}               # Roles and canonical registry
-├── slang-check-structural-ray-tracing.cpp              # Front-end checks
-├── slang-ir-structural-ray-tracing.{h,cpp}              # Shared IR queries
-├── slang-ir-synthesize-structural-ray-tracing.{h,cpp}   # Retention and synthesis
-├── slang-ir-metal-structural-ray-tracing.{h,cpp}        # Metal lowering
-└── slang-reflection-structural-ray-tracing.{h,cpp}      # Logical SBT reflection
+├── slang-structural-ray-tracing.{h,cpp}                 # Canonical declarations and roles
+├── slang-check-structural-ray-tracing.cpp                # Front-end restrictions
+├── slang-ir-structural-ray-tracing.{h,cpp}               # Shared IR queries
+├── slang-ir-synthesize-structural-ray-tracing.{h,cpp}    # Schema discovery and adapters
+├── slang-ir-metal-structural-ray-tracing.{h,cpp}         # Metal descriptor and dispatch
+└── slang-reflection-structural-ray-tracing.{h,cpp}       # Schema reflection
 ```
 
-Front-end files use AST declarations and no IR. Shared IR files contain no AST lookup. Synthesis is
-target-neutral and emits existing ray tracing IR for D3D/Vulkan. Metal mechanics remain in the
-Metal-owned file, and reflection consumes only the canonical logical layout.
+Existing compiler files receive narrow registration, scheduling, IR-definition, binding, emit, and
+API hooks only. D3D, Vulkan, and OptiX continue through existing ray-tracing IR and target paths.
 
-Existing files receive only integration changes:
+The public reflection API uses `TraceProgramSchema`, never `TraceProgramLayout`, because
+`slang::ProgramLayout` already names the program reflection object and the schema declares no byte
+or record positions.
 
-```text
-source/standard-modules/{CMakeLists.txt,neural/CMakeLists.txt}
-source/slang/{slang-session.cpp,slang-check-*.cpp,slang-check-impl.h}
-source/slang/{slang-lower-to-ir.cpp,slang-ir-insts.lua,slang-ir.h,slang-ir.cpp}
-source/slang/{slang-ir-insts-stable-names.lua,slang-ir-link.cpp,slang-emit.cpp}
-source/slang/{slang-parameter-binding.cpp,slang-type-layout.cpp}
-source/slang/{slang-ir-metal-legalize.cpp,slang-emit-metal.cpp}
-source/slang/{slang-reflection-api.cpp,slang-reflection-json.cpp,slang-diagnostics.lua}
-include/slang.h
-```
+### 2.3 Tests And Runtime Hosts
 
-D3D/Vulkan do not receive feature-specific target files. If significant structural algorithms
-begin accumulating in any integration file, move them into the appropriate owned file above.
-
-### 2.3 Compiler And Code-Generation Tests
+Keep focused compiler tests under `tests/ray-tracing-2/` and the existing runtime hosts:
 
 ```text
 tests/ray-tracing-2/
-├── support/
 ├── frontend/
-│   ├── module/
-│   ├── contracts/
-│   ├── entry-point/
-│   ├── diagnostics/
-│   └── capabilities/
 ├── ir/
-│   ├── identity/
-│   ├── serialization-linking/
-│   ├── liveness/
-│   ├── requirements/
-│   └── synthesis/
-├── target/
-│   ├── portable/
-│   ├── d3d/
-│   ├── vulkan/
-│   └── metal/
+├── target/{portable,d3d,vulkan,metal}/
 ├── reflection/
 ├── compatibility/
-│   ├── coexistence/
-│   ├── legacy-only/
-│   └── mixed-api/
 ├── runtime/
-│   ├── shaders/
-│   ├── metal/
-│   └── expected/
 ├── integrate/
 └── coverage-manifest.md
+
+tools/gfx-unit-test/structural-ray-tracing/       # D3D12/Vulkan through Slang RHI
+tools/metal-structural-raytracing-test/           # Native Metal host, local only
 ```
 
-Portable sources contain multiple target directives instead of duplicated shader files. Backend
-directories contain only genuinely target-specific behavior. `support/` contains imported helper
-modules with no test directive. `integrate/` contains complete programs that exercise layout,
-tracing, stage dispatch, and target emission together. The coverage manifest maps every existing
-ray tracing test scenario to its structural integration coverage, supported targets, runtime
-coverage, and Metal validation status so no scenario disappears silently.
+Extend the Slang RHI shader-table description with arbitrary per-record data pointers and sizes;
+the existing eight-byte overwrite is not a portable record-data API. Keep this append-only and
+independent of the structural shader API.
 
-### 2.4 Runtime Tests And Local Platform Runners
+The Metal host writes the revised fixed-stride record buffer and binds the reflected per-payload
+tables. It remains outside installation, deployment, and the regular test suite.
 
-Keep the test shaders and expected results under `tests/ray-tracing-2/runtime/`. Use separate host
-implementations because Slang RHI does not support Metal:
+## 3. Source Contract
+
+### 3.1 Type Hierarchy
 
 ```text
-tools/gfx-unit-test/structural-ray-tracing/       # D3D12 and Vulkan through Slang RHI
-├── structural-ray-tracing-tests.cpp
-├── structural-ray-tracing-test-util.{h,cpp}
-└── structural-ray-tracing-scenes.{h,cpp}
-
-tools/metal-structural-raytracing-test/           # Local macOS validation through native Metal
-├── CMakeLists.txt
-├── main.mm
-├── metal-test-host.{h,mm}
-└── metal-test-scenes.{h,mm}
+ITraceProgramSchema
+├── TraceContext : ITraceContext
+│   ├── AccelerationStructure
+│   └── Motion
+├── HitGroups : IHitGroupList
+│   ├── HitGroupList<...>
+│   ├── OpenHitGroups<Tag, ...>
+│   └── NoHitGroups
+├── MissShaders : IMissShaderList
+│   ├── MissShaderList<...>
+│   ├── OpenMissShaders<Tag, ...>
+│   └── NoMissShaders
+└── CallableShaders : ICallableShaderList
+    ├── CallableShaderList<...>
+    ├── OpenCallableShaders<Tag, ...>
+    └── NoCallableShaders
 ```
 
-The RHI harness owns the D3D12/Vulkan pipelines, SBTs, acceleration structures, dispatch, and
-readback. The Metal host performs the equivalent work directly with native Metal APIs, including
-IFT/VFT and descriptor setup. Both hosts use the same portable shaders and expected results; Metal
-capability tests such as curves and multilevel acceleration structures remain separate.
-
-The Metal host is excluded from default builds, installation, deployment, and the regular test
-suite for version one. It is built and run explicitly on the local macOS worker to validate the
-generated code and runtime behavior.
-
-Cross-platform execution uses the local build farm with the Linux checkout as the only writer:
+The context hierarchy is:
 
 ```text
-Linux runner    -> Vulkan compile and runtime through Slang RHI
-Windows runner  -> D3D12 and Vulkan compile and runtime through Slang RHI
-macOS runner    -> native Metal compilation and direct-host runtime, local only
+IStageContext
+├── TraceContext : ITraceContext
+└── Record
+
+IPayloadContext : IStageContext
+└── Payload
+
+IHitContext : IPayloadContext
+└── Primitive
+
+ICallableContext : IStageContext
+└── CallableData
 ```
 
-The runner recipe and logs remain outside the repository:
+Each stage interface exposes `Context` as an associated type. `IHitGroup` contains one context and
+uses separate `__constraint` declarations to require its `_ClosestHit_`, `_AnyHit_`, and
+`_Intersection_` associated types to name that exact context. Miss and callable sections list stage
+types directly; `IMissGroup` and `ICallableGroup` do not exist.
 
-```text
-~/.codex/local-build-farm/projects/another-slang-structural-rt-runtime.json
-~/.codex/local-build-farm/runs/another-slang-structural-rt-runtime/<run-id>/
-```
+There is no `IShaderGroupSlot`, slot alias, or `Slot` associated type. `ITraceContext` does not own a
+payload. Each hit or miss context owns the payload used by its stages.
 
-Workers receive disposable snapshots and return logs only; all fixes are made in the Linux
-workspace.
+### 3.2 Trace And Stage Inputs
 
-## 3. Front-End Contract
-
-### 3.1 Stage Contracts And Inputs
-
-Each executable stage interface carries its logical stage requirement. For example:
+`RayTracer<Schema>.trace` infers its payload from the argument:
 
 ```slang
-[require(closesthit)]
-public interface IClosestHitShader<Context>
-    where Context : IHitContext
-{
-    void invoke(ClosestHitInput<Context> input);
-}
+void trace<Payload>(
+    RayTraversalDesc desc,
+    Schema.TraceContext.AccelerationStructure accelerationStructure,
+    TraceProgramDescriptor<Schema> descriptor,
+    inout Payload payload);
 ```
 
-Apply the corresponding requirement to _AnyHit_, _Intersection_, _Miss_, and _Callable_. Validate
-each `invoke` witness and its reachable helpers against that logical stage. The internal
-`IIntersectionStage` marker remains stage-neutral so it can represent either a real
-_Intersection_ implementation or the canonical `NoIntersection` placeholder without exposing a
-third user extension point.
+Structural synthesis diagnoses a payload that no hit group or miss shader in `Schema` serves. A
+separate no-payload overload is available only when the schema has exactly one empty payload type.
+The compiler supplies the mandatory native payload operand internally and rejects attempts to name,
+pass, or access a value of that empty payload type.
 
-All stage inputs are compiler-provided, zero-storage property views. Payload, shader-record data,
-built-ins, primitive data, and intersection reporting are properties or methods mapped to
-compiler-known operations; they are never stored fields. Put common properties on the input type
-and primitive-specific properties in constrained extensions.
+All stage inputs remain zero-storage property views. `input.payload` has type
+`Context.Payload`; `input.record` has type `Context.Record` and means the concrete runtime record
+that selected the stage on every target. On Metal the dispatch resolves the record and passes a
+pointer to the generated stage function.
 
-Map properties to existing core ray tracing operations when they already express the required
-semantics. Add a new IR operation only for state or behavior with no existing representation.
+Map properties to existing ray-tracing IR whenever it expresses the semantics. Add IR only for
+state or behavior with no existing representation.
 
-Generic constraints enforce context, payload, primitive, attribute, and group agreement. Full-layout
-validation is limited to facts unavailable until group packs and slots are concrete.
+### 3.3 Structural Use And Entry Points
 
-The primitive marker interfaces are sealed. Applications select `TrianglePrimitive`,
-`CurvePrimitive`, or `BoundingBoxPrimitive<Attributes>` so every accepted primitive has a defined
-native target mapping.
+The existing structural-use restrictions remain:
 
-The group-list interfaces are also sealed. Their canonical variadic and empty implementations keep
-the concrete group pack available to layout discovery.
+- Stage implementations are stateless and cannot be constructed, stored, converted to
+  existentials, or called directly.
+- Stage inputs cannot be constructed, stored, returned, used as generic arguments, passed by
+  writable direction, or cross stage boundaries.
+- Schemas, section lists, and hit groups have no runtime representation.
+- `TraceProgramDescriptor<Schema>` is an opaque resource used only for binding and dispatch.
+- `RayTracer<Schema>` is a local zero-storage facade.
 
-The motion-marker interfaces are sealed because the compiler maps exactly the four built-in motion
-modes to Metal tag requirements.
+These are hard semantic errors even under `-ignore-capabilities`. `[require(stage)]` separately
+checks operations reachable from each stage body.
 
-### 3.2 Structural Use Rules
+`-entry ClosestHit -stage closesthit` continues to select a conforming struct before IR generation.
+The struct name remains the public entry-point name. A standalone stage compiles without a schema
+or descriptor; its associated `Context` supplies the payload, primitive, attributes, and record
+types needed for its native signature.
 
-These restrictions are hard semantic errors and remain active under `-ignore-capabilities`.
-`[require(stage)]` separately validates which operations are legal inside a stage body.
-
-| Kind                                       | Allowed                                                                                       | Rejected                                                                                             |
-| ------------------------------------------ | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| Stage implementation                       | Stateless methods, conformance, type-only layout use, reflection, and compiler-selected entry | Instance fields, construction, runtime storage, existential conversion, or direct `invoke` calls     |
-| Stage input                                | Compiler-provided `invoke` parameter and direct same-stage value helpers                      | Construction, storage, generic arguments, non-value parameters, return, or cross-stage use           |
-| Slot, group, group list, or program layout | Associated types and static metadata                                                          | Runtime materialization                                                                              |
-| `TraceProgramDescriptor<Layout>`           | Opaque resource binding and trace argument                                                    | Shader construction, field access, or copies outside opaque-resource rules                           |
-| `RayTracer<Layout>`                        | Local zero-storage facade                                                                     | Calling `trace` from a stage where tracing is unavailable                                            |
-
-Apply the same runtime-type checks after generic invocation is resolved so specialization cannot
-hide a structural stage, stage-input, or metadata result. Reject stage-input generic arguments so
-a specialization cannot construct or store a compiler-provided input internally.
-
-The descriptor type itself is stage-neutral. `RayTracer.trace` uses the same stage capability as the
-existing `TraceRay` operation, preserving recursive traces from _ClosestHit_ and _Miss_.
-
-### 3.3 Structural Entry Points
-
-Entry lookup must accept a conforming struct as well as a function:
-
-```text
--stage closesthit -entry ClosestHit
-```
-
-This lookup happens before IR generation. Resolve the struct through the canonical interface
-declarations, validate its conformance against `-stage`, and diagnose a mismatch immediately. The
-public entry-point and reflection name is the struct name.
-
-A stage struct can compile without an `ITraceProgramLayout` or descriptor. Its context, primitive,
-and reachable property uses provide the native signature. Hit attributes come from
-`Context.Primitive.Attributes`, never from an `IHitGroup`. D3D/Vulkan emit a native stage adapter;
-Metal emits the corresponding standalone helper. A runnable Metal trace path still requires a
-selected layout.
-
-Multiple entry-point components follow existing Slang behavior. An explicit stage entry roots only
-that stage. A selected whole layout roots all of its stages. Merely declaring a layout roots no
-executable code.
-
-### 3.4 Mixed API Use
-
-During semantic checking, classify each module as using the legacy API, the structural API, both, or
-neither, and retain representative source locations. Diagnose a module that directly uses both APIs
-before IR generation. Imported declarations alone do not count as use.
-
-After program composition, inspect the selected entry points and structural-trace reachability to
-diagnose cross-module mixing; legacy stages do not need to be ordinary call-graph callees. Legacy
-use includes user-authored _ClosestHit_, _AnyHit_, _Intersection_, _Miss_, and _Callable_ entry
-points or direct calls to `TraceRay` and `TraceMotionRay`. Ignore internal calls made by
-`slang.raytracing`, and allow ordinary ray-generation entry points that call `RayTracer<Layout>`.
-Structural use includes conformance to the canonical stage or layout contracts and use of a
-structural descriptor or trace call.
+The front end diagnoses legacy/structural mixing within one module. Linked-program synthesis checks
+selected cross-module components. Merely importing `slang.raytracing` does not count as structural
+use.
 
 ## 4. Compiler Representation
 
-### 4.1 Canonical Stage Interfaces
+### 4.1 Stage Identity
 
-The compiler registers the exact executable interface declarations from the trusted packaged
-`slang.raytracing` module. A user interface with the same name or structure remains ordinary.
-Source code and a user-shadowing module cannot request the compiler-owned operations.
-
-The canonical interfaces use normal interface requirements and witness tables, but lower to this IR
-hierarchy:
+Keep the compiler-owned IR interface hierarchy:
 
 ```text
 IRInterfaceType
-    IRRaytracingStageInterface
-        IRClosestHitStageInterface
-        IRAnyHitStageInterface
-        IRIntersectionStageInterface
-        IRMissStageInterface
-        IRCallableStageInterface
+└── IRRaytracingStageInterface
+    ├── IRClosestHitStageInterface
+    ├── IRAnyHitStageInterface
+    ├── IRIntersectionStageInterface
+    ├── IRMissStageInterface
+    └── IRCallableStageInterface
 ```
 
-A stage implementation remains an `IRStructType`. Its ordinary `IRWitnessTable` refers to the
-corresponding derived interface type. The selected witness, rather than a source name, determines
-the logical stage role.
+A concrete implementation remains an `IRStructType` with an ordinary witness table. The selected
+witness determines the stage role. Its associated `Context`, rather than a generic interface
+argument, determines the stage ABI.
 
-The packaged module serializes ordinary interface requirements so it can be built by the standard
-module toolchain. At the trusted load boundary, replace the exact five interface operations with
-their compiler-owned derived operations and register their declarations. Preserve that identity
-through interface factories, cloning, linking, specialization, and generic-wrapper resolution.
+The reusable stage identity is:
 
-### 4.2 Other Structural Identity
+```text
+(stage kind, concrete invoke implementation)
+```
 
-| Source concept                    | Representation                                                                                     |
-| --------------------------------- | -------------------------------------------------------------------------------------------------- |
-| Stage input                       | Ordinary zero-field generic struct; canonical accessors lower to structural stage-input operations |
-| Stage-input property              | Existing intrinsic IR, or a dedicated property operation when required                             |
-| Slots, groups, lists, and layouts | Ordinary types and witnesses canonicalized after specialization into compiler-side layout metadata |
-| `TraceProgramDescriptor<Layout>`  | Opaque resource associated with one specialized layout                                             |
-| `RayTracer.trace`                 | Existing trace path with a compiler-private `ProgramLayout` marker                                 |
-| `RayTracer.callShader`            | Typed callable marker; native `CallShader` or Metal visible-function-table dispatch                |
-| Selected stage                    | Concrete `invoke` function plus its stage witness and temporary liveness root                      |
+Metal adds the concrete payload-specific `ray_data` ABI when selecting or generating an adapter.
+Schema type, declaration order, function index, and runtime record index do not specialize the
+source stage body.
 
-Preserve the `ProgramLayout` marker through linking and specialization. D3D/Vulkan erase it after
-adapter and reflection generation; Metal consumes it when generating traversal and dispatch.
+### 4.2 Canonical Schema Metadata
 
-Direct calls to a concrete `invoke` can become ordinary `IRCall` instructions, so structural-use
-diagnostics must run in semantic checking. IR identity supports downstream discovery and validation;
-it is not the only enforcement mechanism.
+After linking and specialization, build one canonical schema shared by reflection and code
+generation:
+
+```text
+TraceProgramSchema
+├── trace context
+├── payload partitions
+│   ├── payload type and target layout
+│   ├── hit-group entries in function-index order
+│   └── miss-shader entries in function-index order
+├── callable-shader entries in function-index order
+├── open/closed state for each section
+└── target ABI and record-layout facts
+
+HitGroupEntry
+├── group, context, primitive, record, and attributes types
+├── closest-hit, any-hit, and intersection witnesses
+├── listed/linked origin
+└── function index within its payload
+```
+
+For closed sections, declaration order determines function indices. For open sections, listed
+entries come first and linked entries follow by qualified type name. Hit and miss indices restart
+for each payload; callable indices are program-wide. Function indices are dense and valid only for
+one linked program. Reflection exposes qualified entry names as the stable host key.
+
+The structural trace marker retains both the selected `Schema` and concrete trace `Payload` through
+linking and specialization. D3D/Vulkan/OptiX consume or erase it after native adapter/reflection
+generation. Metal consumes it when selecting the payload-specific tables and generated state.
 
 ## 5. Compilation Flow
 
-The implementation adds two guarded compiler phases: structural synthesis before DCE and target
-structural lowering before existing target legalization.
+Use the existing two guarded feature phases:
 
 ```text
 semantic checking
     register canonical declarations
     validate stage capabilities and structural uses
-    resolve structural -entry selections
-    record user-authored legacy ray tracing use
+    resolve structural struct entry points
+    record same-module legacy and structural use
 
 IR generation, linking, and specialization
-    emit and preserve structural identity
-    install temporary roots before simplification
-    retain explicitly selected or layout-reachable stages
+    preserve structural identities and trace markers
+    retain selected closed entries
+    retain tagged conformances needed by selected open sections
 
-structural synthesis
-    canonicalize selected layouts
-    resolve stage witnesses and slots
+structural synthesis before DCE
+    discover the complete linked schema
+    validate and partition its entries by payload
+    assign function indices
     collect reachable ABI and Metal-tag requirements
-    diagnose linked-module mixed API use
-    generate target adapters and Metal helpers
-    remove temporary liveness roots
+    generate native adapters and Metal helpers
+    publish canonical schema metadata for reflection
 
 dead-code elimination
-    generated functions retain selected stages
-    unselected stages are removed
+    generated functions and reflected table metadata retain selected stages
 
 target structural lowering
-    lower the descriptor and structural trace marker
+    lower the descriptor and structural trace/callable markers
 
 existing target legalization and emission
 ```
 
-The front end diagnoses mixed API use within one source module. The synthesis check covers uses
-that meet only after linking. Both new phases return immediately when no selected structural entry
-or trace program is present.
+Every phase returns immediately when no selected structural entry, descriptor, trace, or schema is
+present.
 
-### 5.1 Layout Discovery And Liveness
+### 5.1 Schema Discovery And Validation
 
-For each selected concrete `ITraceProgramLayout`:
+For each selected `ITraceProgramSchema`:
 
-1. Expand the hit, _Miss_, and _Callable_ group packs.
-2. Resolve each group slot, context, primitive, and executable stage witness.
-3. Omit placeholder _ClosestHit_, _AnyHit_, and _Intersection_ stages.
-4. Diagnose invalid or duplicate slots.
-5. Produce one canonical layout shared by code generation and reflection.
+1. Expand the closed or known entry pack in each section.
+2. For an open section, enumerate retained linked witness tables conforming to its tag.
+3. Union listed and linked entries by concrete type, then order them deterministically.
+4. Resolve each entry's context, record, payload/callable data, primitive, attributes, and stage
+   witnesses.
+5. Validate the entry trace context against `Schema.TraceContext` and all three hit-stage contexts
+   against `IHitGroup.Context`.
+6. Diagnose duplicate entries, invalid open tags, non-plain-data payloads/records, callable-data
+   disagreement, and unsupported target combinations.
+7. Derive `payloads(Schema)`, partition hit and miss entries, and assign function indices.
+8. Diagnose trace payloads the completed linked schema does not serve.
+9. Produce one canonical metadata object for reflection and target lowering.
 
-Temporary liveness applies only to explicit structural entries and witnesses reachable from a
-selected layout or trace marker. Install those roots before linking or specialization can simplify
-uncalled `invoke` methods. Generate adapters after specialization and before DCE, then remove the
-temporary roots. Generated calls and table metadata become the permanent roots.
+Open-section witness retention is a canonical producer responsibility. Do not scan arbitrary
+post-DCE IR or recover entries by source names.
 
-### 5.2 Reachable Requirements And Adapters
+### 5.2 Liveness And Requirement Collection
 
-Walk the specialized call graph from each selected `invoke` and collect only:
+Install temporary roots before simplification can remove selected `invoke` methods or open-section
+conformances. Remove them after generated adapters and table metadata become permanent roots.
 
-- stage-input properties that affect the target ABI;
-- operations that contribute Metal tags; and
-- operations requiring structural transformation, such as Metal `reportHit` handling.
+Walk each specialized stage call graph and collect only stage-input properties, target ABI state,
+Metal tags, and structural transformations that remain after specialization. Requirement analysis
+is per concrete stage and per payload partition where Metal table signatures or candidate state
+differ.
 
-Continue using the existing capability system for ordinary target requirements. Ignore property
-uses eliminated by specialization.
+Placeholder behavior is explicit:
 
-Generate each native signature from mandatory target ABI parameters plus the data required by the
-reachable properties. The adapter performs a trusted compiler dispatch to `invoke`; user code cannot
-make that call directly. Its public symbol and reflection name remain the stage struct name, while
-its private identity includes the layout, section, slot, and stage kind to avoid collisions.
-
-Generated Metal functions are also trusted dispatch boundaries. Validate every source stage body
-under its own logical stage, but do not combine mutually exclusive logical stage atoms when one
-physical Metal function dispatches both _Intersection_ and _AnyHit_, or _ClosestHit_ and _Miss_.
-Non-stage capability requirements still propagate normally.
+- `NoAnyHit` and `NoIntersection` generate no stage function.
+- Every hit group still has a function index.
+- If a payload partition contains any `NoClosestHit` group, Metal reflects one compatible no-op
+  closest-hit function for the host to install at every placeholder entry, including when all hit
+  groups in that partition use `NoClosestHit`.
 
 ## 6. Target Implementation
 
-| Concern         | D3D/Vulkan                             | Metal                                                       |
-| --------------- | -------------------------------------- | ----------------------------------------------------------- |
-| Stage code      | Generate native entry adapters         | Generate candidate and visible functions                    |
-| Trace call      | Reuse existing `TraceRay` lowering     | Generate traversal and post-trace dispatch                  |
-| `reportHit`     | Reuse native reporting                 | Lower through generated per-hit-group candidate state       |
-| _Callable_ call | Reuse native `CallShader`              | Index a generated visible-function table                    |
-| Attributes      | Reuse native hit-attribute ABI         | Transport custom attributes in private generated `ray_data` |
-| Descriptor      | No physical shader resource            | Lower through the parameter-group binding system            |
-| SBT records     | Host builds native SBT from reflection | Generate function tables and record-data buffer bindings    |
+### 6.1 D3D, Vulkan, And OptiX
 
-### 6.1 D3D And Vulkan
+Reuse existing payload, hit-attribute, `ReportHit`, `TraceRay`, `CallShader`, legalization, and emit
+paths. Generate one native stage adapter per concrete stage specialization and one native hit-group
+definition per reflected `IHitGroup`.
 
-Reuse existing payload, hit-attribute, `ReportHit`, trace, legalization, and emission paths. After
-retaining layout reflection and generated entry symbols, erase the shader-visible descriptor. Native
-SBT construction remains a host responsibility.
+The host writes an arbitrary number of records. Each hit record carries the native group identifier
+and that record's data; miss and callable records use their stage identifiers and record data.
+Reflection supplies every entry name, context/record layout, payload size, and native hit-attribute
+size. The shader-visible descriptor is erased on these targets.
 
-### 6.2 Metal
+### 6.2 Metal Descriptor And Runtime SBT
 
-Translate `RayTraversalDesc.rayFlags` to `intersector` opacity, culling, geometry, and first-hit
-settings. `RAY_FLAG_SKIP_CLOSEST_HIT_SHADER` suppresses post-trace _ClosestHit_ dispatch.
+For each payload partition, synthesize:
 
-Implement the following units:
+- One IFT resource.
+- One `_Miss_` visible-function table.
+- One `_ClosestHit_` visible-function table.
 
-1. **Tag inference:** collect and normalize the sources defined in
-   [PROPOSAL.md Section 2.5](PROPOSAL.md#25-inferring-the-metal-tag-list), and diagnose conflicts
-   before emission.
-2. **Function dispatch:** generate one candidate function per concrete hit group, visible functions
-   for _ClosestHit_, _Miss_, and _Callable_, IFT-to-logical-slot mapping, and post-trace selection.
-   Lower `RayTracer.callShader<CallableContext>` to the _Callable_ table. Require one
-   `CallableData` ABI across every _Callable_ group in the selected layout because the table index
-   may be dynamic. Pass the descriptor resources and record buffer through Metal _Callable_
-   visible functions so nested calls use the same tables and records.
-3. **Candidate reporting:** lower every source `reportHit` with portable range/current-distance
-   behavior, Boolean feedback, closest accepted candidate retention, payload writes on rejection,
-   and accept-and-end unwinding through helper calls. Dispatch _AnyHit_ only when it exists and the
-   candidate opacity and ray flags allow it.
-4. **Custom attributes:** carry the committed custom attributes and hit kind in private generated
-   `ray_data` alongside the user payload. Rejected candidates never overwrite committed attributes.
-5. **Descriptor binding:** specialize `TraceProgramDescriptor<Layout>` into an existing
-   parameter-group layout containing the IFT, visible-function tables, and record-data buffer. Reuse
-   the normal allocator, legalization, and binding reflection. The initial record buffer starts
-   with word offsets for the instance-hit-offset, hit-record, _Miss_-record, and _Callable_-record
-   tables; record-table entries are byte offsets from the buffer base. Lower `input.record` to the
-   native shader-record ABI on D3D/Vulkan and to this table lookup on Metal.
+Add one program-wide `_Callable_` visible-function table and one shared record buffer. The generated
+descriptor therefore has `3 * payloadCount + 2` resource fields, reported in reflected field order.
 
-The private generated state is absent from source reflection and contributes no Metal tag. Target
-ABI size reporting must still account for it. Validate custom attribute types against the portable
-D3D/Vulkan hit-attribute rules and the Metal representation. `ignoreHit()` must immediately unwind
-the logical _AnyHit_ invocation, including when called through a helper.
+The record buffer is:
 
-## 7. Implementation Milestones
+```text
+16-byte header
+├── instanceTableOffset
+├── hitOffset
+├── missOffset
+└── callableOffset
 
-### Phase 0: Prove Integration Points
+fixed-stride record
+├── +0  u32 functionIndex
+├── +4  padding through byte 15
+└── +16 Context.Record bytes
+```
 
-- Prototype a canonical stage-interface IR operation and preserve it through standard-module
-  serialization and import.
-- Generate one _Miss_ and one _ClosestHit_ adapter after specialization and before DCE.
-- Preserve the `ProgramLayout` trace marker through linking and specialization.
-- Specialize a mock descriptor through the parameter-group binding system.
+Hit, miss, and callable strides are compile-time constants derived from the largest record in the
+corresponding section and rounded to 16 bytes. Section offsets, counts, function indices, and record
+values are host-written runtime data. `0xFFFFFFFF` denotes an empty record.
 
-Exit: the insertion points, marker representation, adapter layout path, and descriptor specialization
-path are proven with focused tests.
+Post-trace and callable dispatch first resolve the runtime record, then read its function index,
+then call the corresponding VFT entry while passing `record + 16`. Generated stage inputs read
+`input.record` through that pointer.
 
-### Phase 1: Module And Front End
+### 6.3 Metal Candidate Dispatch
 
-- Add, build, install, and gate `slang.raytracing`.
-- Implement the public contracts and property-only stage inputs.
-- Implement and preserve the canonical stage-interface IR hierarchy.
-- Register canonical declarations and implement structural-use diagnostics.
-- Add struct-based structural entry lookup and stage-capability validation.
+For each payload partition that has candidate logic, generate at most one IFT dispatcher per
+primitive kind, at fixed indices:
 
-Exit: proposal examples type-check through the explicit import, standalone stages resolve by struct
-name, and invalid structural uses receive early diagnostics.
+```text
+0 = triangle
+1 = bounding box
+2 = curve
+```
 
-### Phase 2: Structural Synthesis And D3D/Vulkan
+The dispatcher recomputes the runtime hit-record index using the instance contribution,
+`geometryIndex`, `sbtStride`, and `sbtOffset`; reads the record's function index; and switches over
+the hit groups of that payload. Existing per-group `_AnyHit_`/`_Intersection_` composition becomes
+an ordinary dispatcher arm. A trace whose payload partition has no candidate logic passes no IFT,
+even when another payload in the same schema needs one. Keep the existing Metal `reportHit`
+accumulator semantics.
 
-- Implement selected-stage liveness and structural synthesis.
-- Canonicalize layouts and collect reachable requirements.
-- Generate native adapters and structural reflection.
-- Diagnose mixed structural and legacy API use.
-- Implement the D3D12/Vulkan Slang-RHI runtime harness.
-- Add integration coverage for every in-repository non-SER ray tracing test scenario, and run D3D12
-  on Windows and Vulkan on Linux and Windows.
+The host assigns geometry IFT offsets only by primitive kind and instance offsets to zero. Material,
+ray-type, payload, and group selection come from the SBT record, not the acceleration structure.
 
-Exit: the complete integration suite compiles, its portable runtime cases pass on D3D12 and Vulkan,
-and no structural IR remains in emitted target code.
+Committed custom attributes in generated `ray_data` are keyed by attributes type, allowing one
+stage adapter to be shared by groups with the same concrete stage. Continue to reject unsupported
+global-parameter use in Metal candidate logic.
 
-### Phase 3: Metal
+## 7. Reflection And Host Construction
 
-- Implement tag inference, function-table resources, and descriptor binding.
-- Generate candidate functions, visible functions, and post-trace dispatch.
-- Implement `reportHit`, _AnyHit_ control flow, and opaque custom-attribute transport.
-- Implement the local native Metal test host.
-- Generate the integration suite, compile it with the native Metal compiler, and run the portable
-  and Metal-specific runtime cases through that host on macOS.
+Rename the unreleased reflection surface from `TraceProgramLayout` to `TraceProgramSchema` and
+delete all slot accessors. Reflect:
 
-Exit: all generated Metal is accepted by the native compiler, and reflection agrees with generated
-tags, functions, logical slots, and resource bindings. The local Metal runtime suite also passes;
-deploying that host is not required.
+- Schema and trace-context types.
+- Payload partitions and payload layouts.
+- Hit groups and miss shaders in per-payload function-index order.
+- Callable shaders in program-wide function-index order.
+- Listed versus linked origin and open-section state.
+- Context, record, attributes, and exact emitted stage symbols.
+- Native payload/attribute sizes and target record strides.
+- Metal descriptor fields, no-op closest-hit functions, and candidate dispatchers.
+
+Hosts look up entries by qualified name after every link and write the reflected function index or
+native identifier into each runtime record. Numeric function indices are not persistent identifiers.
+
+## 8. Implementation Milestones
+
+### Phase 0A: Schema Terminology
+
+- Rebase PR #12691 on the required independent compiler fixes already on `master`.
+- Mechanically rename public standard-module declarations and files, feature-owned compiler
+  metadata exposed by the unreleased API, diagnostics, and reflection to schema terminology.
+- Retain internal IR operand/accessor and lowering vocabulary until the semantic cutover; renaming
+  that representation independently would create churn without changing behavior.
+- Update focused tests for the rename without changing payload ownership, record placement, or
+  group structure.
+
+Exit: the existing implementation behaves as before, all focused tests pass, and no old layout
+name remains in the public unreleased structural surface.
+
+### Phase 0B: Associated Stage Contexts
+
+- Change each stage interface from a generic context argument to an associated `Context`.
+- Express every associated-type relationship with a separate `__constraint`, including the three
+  hit-stage context equalities and the custom-primitive requirement on `IIntersectionShader`.
+- Update placeholders, witnesses, standalone entry lookup, adapters, and tests to read the
+  associated context.
+- Keep the existing payload location, record-position declarations, and miss/callable wrappers for
+  this phase; changing them independently would create a transient mixed contract.
+
+This phase requires #12817 in the base branch. Generic stage coverage waits for #12822 / PR #12827;
+do not add a structural workaround.
+
+Exit: the pre-cutover schema shape works with associated-context stages, standalone stage
+compilation still works, and the focused tests pass.
+
+### Phase 1: Atomic Closed-Schema Cutover And Portable Targets
+
+Land the following source, compiler, reflection, and test changes as one checkpoint:
+
+- Introduce the `IStageContext` hierarchy and move payload ownership from `ITraceContext` to hit
+  and miss contexts.
+- Remove record-position types and accessors, remove miss/callable wrapper groups, and make section
+  lists use hit groups, miss shaders, and callable shaders directly.
+- Canonicalize closed section lists, validate contexts, and derive payload partitions.
+- Assign and reflect dense function indices.
+- Make trace payload-generic and implement the empty-payload contract.
+- Preserve one stage specialization across schemas and repeated records.
+- Extend Slang RHI record data and update D3D12/Vulkan runtime construction.
+
+Do not expose an intermediate public contract containing only part of this cutover.
+
+Exit: one schema supports multiple payloads and arbitrary host record counts on D3D12, Vulkan, and
+OptiX; no record-position API or wrapper group remains; all portable integration/runtime tests
+pass.
+
+### Phase 2: Metal Runtime Records
+
+- Synthesize per-payload descriptor fields and table signatures.
+- Replace slot-indexed record lookup with fixed-stride runtime records carrying function indices.
+- Pass resolved record pointers into generated stages.
+- Generate per-payload, per-primitive candidate dispatchers and function-index switch arms.
+- Update Metal reflection and the native Metal runtime host.
+
+Exit: generated Metal compiles natively; multiple payloads, repeated groups with different record
+values, candidate logic, callables, and dynamic record counts pass locally on macOS.
+
+### Phase 3: Open Sections
+
+- Retain relevant tagged conformances through linking.
+- Discover and validate tagged hit groups or shaders from linked modules.
+- Deduplicate and deterministically order listed and linked entries.
+- Include linked entries in payload derivation, tag inference, adapters, tables, and reflection.
+
+Exit: separately compiled Slang modules can contribute entries through each open-section form, and
+closed programs pay no discovery or retention cost.
 
 ### Phase 4: Hardening
 
-- Complete serialization, reflection, diagnostics, and target-specific tests.
-- Run focused legacy-only compatibility tests and the non-ray-tracing regression suite unchanged.
-- Measure compilation with and without importing `slang.raytracing`.
+- Complete serialization, diagnostics, reflection, target, and compatibility coverage.
+- Run the complete non-SER ray-tracing integration inventory.
+- Run the non-ray-tracing regression suite unchanged.
+- Measure compiler startup without the import and Metal dispatch cost with the Cornell harness.
 
-Exit: the supported target matrix passes without changing legacy behavior, and the module remains
+Exit: the supported platform matrix passes, legacy behavior is unchanged, and the module remains
 unloaded when it is not imported.
 
-## 8. Test Plan
+## 9. Essential Tests
 
-Add focused tests with each implementation phase. The integration suite exercises complete ray
-tracing pipelines; it does not replace focused compiler regression tests.
+### 9.1 Front End And IR
 
-### 8.1 Module And Front-End Tests
+- Associated-context stage conformances, all context hierarchy relationships, and all placeholders.
+- Closed, open, and empty section forms; sealed list markers; valid and invalid open tags.
+- Entry trace-context and hit-stage-context mismatches.
+- Duplicate entries and deterministic function-index assignment.
+- Payload served/not served, multiple payloads, one empty payload, ambiguous empty payloads, and
+  illegal empty-payload values.
+- Plain-data payload and record restrictions.
+- Struct entry lookup and exact emitted names.
+- Structural-use, stage-input, capability, and mixed-API diagnostics.
+- Schema and concrete payload markers through serialization, linking, and specialization.
+- Open conformance retention, link discovery, deduplication, and ordering.
+- One concrete stage referenced by multiple groups/schemas produces one source-stage
+  specialization; only ABI-distinct target wrappers may differ.
 
-- Explicit import succeeds only with `-experimental-feature`; compilation without the import does
-  not load `slang.raytracing`.
-- The precompiled module preserves its canonical declarations and special IR identity. A user
-  module with matching names or shapes remains ordinary.
-- Generic constraints diagnose context, payload, primitive, attribute, group, and slot errors.
-- Each stage contract rejects operations unavailable in its logical stage, including transitive
-  helper use.
-- Construction, storage, escape, cross-stage input use, and direct `invoke` calls are rejected.
-  These diagnostics remain active under `-ignore-capabilities`.
-- `-entry ClosestHit -stage closesthit` selects a struct and preserves its name in reflection;
-  incompatible `-entry`/`-stage` pairs fail before IR generation.
-- A standalone procedural stage obtains attributes from `Context.Primitive.Attributes` without a
-  program layout or descriptor.
-- Same-module mixed API use fails in the front end. Cross-module mixing fails after composition.
-  Imported declarations and internal calls from `slang.raytracing` do not create false positives.
+### 9.2 Portable Targets And Runtime
 
-### 8.2 IR And Pipeline Tests
+- One schema with radiance and shadow payloads sharing one native SBT.
+- Repeating one entry across many records with different `Record` values.
+- Runtime `sbtOffset`, `sbtStride`, `missIndex`, instance, and geometry contributions.
+- `_ClosestHit_`, `_AnyHit_`, `_Intersection_`, `_Miss_`, `_Callable_`, recursive trace, custom
+  attributes, multiple `reportHit` calls, motion, and all supported primitives.
+- Descriptor erasure on D3D/Vulkan/OptiX while schema reflection remains.
+- Full in-repository non-SER ray-tracing scenario inventory on D3D12 and Vulkan.
 
-- Derived stage-interface operations and ordinary witnesses survive serialization, cloning,
-  linking, generic specialization, and interface wrapping.
-- The `ProgramLayout` marker survives linking and specialization and is removed by target lowering.
-- Explicit entries and stages in a selected layout survive early simplification. Unselected stages
-  and stages in an unselected layout are removed after adapter generation.
-- Group-pack expansion produces the canonical layout, diagnoses duplicate or invalid slots, and
-  omits `NoClosestHit`, `NoAnyHit`, and `NoIntersection` functions.
-- Direct and transitive property uses affect generated signatures and Metal tags; uses removed by
-  specialization do not.
-- Single-entry, multi-entry, and whole-layout compilation retain exactly the requested stages.
-- Generated symbols, reflection names, logical slots, payload binding, and attribute binding remain
-  stable.
+### 9.3 Metal
 
-### 8.3 D3D And Vulkan Tests
+- `3 * payloadCount + 2` descriptor resources and reflected binding order.
+- Per-payload VFT/IFT signatures and static payload-table selection at each trace.
+- Fixed primitive-kind dispatcher indices and record-driven candidate switch arms.
+- Fixed-stride hit, miss, and callable records, empty records, heterogeneous record sizes, and
+  per-record `input.record` semantics.
+- Real and placeholder `_ClosestHit_` entries.
+- Candidate opacity/ray-flag behavior, `ignoreHit`, accept-and-end, `reportHit`, and committed custom
+  attributes.
+- Runtime record replacement without rebuilding function tables.
+- Generated code accepted by the native Metal compiler and runtime results matching portable
+  D3D12/Vulkan cases.
+- Metal-only curve and multilevel-acceleration cases.
 
-- Generate valid native adapters for every supported stage and primitive combination.
-- Verify payload, hit attributes, `ReportHit`, recursive trace calls, and placeholder omission.
-- Verify that the descriptor has no physical shader binding while structural layout reflection is
-  retained.
-- Add structural integration coverage for every ray tracing test scenario under this repository's
-  `tests/` tree, with SER as the only exclusion, and compile and run the complete suite on both
-  targets.
+### 9.4 Cross-Platform And Cost
 
-If an in-scope non-SER test cannot be expressed, treat it as an API or implementation gap rather
-than adding another exclusion.
+Use the local build farm with the Linux checkout as the only writer:
 
-### 8.4 Metal Tests
+```text
+Linux   -> Vulkan compile and runtime through Slang RHI
+Windows -> D3D12 and Vulkan compile and runtime through Slang RHI
+macOS   -> native Metal compile and direct-host runtime
+```
 
-- Cover every valid primitive and stage combination from the proposal, including absent
-  _ClosestHit_, _AnyHit_, and _Intersection_ stages.
-- Cover every tag source and conflict rule, and verify that specialized-away property uses do not
-  contribute tags.
-- Validate IFT entries, visible-function tables, logical-slot mappings, post-trace dispatch,
-  descriptor bindings, and reflection.
-- Exercise zero, one, and multiple `reportHit` calls; absent or bypassed _AnyHit_; opaque candidates;
-  ray flags; payload writes on rejected candidates; and closest accepted candidate replacement.
-- Exercise `ignoreHit()` and accept-and-end through nested helpers and verify that their control flow
-  unwinds the correct logical stages.
-- Verify custom attributes for accepted and rejected bounding-box candidates. Private generated
-  `ray_data` must add no tag and must not appear in source reflection.
-- Generate Metal for the complete integration suite and compile it with the native Metal compiler
-  on macOS.
-- Build the native Metal host and run the portable and Metal-only runtime cases locally on macOS.
-  This host is not installed, deployed, or part of the regular test suite in version one.
+Workers receive disposable snapshots and return logs only. Keep runner recipes and logs outside the
+repository. Cap every native build at eight jobs.
 
-### 8.5 Cross-Platform Runtime Tests
+Also verify:
 
-- Run the same portable shader cases through Slang RHI on Vulkan/Linux and D3D12/Vulkan/Windows,
-  then through the native test host on Metal/macOS. The host implementations may differ, but their
-  expected result records must match. A compile-only result does not satisfy local runtime
-  validation.
-- Cover triangle hit and miss selection, payload mutation, multiple logical slots, _Miss_,
-  _ClosestHit_, _AnyHit_, _Callable_, procedural intersection, multiple `reportHit` calls, custom
-  attributes, and recursive tracing.
-- Add Metal-only runtime cases for curves and multilevel acceleration structures.
-- Build deterministic scenes, write compact result records to a buffer, read them back, and compare
-  exact stage IDs, instance paths, payload values, hit distances, hit kinds, and attributes.
-- Skip a target-specific case only when the device lacks its declared capability, and record the
-  skip in the local-build-farm summary.
-- Run workers from disposable snapshots and retain the per-platform build, compiler, and runtime
-  logs under the local-build-farm run directory.
-
-### 8.6 Compatibility And Cost Tests
-
-- Keep focused legacy-only ray tracing tests for backward-compatibility coverage.
-- Run the non-ray-tracing regression suite unchanged.
-- Measure compilation with and without `import slang.raytracing`; the no-import path must not load
-  the module or run structural lowering.
+- Legacy-only tests and the non-ray-tracing suite remain unchanged.
+- Importing the module is required to activate structural work.
+- Compilation without the import does not load the module or run structural phases.
+- Closed schemas do not pay the open-section discovery cost.
