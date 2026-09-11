@@ -45,10 +45,14 @@ instance of the schema.
 ```slang
 public interface IHitGroup
 {
-    associatedtype Context : IHitContext;
-    associatedtype ClosestHit : IClosestHitShader;
-    associatedtype AnyHit : IAnyHitShader;
-    associatedtype Intersection : IIntersectionStage;
+    associatedtype Context;
+    associatedtype ClosestHit;
+    associatedtype AnyHit;
+    associatedtype Intersection;
+    __constraint Context : IHitContext;
+    __constraint ClosestHit : IClosestHitShader;
+    __constraint AnyHit : IAnyHitShader;
+    __constraint Intersection : IIntersectionStage;
     __constraint ClosestHit.Context == Context;
     __constraint AnyHit.Context == Context;
     __constraint Intersection.Context == Context;

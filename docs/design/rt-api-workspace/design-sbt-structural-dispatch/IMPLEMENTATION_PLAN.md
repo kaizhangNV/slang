@@ -74,8 +74,9 @@ The revised contracts currently depend on:
 - The open fix for generic type specialization with associated-type equality constraints
   (#12822 / PR #12827) before generic stage coverage can be accepted.
 
-Use a separate `__constraint` declaration for associated-type relationships. Reserve `where`
-clauses for generic parameters and other ordinary generic constraints.
+Use a separate `__constraint` declaration for every associated-type bound or relationship. Reserve
+`where` clauses for generic parameters, functions, extensions, and other ordinary generic
+constraints.
 
 The removed variadic list constraint is not replaced with a compiler special case. Schema
 canonicalization checks every listed and linked entry uniformly.
@@ -491,8 +492,9 @@ name remains in the public unreleased structural surface.
 ### Phase 0B: Associated Stage Contexts
 
 - Change each stage interface from a generic context argument to an associated `Context`.
-- Express every associated-type relationship with a separate `__constraint`, including the three
-  hit-stage context equalities and the custom-primitive requirement on `IIntersectionShader`.
+- Express every associated-type bound or relationship with a separate `__constraint`, including
+  the three hit-stage context equalities and the custom-primitive requirement on
+  `IIntersectionShader`.
 - Update placeholders, witnesses, standalone entry lookup, adapters, and tests to read the
   associated context.
 - Keep the existing payload location, record-position declarations, and miss/callable wrappers for

@@ -24,14 +24,17 @@ other payloads.
 ```slang
 public interface ITraceContext
 {
-    associatedtype AccelerationStructure : IAccelerationStructure;
-    associatedtype Motion : IRayMotion;
+    associatedtype AccelerationStructure;
+    associatedtype Motion;
+    __constraint AccelerationStructure : IAccelerationStructure;
+    __constraint Motion : IRayMotion;
 }
 
 public interface IStageContext
 {
-    associatedtype TraceContext : ITraceContext;
+    associatedtype TraceContext;
     associatedtype Record;
+    __constraint TraceContext : ITraceContext;
 }
 
 public interface IPayloadContext : IStageContext
@@ -41,7 +44,8 @@ public interface IPayloadContext : IStageContext
 
 public interface IHitContext : IPayloadContext
 {
-    associatedtype Primitive : IIntersectionPrimitive;
+    associatedtype Primitive;
+    __constraint Primitive : IIntersectionPrimitive;
 }
 
 public interface ICallableContext : IStageContext
@@ -62,10 +66,14 @@ require all three hit stages to share its context:
 ```slang
 public interface IHitGroup
 {
-    associatedtype Context : IHitContext;
-    associatedtype ClosestHit : IClosestHitShader;
-    associatedtype AnyHit : IAnyHitShader;
-    associatedtype Intersection : IIntersectionStage;
+    associatedtype Context;
+    associatedtype ClosestHit;
+    associatedtype AnyHit;
+    associatedtype Intersection;
+    __constraint Context : IHitContext;
+    __constraint ClosestHit : IClosestHitShader;
+    __constraint AnyHit : IAnyHitShader;
+    __constraint Intersection : IIntersectionStage;
     __constraint ClosestHit.Context == Context;
     __constraint AnyHit.Context == Context;
     __constraint Intersection.Context == Context;
@@ -78,10 +86,14 @@ directly:
 ```slang
 public interface ITraceProgramSchema
 {
-    associatedtype TraceContext : ITraceContext;
-    associatedtype HitGroups : IHitGroupList;
-    associatedtype MissShaders : IMissShaderList;
-    associatedtype CallableShaders : ICallableShaderList;
+    associatedtype TraceContext;
+    associatedtype HitGroups;
+    associatedtype MissShaders;
+    associatedtype CallableShaders;
+    __constraint TraceContext : ITraceContext;
+    __constraint HitGroups : IHitGroupList;
+    __constraint MissShaders : IMissShaderList;
+    __constraint CallableShaders : ICallableShaderList;
 }
 ```
 

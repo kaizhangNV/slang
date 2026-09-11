@@ -192,15 +192,18 @@ namespace rt
     // ── contexts (one hierarchy; the payload moves from the trace context to the contexts) ──
     public interface ITraceContext
     {
-        associatedtype AccelerationStructure : IAccelerationStructure;
-        associatedtype Motion : IRayMotion;
+        associatedtype AccelerationStructure;
+        associatedtype Motion;
+        __constraint AccelerationStructure : IAccelerationStructure;
+        __constraint Motion : IRayMotion;
     }
 
     // Common to every stage: the trace context and the per-record data the host writes.
     public interface IStageContext
     {
-        associatedtype TraceContext : ITraceContext;
+        associatedtype TraceContext;
         associatedtype Record;
+        __constraint TraceContext : ITraceContext;
     }
 
     // Stages that carry a payload: hit and miss. A miss shader's context is any IPayloadContext, so
@@ -212,7 +215,8 @@ namespace rt
 
     public interface IHitContext : IPayloadContext
     {
-        associatedtype Primitive : IIntersectionPrimitive;
+        associatedtype Primitive;
+        __constraint Primitive : IIntersectionPrimitive;
     }
 
     public interface ICallableContext : IStageContext  // callables carry CallableData, not a payload
@@ -229,19 +233,43 @@ namespace rt
     // ── stage contracts (the context becomes an associated type) ─────────────────────────
     // A stage names its own context. This lets the miss and callable sections list shaders
     // directly and lets IHitGroup require its three stages to agree on one context.
-    public interface IClosestHitShader    { associatedtype Context : IHitContext;      void invoke(ClosestHitInput<Context> input); }
-    public interface IAnyHitShader        { associatedtype Context : IHitContext;      void invoke(AnyHitInput<Context> input); }
+    public interface IClosestHitShader
+    {
+        associatedtype Context;
+        __constraint Context : IHitContext;
+        void invoke(ClosestHitInput<Context> input);
+    }
+    public interface IAnyHitShader
+    {
+        associatedtype Context;
+        __constraint Context : IHitContext;
+        void invoke(AnyHitInput<Context> input);
+    }
     // Compiler-owned marker admitting IIntersectionShader or NoIntersection, as today. It is public
     // because the public `invoke` below names its Context (a public method may not reference a
     // member of an internal interface: E30604) and sealed so no user type conforms to it directly.
-    [sealed] public interface IIntersectionStage { associatedtype Context : IHitContext; }
+    [sealed] public interface IIntersectionStage
+    {
+        associatedtype Context;
+        __constraint Context : IHitContext;
+    }
     public interface IIntersectionShader : IIntersectionStage
     {
         __constraint Context.Primitive : ICustomIntersectionPrimitive;
         void invoke(IntersectionInput<Context> input);
     }
-    public interface IMissShader          { associatedtype Context : IPayloadContext;  void invoke(MissInput<Context> input); }
-    public interface ICallableShader      { associatedtype Context : ICallableContext; void invoke(CallableInput<Context> input); }
+    public interface IMissShader
+    {
+        associatedtype Context;
+        __constraint Context : IPayloadContext;
+        void invoke(MissInput<Context> input);
+    }
+    public interface ICallableShader
+    {
+        associatedtype Context;
+        __constraint Context : ICallableContext;
+        void invoke(CallableInput<Context> input);
+    }
 
     // Placeholders keep their generic argument and satisfy the associated type with it.
     public struct NoClosestHit<C> : IClosestHitShader where C : IHitContext { typealias Context = C; public void invoke(ClosestHitInput<C> input) {} }
@@ -261,10 +289,14 @@ namespace rt
     // has a table position; how many records use it, and what each carries, is host data.
     public interface IHitGroup
     {
-        associatedtype Context : IHitContext;
-        associatedtype ClosestHit : IClosestHitShader;
-        associatedtype AnyHit : IAnyHitShader;
-        associatedtype Intersection : IIntersectionStage;
+        associatedtype Context;
+        associatedtype ClosestHit;
+        associatedtype AnyHit;
+        associatedtype Intersection;
+        __constraint Context : IHitContext;
+        __constraint ClosestHit : IClosestHitShader;
+        __constraint AnyHit : IAnyHitShader;
+        __constraint Intersection : IIntersectionStage;
         __constraint ClosestHit.Context == Context;
         __constraint AnyHit.Context == Context;
         __constraint Intersection.Context == Context;
@@ -300,10 +332,14 @@ namespace rt
     // ── the one schema contract (hit groups, miss shaders, callable shaders) ─────────────
     public interface ITraceProgramSchema
     {
-        associatedtype TraceContext    : ITraceContext;
-        associatedtype HitGroups       : IHitGroupList;
-        associatedtype MissShaders     : IMissShaderList;
-        associatedtype CallableShaders : ICallableShaderList;
+        associatedtype TraceContext;
+        associatedtype HitGroups;
+        associatedtype MissShaders;
+        associatedtype CallableShaders;
+        __constraint TraceContext : ITraceContext;
+        __constraint HitGroups : IHitGroupList;
+        __constraint MissShaders : IMissShaderList;
+        __constraint CallableShaders : ICallableShaderList;
     }
 
     // ── traversal description (unchanged from the draft) ─────────────────────────────────
