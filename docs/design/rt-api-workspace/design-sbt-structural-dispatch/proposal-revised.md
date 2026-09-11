@@ -244,9 +244,9 @@ namespace rt
     public interface ICallableShader      { associatedtype Context : ICallableContext; void invoke(CallableInput<Context> input); }
 
     // Placeholders keep their generic argument and satisfy the associated type with it.
-    public struct NoClosestHit<C : IHitContext>   : IClosestHitShader  { typealias Context = C; public void invoke(ClosestHitInput<C> input) {} }
-    public struct NoAnyHit<C : IHitContext>       : IAnyHitShader      { typealias Context = C; public void invoke(AnyHitInput<C> input) {} }
-    public struct NoIntersection<C : IHitContext> : IIntersectionStage { typealias Context = C; }
+    public struct NoClosestHit<C> : IClosestHitShader where C : IHitContext { typealias Context = C; public void invoke(ClosestHitInput<C> input) {} }
+    public struct NoAnyHit<C> : IAnyHitShader where C : IHitContext { typealias Context = C; public void invoke(AnyHitInput<C> input) {} }
+    public struct NoIntersection<C> : IIntersectionStage where C : IHitContext { typealias Context = C; }
 
     // ── stage inputs (one type changes) ──────────────────────────────────────────────────
     // ClosestHitInput, AnyHitInput, MissInput:  property Context.Payload payload { ref; }
@@ -280,18 +280,18 @@ namespace rt
 
     // Closed section. Function indices are the declaration ordinals, per payload for hit and miss,
     // program-wide for callables.
-    public struct HitGroupList<each Group : IHitGroup>              : IHitGroupList        { public static const int count = countof(Group); }
-    public struct MissShaderList<each Shader : IMissShader>         : IMissShaderList      { public static const int count = countof(Shader); }
-    public struct CallableShaderList<each Shader : ICallableShader> : ICallableShaderList  { public static const int count = countof(Shader); }
+    public struct HitGroupList<each Group> : IHitGroupList where Group : IHitGroup { public static const int count = countof(Group); }
+    public struct MissShaderList<each Shader> : IMissShaderList where Shader : IMissShader { public static const int count = countof(Shader); }
+    public struct CallableShaderList<each Shader> : ICallableShaderList where Shader : ICallableShader { public static const int count = countof(Shader); }
 
     // Open section (Section 6): the listed entries plus every type in the linked program that
     // conforms to `Tag`, deduplicated by type. Listed entries take the lowest ordinals (within their
     // payload for hit and miss); linked entries follow in qualified-type-name order. `Tag` is checked by the compiler
     // to be an interface inheriting the section's entry interface (IHitGroup, IMissShader, or
     // ICallableShader).
-    public struct OpenHitGroups<Tag, each Group : IHitGroup>              : IHitGroupList        { public static const int knownCount = countof(Group); }
-    public struct OpenMissShaders<Tag, each Shader : IMissShader>         : IMissShaderList      { public static const int knownCount = countof(Shader); }
-    public struct OpenCallableShaders<Tag, each Shader : ICallableShader> : ICallableShaderList  { public static const int knownCount = countof(Shader); }
+    public struct OpenHitGroups<Tag, each Group> : IHitGroupList where Group : IHitGroup { public static const int knownCount = countof(Group); }
+    public struct OpenMissShaders<Tag, each Shader> : IMissShaderList where Shader : IMissShader { public static const int knownCount = countof(Shader); }
+    public struct OpenCallableShaders<Tag, each Shader> : ICallableShaderList where Shader : ICallableShader { public static const int knownCount = countof(Shader); }
 
     public struct NoHitGroups       : IHitGroupList       {}
     public struct NoMissShaders     : IMissShaderList     {}
