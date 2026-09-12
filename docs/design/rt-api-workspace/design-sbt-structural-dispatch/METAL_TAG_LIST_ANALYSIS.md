@@ -63,8 +63,10 @@ The trace context contains trace-wide properties, but no authored primitive-data
 interface ITraceContext
 {
     associatedtype Payload;
-    associatedtype AccelerationStructure : IAccelerationStructure;
-    associatedtype Motion : IRayMotion;
+    associatedtype AccelerationStructure;
+    associatedtype Motion;
+    __constraint AccelerationStructure : IAccelerationStructure;
+    __constraint Motion : IRayMotion;
 }
 ```
 
@@ -77,9 +79,11 @@ Each hit context fixes one primitive kind:
 ```slang
 interface IHitContext
 {
-    associatedtype TraceContext : ITraceContext;
-    associatedtype Primitive : IIntersectionPrimitive;
+    associatedtype TraceContext;
+    associatedtype Primitive;
     associatedtype Record;
+    __constraint TraceContext : ITraceContext;
+    __constraint Primitive : IIntersectionPrimitive;
 }
 ```
 

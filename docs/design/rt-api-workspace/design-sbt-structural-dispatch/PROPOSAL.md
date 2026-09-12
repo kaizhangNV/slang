@@ -194,24 +194,32 @@ namespace rt
 
     public interface IHitGroup
     {
-        associatedtype Slot : IShaderGroupSlot;
-        associatedtype Context : IHitContext;
-
-        associatedtype ClosestHit : IClosestHitShader<Context>;
-        associatedtype AnyHit : IAnyHitShader<Context>;
-        associatedtype Intersection : IIntersectionStage<Context>;
+        associatedtype Slot;
+        associatedtype Context;
+        associatedtype ClosestHit;
+        associatedtype AnyHit;
+        associatedtype Intersection;
+        __constraint Slot : IShaderGroupSlot;
+        __constraint Context : IHitContext;
+        __constraint ClosestHit : IClosestHitShader<Context>;
+        __constraint AnyHit : IAnyHitShader<Context>;
+        __constraint Intersection : IIntersectionStage<Context>;
     }
 
     public interface IMissGroup
     {
-        associatedtype Slot : IShaderGroupSlot;
-        associatedtype Context : IMissGroupContext;
-        associatedtype Miss : IMissShader<Context>;
+        associatedtype Slot;
+        associatedtype Context;
+        associatedtype Miss;
+        __constraint Slot : IShaderGroupSlot;
+        __constraint Context : IMissGroupContext;
+        __constraint Miss : IMissShader<Context>;
     }
 
     public interface ICallableGroup
     {
-        associatedtype Slot : IShaderGroupSlot;
+        associatedtype Slot;
+        __constraint Slot : IShaderGroupSlot;
         ...
     }
 
@@ -247,10 +255,14 @@ namespace rt
 
     public interface ITraceProgramLayout
     {
-        associatedtype TraceContext : ITraceContext;
-        associatedtype MissGroups : IMissGroupList<TraceContext>;
-        associatedtype HitGroups : IHitGroupList<TraceContext>;
-        associatedtype CallableGroups : ICallableGroupList<TraceContext>;
+        associatedtype TraceContext;
+        associatedtype MissGroups;
+        associatedtype HitGroups;
+        associatedtype CallableGroups;
+        __constraint TraceContext : ITraceContext;
+        __constraint MissGroups : IMissGroupList<TraceContext>;
+        __constraint HitGroups : IHitGroupList<TraceContext>;
+        __constraint CallableGroups : ICallableGroupList<TraceContext>;
     }
 }
 ```
@@ -692,8 +704,10 @@ context defines the trace-wide properties of a trace family:
 interface ITraceContext
 {
     associatedtype Payload;
-    associatedtype AccelerationStructure : IAccelerationStructure;
-    associatedtype Motion : IRayMotion;
+    associatedtype AccelerationStructure;
+    associatedtype Motion;
+    __constraint AccelerationStructure : IAccelerationStructure;
+    __constraint Motion : IRayMotion;
 }
 ```
 
@@ -723,9 +737,11 @@ A hit group context specializes the trace context with a primitive kind and a re
 ```slang
 interface IHitContext
 {
-    associatedtype TraceContext : ITraceContext;
-    associatedtype Primitive : IIntersectionPrimitive;
+    associatedtype TraceContext;
+    associatedtype Primitive;
     associatedtype Record;
+    __constraint TraceContext : ITraceContext;
+    __constraint Primitive : IIntersectionPrimitive;
 }
 ```
 
