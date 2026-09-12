@@ -189,10 +189,11 @@ When a schema contains exactly one empty payload type, this overload is availabl
 tracer.trace(desc, accelerationStructure, descriptor);
 ```
 
-The compiler supplies the target's required native payload operand. User code cannot construct or
-pass a value of the empty payload type, explicitly specialize `trace` with it, or read
-`input.payload` from a stage using it. Two distinct empty payload types in one schema are ambiguous
-and produce a diagnostic.
+The compiler supplies the target's required native payload operand. User code cannot pass a value
+of the empty payload type to `trace`, explicitly specialize `trace` with it, or read
+`input.payload` from a stage using it. An ordinary value of the same empty struct outside these
+structural API boundaries is harmless and remains ordinary Slang code. Two distinct empty payload
+types in one schema are ambiguous and produce a diagnostic.
 
 ## 9. Open Sections
 

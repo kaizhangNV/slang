@@ -214,8 +214,11 @@ void trace<Payload>(
 
 Structural synthesis diagnoses a payload that no hit group or miss shader in `Schema` serves. A
 separate no-payload overload is available only when the schema has exactly one empty payload type.
-The compiler supplies the mandatory native payload operand internally and rejects attempts to name,
-pass, or access a value of that empty payload type.
+The compiler supplies the mandatory native payload operand internally and rejects attempts to name
+that type as an explicit `trace` payload, pass its value to `trace`, or access it through
+`input.payload`. Constructing the same empty struct outside the structural API remains valid; its
+payload role may be declared in another separately compiled module and is not an intrinsic property
+of the struct declaration.
 
 All stage inputs remain zero-storage property views. `input.payload` has type
 `Context.Payload`; `input.record` has type `Context.Record` and means the concrete runtime record
