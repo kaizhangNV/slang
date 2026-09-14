@@ -410,7 +410,9 @@ For each payload partition, synthesize:
 - One `_ClosestHit_` visible-function table.
 
 Add one program-wide `_Callable_` visible-function table and one shared record buffer. The generated
-descriptor therefore has `3 * payloadCount + 2` resource fields, reported in reflected field order.
+descriptor therefore has `3 * payloadCount + 2` resource fields. Reflection reports each field's
+resource kind, payload partition, and Metal argument-buffer `[[id]]`; enumeration order is not a
+host binding contract.
 
 The record buffer is:
 
@@ -590,7 +592,8 @@ unloaded when it is not imported.
 
 ### 9.3 Metal
 
-- `3 * payloadCount + 2` descriptor resources and reflected binding order.
+- `3 * payloadCount + 2` descriptor resources whose reflected Metal argument-buffer `[[id]]`
+  matches the generated physical layout independently of enumeration order.
 - Per-payload VFT/IFT signatures and static payload-table selection at each trace.
 - Fixed primitive-kind dispatcher indices and record-driven candidate switch arms.
 - Fixed-stride hit, miss, and callable records, empty records, heterogeneous record sizes, and

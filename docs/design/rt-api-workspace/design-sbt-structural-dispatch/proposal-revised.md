@@ -651,7 +651,8 @@ TraceProgramDescriptor<Schema> on Metal, one table set per payload P0 .. Pn-1
 The resource shape of the `TraceProgramDescriptorResources<Schema>` placeholder in
 `descriptor.slang` is unchanged; on Metal the lowering already rewrites it, and now synthesizes the
 struct above for the schema's payload count instead of rewriting five fixed field types. Reflection
-reports the field order (Section 8.3). A payload partition with no candidate logic keeps its
+reports each resource's Metal argument-buffer `[[id]]`; resource enumeration order is not a host
+binding contract (Section 8.3). A payload partition with no candidate logic keeps its
 intersection-table field (the field count is always `3 * payloadCount + 2`, Section 11) but reflects
 no dispatchers, and a trace of that payload passes no table to `intersect`, exactly as the draft does
 today with its single unused `intersectionFunctions` field; the host binds an empty table (Section
@@ -1070,8 +1071,8 @@ Now:
    packed from the reflected record layout; one miss record per
    `missIndex` the shader uses; one callable record per callable. Per-frame changes rewrite records
    only.
-7. Write the descriptor: the per-payload tables in reflected field order, the callable table, and
-   the records buffer.
+7. Write the descriptor: place every per-payload table, the callable table, and the records-buffer
+   address at that resource's reflected Metal argument-buffer `[[id]]`.
 
 ### 8.2 D3D/Vulkan Host Migration (3.2)
 
@@ -1133,9 +1134,10 @@ struct ReflectedPayload
     List<ReflectedHitGroup> hitGroups;           // in function-index order within this payload
     List<ReflectedMissShader> missShaders;       // { functionIndex, name, linked, contextType, recordType, recordTypeLayout, miss }
     // Metal only
-    ReflectedDescriptorField* metalClosestHitTable;             // the descriptor fields holding this payload's tables;
-    ReflectedDescriptorField* metalMissTable;                   //   the host binds by field, never by a number
-    ReflectedDescriptorField* metalIntersectionTable;           //   (always present; an empty table when there is no candidate logic)
+    ReflectedDescriptorField* metalClosestHitTable;             // the descriptor resources holding this payload's tables;
+    ReflectedDescriptorField* metalMissTable;                   //   each reports its Metal argument-buffer [[id]], independently
+    ReflectedDescriptorField* metalIntersectionTable;           //   of enumeration order (always present; an empty table when
+                                                                //   there is no candidate logic)
     List<ReflectedMetalDispatcher> metalCandidateDispatchers;   // { entryPointName, primitiveKind, tableIndex }
     EntryPointReflection* metalEmptyClosestHit;                 // null when no NoClosestHit group exists for this payload
 };
