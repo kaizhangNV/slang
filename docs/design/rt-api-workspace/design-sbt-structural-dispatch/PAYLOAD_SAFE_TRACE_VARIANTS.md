@@ -1,6 +1,6 @@
 # Payload Model For Trace Program Schemas
 
-Status: authoritative companion to [proposal-revised.md](proposal-revised.md).
+Status: supporting analysis for [PROPOSAL.md](PROPOSAL.md). The proposal is normative.
 
 This note defines how one trace program schema serves several payload types, what Slang checks,
 and what remains the host's responsibility.
@@ -174,9 +174,9 @@ The compiler assigns dense function indices after linking:
 - Listed entries precede entries discovered through an open section.
 
 On Metal, a runtime record stores the function index and the trace's payload type selects the table
-that interprets it. D3D and Vulkan records use native shader identifiers; the reflected function
-index is only an enumeration order on those targets. Hosts use qualified entry names as stable keys
-and resolve numeric indices after every link.
+that interprets it. D3D, Vulkan, and OptiX records use native shader identifiers; the reflected
+function index is only an enumeration order on those targets. Hosts use qualified entry names as
+stable keys and resolve numeric indices after every link.
 
 ## 8. Empty Payload
 

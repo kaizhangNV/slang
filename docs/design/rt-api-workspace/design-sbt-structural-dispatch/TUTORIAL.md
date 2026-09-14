@@ -1,24 +1,30 @@
-# Tutorial: Declaring A Structural Ray-Tracing Program
+# Tutorial: Declaring a Structural Ray-Tracing Program
 
-This tutorial builds a minimal triangle hit/miss pipeline with the structural ray-tracing API. The
-same source layout maps to native D3D/Vulkan SBT records and generated Metal function-table
-dispatch.
+This tutorial builds a minimal triangle hit/miss program. The same shader schema maps to native
+D3D, Vulkan, and OptiX SBTs and to generated Metal function-table dispatch.
 
-## 1. Import The Module
-
-The API is an experimental standard module:
+## 1. Import the module
 
 ```slang
 import slang.raytracing;
 ```
 
-Compile with `-experimental-feature`. Importing the module is explicit; ordinary shaders do not pay
-its loading or lowering cost.
+Compile with the experimental-feature flag. The module is loaded only after this explicit import.
 
-## 2. Define The Trace Context
+## 2. Define traversal and stage contexts
 
-The trace context fixes the payload, acceleration-structure model, and motion model shared by one
-trace program:
+The trace context contains facts shared by the entire schema:
+
+```slang
+struct SceneTraceContext : rt::ITraceContext
+{
+    typealias AccelerationStructure = rt::AccelerationStructure;
+    typealias Motion = rt::NoMotion;
+}
+```
+
+Payload and record types belong to stage contexts, so one schema can serve several payloads and
+record shapes:
 
 ```slang
 struct RadiancePayload
@@ -26,138 +32,115 @@ struct RadiancePayload
     float3 color;
 }
 
-struct PrimaryTraceContext : rt::ITraceContext
+struct MaterialRecord
 {
-    typealias Payload = RadiancePayload;
-    typealias AccelerationStructure = rt::AccelerationStructure;
-    typealias Motion = rt::NoMotion;
+    float3 albedo;
 }
-```
 
-`rt::AccelerationStructure` is the portable instanced scene model. Metal-only programs can instead
-select `rt::MultiLevelAccelerationStructure<N>` when they require a different hierarchy depth.
-
-## 3. Write A Hit Stage
-
-First define the context shared by the stages in one hit group:
-
-```slang
 struct TriangleHitContext : rt::IHitContext
 {
-    typealias TraceContext = PrimaryTraceContext;
+    typealias TraceContext = SceneTraceContext;
+    typealias Payload = RadiancePayload;
+    typealias Record = MaterialRecord;
     typealias Primitive = rt::TrianglePrimitive;
+}
+
+struct RadianceMissContext : rt::IPayloadContext
+{
+    typealias TraceContext = SceneTraceContext;
+    typealias Payload = RadiancePayload;
     typealias Record = void;
 }
 ```
 
-Then implement _ClosestHit_ as a method rather than a free-standing entry point:
+`rt::AccelerationStructure` is the portable two-level instanced-scene model. Metal-only programs
+can select `rt::MultiLevelAccelerationStructure<N>` when they need direct primitive-AS or
+multilevel traversal.
+
+## 3. Write the stage structs
+
+Implement _ClosestHit_ and _Miss_ as interface-conforming structs:
 
 ```slang
-struct ShadeTriangle : rt::IClosestHitShader<TriangleHitContext>
+struct ShadeTriangle : rt::IClosestHitShader
 {
-    void invoke(rt::ClosestHitInput<TriangleHitContext> input)
+    typealias Context = TriangleHitContext;
+
+    void invoke(rt::ClosestHitInput<Context> input)
     {
-        float2 barycentrics = input.triangle.barycentricCoord;
-        input.payload.color = float3(barycentrics, 1.0);
+        float2 uv = input.triangle.barycentricCoord;
+        input.payload.color = input.record.albedo * float3(uv, 1.0);
     }
 }
-```
 
-The input is a compiler-provided view. Its members are intrinsic properties, not stored fields.
-Only properties reachable from `invoke` contribute native entry parameters or Metal tags.
-
-## 4. Declare The Hit Group
-
-A hit group gives the logical SBT record a slot and identifies its stage implementations:
-
-```slang
-struct TriangleHitGroup : rt::IHitGroup
+struct ShadeMiss : rt::IMissShader
 {
-    typealias Slot = rt::HitGroupSlot<0>;
-    typealias Context = TriangleHitContext;
-    typealias ClosestHit = ShadeTriangle;
-    typealias AnyHit = rt::NoAnyHit<TriangleHitContext>;
-    typealias Intersection = rt::NoIntersection<TriangleHitContext>;
-}
-```
+    typealias Context = RadianceMissContext;
 
-The placeholders state that this group has no source _AnyHit_ or _Intersection_ logic. They do not
-consume physical SBT or Metal function-table entries.
-
-For procedural geometry, use `rt::BoundingBoxPrimitive<Attributes>` in the hit context and provide
-an `IIntersectionShader`. The shader reports candidates through `input.reportHit(...)`; an optional
-_AnyHit_ stage can accept, ignore, or end the search for each reported candidate.
-
-## 5. Declare The Miss Group
-
-_Miss_ has its own context and record type:
-
-```slang
-struct PrimaryMissContext : rt::IMissGroupContext
-{
-    typealias TraceContext = PrimaryTraceContext;
-    typealias Record = void;
-}
-
-struct ShadeMiss : rt::IMissShader<PrimaryMissContext>
-{
-    void invoke(rt::MissInput<PrimaryMissContext> input)
+    void invoke(rt::MissInput<Context> input)
     {
         input.payload.color = float3(0.0);
     }
 }
-
-struct PrimaryMissGroup : rt::IMissGroup
-{
-    typealias Slot = rt::MissSlot<0>;
-    typealias Context = PrimaryMissContext;
-    typealias Miss = ShadeMiss;
-}
 ```
 
-## 6. Assemble The Program Layout
+Each input is a compiler-provided, zero-storage property view. A property maps to native stage state
+or a structural intrinsic. Reachable optional-property uses contribute additional native entry
+parameters or Metal tags; mandatory payload and native hit-attribute parameters remain present.
 
-`ITraceProgramLayout` is the source-of-truth for the logical SBT:
+## 4. Declare the hit group
+
+One hit group associates the stages that a native hit record binds:
 
 ```slang
-struct PrimaryProgramLayout : rt::ITraceProgramLayout
+struct TriangleHitGroup : rt::IHitGroup
 {
-    typealias TraceContext = PrimaryTraceContext;
-    typealias HitGroups =
-        rt::HitGroupList<PrimaryTraceContext, TriangleHitGroup>;
-    typealias MissGroups =
-        rt::MissGroupList<PrimaryTraceContext, PrimaryMissGroup>;
-    typealias CallableGroups =
-        rt::NoCallableGroups<PrimaryTraceContext>;
+    typealias Context = TriangleHitContext;
+    typealias ClosestHit = ShadeTriangle;
+    typealias AnyHit = rt::NoAnyHit<Context>;
+    typealias Intersection = rt::NoIntersection<Context>;
 }
 ```
 
-Each list is finite and statically typed. Slang uses it to retain the selected source stages,
-synthesize physical entries, report reflection, and reject duplicate or incompatible slots.
+The placeholders say that this group has no source _AnyHit_ or _Intersection_ behavior. There is no
+shader-side physical slot.
 
-## 7. Bind The Descriptor
+For a procedural primitive, set `Context.Primitive` to
+`rt::BoundingBoxPrimitive<CustomAttributes>` and provide an `IIntersectionShader`. Its
+`input.reportHit(distance, attributes)` calls may report zero, one, or several candidates. An
+optional _AnyHit_ stage accepts or rejects each reported candidate.
 
-The program descriptor is a resource whose physical target layout depends on the selected program:
+## 5. Assemble the schema
+
+```slang
+struct SceneSchema : rt::ITraceProgramSchema
+{
+    typealias TraceContext = SceneTraceContext;
+    typealias HitGroups = rt::HitGroupList<TriangleHitGroup>;
+    typealias MissShaders = rt::MissShaderList<ShadeMiss>;
+    typealias CallableShaders = rt::NoCallableShaders;
+}
+```
+
+The schema declares executable entries, not SBT records. Slang assigns `TriangleHitGroup` and
+`ShadeMiss` dense function indices within the `RadiancePayload` partition and exposes them through
+reflection.
+
+A host can reuse `TriangleHitGroup` in any number of records with different `MaterialRecord`
+values. A second hit or miss context using `ShadowPayload` can be added to the same lists; Slang
+then creates a second payload partition without requiring a second schema.
+
+## 6. Bind the descriptor and trace
 
 ```slang
 struct FrameParameters
 {
     rt::AccelerationStructure scene;
-    rt::TraceProgramDescriptor<PrimaryProgramLayout> program;
+    rt::TraceProgramDescriptor<SceneSchema> program;
 }
 
 ParameterBlock<FrameParameters> frame;
-```
 
-On D3D/Vulkan, the native pipeline and SBT own stage dispatch, so the descriptor has no additional
-physical shader binding. On Metal, it specializes to parameter-block-like IFT, visible-function
-table, and record-buffer resources. Normal binding reflection exposes that physical layout.
-
-## 8. Trace A Ray
-
-Ray-generation code supplies the ordinary trace parameters and payload:
-
-```slang
 [shader("raygeneration")]
 void rayGen()
 {
@@ -173,42 +156,85 @@ void rayGen()
     desc.missIndex = 0;
 
     RadiancePayload payload = {};
-    rt::RayTracer<PrimaryProgramLayout> tracer;
+    rt::RayTracer<SceneSchema> tracer;
     tracer.trace(desc, frame.scene, frame.program, payload);
 }
 ```
 
-The layout type is the key that associates this trace with its possible stages. D3D/Vulkan lower
-the call to their existing native trace operation. Metal lowers it to traversal followed by
-generated _ClosestHit_ or _Miss_ visible-function dispatch.
+The payload type is inferred from the `inout` argument. Slang verifies that `SceneSchema` serves
+that payload. The runtime SBT selectors remain ordinary runtime values.
 
-Runtime-valued `RAY_FLAG` bits are portable. Metal emits a small helper sequence that configures the
-corresponding intersector controls before traversal.
+On D3D, Vulkan, and OptiX, the trace becomes the existing native operation and the descriptor is
+erased. On Metal, it becomes intersector traversal followed by generated _ClosestHit_ or _Miss_
+visible-function dispatch.
 
-## 9. Compile A Stage By Itself
+Runtime ray flags remain portable. Metal emits a helper that configures the intersector from the
+runtime flag word before traversal.
 
-A stage struct can also be selected without compiling a complete layout:
+## 7. Construct runtime records from reflection
+
+After linking the program, the host finds `SceneSchema` and then its `RadiancePayload` partition.
+Reflection gives `TriangleHitGroup` a function index, its constituent stage symbols, and its
+`MaterialRecord` layout. A portable host uses those stage symbols to create the native hit-group
+identifier.
+
+Suppose the host deliberately places that group at physical hit records 1 and 4:
+
+```text
+hit record 1 -> TriangleHitGroup + red MaterialRecord
+hit record 4 -> TriangleHitGroup + blue MaterialRecord
+```
+
+On D3D, Vulkan, or OptiX, both records use the same native group identifier followed by their
+different record bytes. On Metal, both records store the reflected function index in the compiler-
+owned 16-byte header, followed by the different `MaterialRecord` values. The host chooses
+`sbtOffset`, `sbtStride`, geometry indices, and instance contributions that select records 1 and 4.
+
+The important programming rule is: resolve names, indices, record layouts, resource bindings, and
+Metal IFT functions from reflection after every link. Function indices are not persistent IDs.
+
+On Metal, schema reflection additionally provides the record strides and descriptor resources. The
+final IFT signature is target metadata keyed by the exact schema name and payload index. Bind using
+the reflected Metal argument-buffer `[[id]]`, not resource enumeration order. Each geometry's
+`intersectionFunctionTableOffset` uses the reflected primitive-kind index, and each populated IFT
+entry supplies the exact exported per-kind dispatcher name to install. A payload without candidate
+logic reports no IFT entries; when an IFT is required, fixed triangle or bounding-box entries may be
+generated reject-all dispatchers for primitive kinds absent from that payload.
+
+## 8. Compile a stage by itself
+
+A stage struct does not require a schema or descriptor for standalone compilation:
 
 ```text
 slangc shader.slang -experimental-feature \
     -entry ShadeTriangle -stage closesthit -target spirv
 ```
 
-The entry-point name is the struct name. Slang synthesizes the native signature from the reachable
-input properties and discards unrelated stages after entry synthesis.
+The source struct name is the entry-point name for this simple case. Slang synthesizes the native
+signature from its associated context and reachable input properties. Query reflection for the
+exact target name when the type is qualified, specialized, or requires name encoding.
 
-## 10. Build Target Resources
+## 9. Extend a schema at link time
 
-Use structural reflection to enumerate logical hit, miss, and callable slots.
+A closed list contains exactly its declared entries. To accept hit groups contributed by other
+Slang modules, use an open section:
 
-- D3D12/Vulkan: compile the synthesized native stage entries, create the pipeline, and build SBT
-  records whose indices match the reflected slots.
-- Metal: install generated candidate functions in the IFT, install _ClosestHit_, _Miss_, and
-  _Callable_ functions in their visible-function tables, and populate the reflected record buffer.
+```slang
+interface IMaterialHitGroup : rt::IHitGroup {}
 
-The host never binds source _AnyHit_ and _Intersection_ stages as separate Metal resources. Slang
-combines the required candidate logic into the generated IFT function for each hit group.
+struct ExtensibleSceneSchema : rt::ITraceProgramSchema
+{
+    typealias TraceContext = SceneTraceContext;
+    typealias HitGroups = rt::OpenHitGroups<IMaterialHitGroup, TriangleHitGroup>;
+    typealias MissShaders = rt::MissShaderList<ShadeMiss>;
+    typealias CallableShaders = rt::NoCallableShaders;
+}
+```
 
-Complete executable cases are under
+Every concrete linked type conforming to `IMaterialHitGroup` joins the finalized hit section.
+Linked entries are reflected after the explicitly listed entries. Adding modules may renumber
+function indices, so the host still resolves entries by reflected name.
+
+Complete executable cases live under
 [`tests/ray-tracing-2/runtime/shaders`](../../../../tests/ray-tracing-2/runtime/shaders), with
-focused target and diagnostic coverage in the rest of `tests/ray-tracing-2`.
+focused target, reflection, and diagnostic coverage in the rest of `tests/ray-tracing-2`.

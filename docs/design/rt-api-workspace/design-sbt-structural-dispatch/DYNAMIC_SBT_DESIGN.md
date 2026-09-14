@@ -1,7 +1,6 @@
 # Runtime-Sized Shader Binding Tables
 
-Status: rationale for the design adopted by
-[proposal-revised.md](proposal-revised.md). The proposal is normative where details differ.
+Status: supporting rationale for [PROPOSAL.md](PROPOSAL.md). The proposal is normative.
 
 ## 1. Problem
 
@@ -14,9 +13,9 @@ record 1   = OpaqueHitGroup + MaterialRecord { materialIndex = 48 }
 record 999 = OpaqueHitGroup + MaterialRecord { materialIndex = 6 }
 ```
 
-Shader source cannot enumerate a scene-sized record table. D3D and Vulkan let the host repeat one
-compiled group identifier in any number of records. The structural API must preserve that model
-while still telling Metal every function that may be needed.
+Shader source cannot enumerate a scene-sized record table. D3D, Vulkan, and OptiX let the host
+repeat one compiled group identifier in any number of records. The structural API must preserve
+that model while still telling Metal every function that may be needed.
 
 ## 2. Schema Versus Instance
 
@@ -128,7 +127,7 @@ the runtime stride and offset through `RayTraversalDesc`.
 
 ## 6. Native Targets
 
-D3D and Vulkan already encode a complete record instance:
+D3D, Vulkan, and OptiX already encode a complete record instance:
 
 ```text
 native record
@@ -185,7 +184,7 @@ in the schema uses one. Geometry IFT offsets encode only primitive kind; materia
 group selection stay in the runtime record.
 
 This adds record lookup and dispatch overhead to Metal candidate processing. It preserves the
-native D3D/Vulkan meaning of a hit record without generating material behavior.
+native D3D/Vulkan/OptiX meaning of a hit record without generating material behavior.
 
 ## 9. Safety Boundary
 

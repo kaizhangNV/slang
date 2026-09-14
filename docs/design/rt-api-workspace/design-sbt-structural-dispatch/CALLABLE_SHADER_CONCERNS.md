@@ -1,80 +1,86 @@
-# Callable Shader Contract
+# _Callable_ Shader Contract
 
-Callable shaders use the same structural program layout as hit and miss groups, but form an
-independent dynamically indexed table. They are not part of traversal hit selection.
+Status: supporting analysis for [PROPOSAL.md](PROPOSAL.md). The proposal is normative.
 
-## Source Model
+_Callable_ shaders form an independent, dynamically indexed SBT section. They are not selected by
+ray traversal and do not belong to a payload partition.
 
-A callable context fixes the trace context, callable-data ABI, and record type:
+## Source model
+
+A callable context fixes the trace context, callable-data ABI, and per-record data:
 
 ```slang
-struct MaterialCallableContext : rt::ICallableGroupContext
+struct MaterialCallableContext : rt::ICallableContext
 {
-    typealias TraceContext = PrimaryTraceContext;
+    typealias TraceContext = SceneTraceContext;
     typealias CallableData = MaterialCallData;
     typealias Record = MaterialRecord;
 }
-```
 
-The source stage and group are structural declarations:
-
-```slang
-struct ShadeMaterial : rt::ICallableShader<MaterialCallableContext>
+struct ShadeMaterial : rt::ICallableShader
 {
-    void invoke(rt::CallableInput<MaterialCallableContext> input)
+    typealias Context = MaterialCallableContext;
+
+    void invoke(rt::CallableInput<Context> input)
     {
         input.data.result *= input.record.factor;
     }
 }
+```
 
-struct MaterialCallableGroup : rt::ICallableGroup
+The schema lists the stage directly:
+
+```slang
+struct SceneSchema : rt::ITraceProgramSchema
 {
-    typealias Slot = rt::CallableSlot<0>;
-    typealias Context = MaterialCallableContext;
-    typealias Callable = ShadeMaterial;
+    typealias TraceContext = SceneTraceContext;
+    typealias HitGroups = rt::NoHitGroups;
+    typealias MissShaders = rt::NoMissShaders;
+    typealias CallableShaders = rt::CallableShaderList<ShadeMaterial>;
 }
 ```
 
-Add the group to `ITraceProgramLayout.CallableGroups`, then invoke a dynamically selected slot:
+There is no callable-group wrapper and no shader-side slot. The compiler assigns each finalized
+callable a schema-wide dense function index. The host may place one callable in any number of
+physical callable records with different `Context.Record` values.
+
+## Invocation and type rule
 
 ```slang
-rt::RayTracer<ProgramLayout> tracer;
-tracer.callShader<MaterialCallableContext>(index, descriptor, data);
+rt::RayTracer<SceneSchema> tracer;
+tracer.callShader<MaterialCallableContext>(callableRecordIndex, descriptor, data);
 ```
 
-## Type Rule
+The argument is a physical callable-record index, not a function index. The selected record names
+the function index and supplies `input.record`.
 
-The callable index may be dynamic, so every callable group in one selected layout must use the same
-`CallableData` ABI. Slang diagnoses incompatible callable-data types while canonicalizing the
-layout. Record types may differ because each slot resolves its own record.
+Every callable in one completed schema must use the same `CallableData` type because a dynamic
+index selects one table with one native callable-data ABI. Record types may differ because the
+selected record identifies its own shape. The compiler diagnoses a mismatched callable-data type
+at schema completion or at `callShader`.
 
-This rule provides type safety for the table operation. It cannot prove that a runtime index is in
-range or points at the material intended by application data; those remain host/data validation
-responsibilities.
+`CallableData` must be a fixed-size, copyable plain-data type and may not be `void`. An empty
+concrete struct is allowed; target lowering provides physical storage where the native ABI requires
+an addressable value. `Record = void` is allowed.
 
-## Target Mapping
+The type rule cannot prove that a runtime index is in range or points at the application-intended
+record. Those remain host-data invariants.
 
-| Target | Lowering                                                                       |
-| ------ | ------------------------------------------------------------------------------ |
-| D3D12  | Native callable entry points, callable SBT records, and `CallShader`           |
+## Target mapping
+
+| Target | Lowering |
+| --- | --- |
+| D3D | Native callable entry points, callable SBT records, and `CallShader` |
 | Vulkan | Native callable entry points, callable SBT records, and `OpExecuteCallableKHR` |
-| Metal  | A typed visible-function table plus generated record-buffer lookup             |
+| OptiX | Native callable entry point and callable SBT-data lowering |
+| Metal | One schema-wide visible function table plus generated record-buffer lookup |
 
-Metal threads the descriptor resources and record buffer through each visible callable function so
-nested callable dispatch uses the same program tables. All functions in one table receive a uniform
-physical signature, including functions that do not read every argument.
+Metal resolves the physical callable record, reads its function index, passes its application data
+pointer to the selected visible function, and uses the same descriptor for nested structural
+dispatch.
 
-Callable dispatch is legal only in logical stages whose target capability permits it. The compiler
-checks the source stage before generating target adapters, so a generated Metal helper cannot make
-an otherwise illegal source call valid.
+_Callable_ dispatch is valid only from stages whose target capability permits it. A generated Metal
+helper does not make an otherwise invalid source-stage call legal.
 
-## Practical Guidance
-
-Use an ordinary device function when the callee is statically known. Use a callable shader only
-when shader code must select the callee from a runtime SBT slot. Callable stages have pipeline,
-stack, and scheduling costs even when a target compiler can inline or fuse part of the adapter.
-
-The current implementation covers non-empty callable data, per-slot records, nested dispatch,
-native D3D/Vulkan lowering, and Metal VFT lowering. Empty callable-data structs remain subject to
-the independent legacy ABI bug tracked by
-[#12718](https://github.com/shader-slang/slang/issues/12718).
+Use an ordinary function when the callee is statically known. Use a callable shader when shader
+code must choose an SBT record dynamically.

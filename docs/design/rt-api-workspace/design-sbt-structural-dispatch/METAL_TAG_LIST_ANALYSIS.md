@@ -1,313 +1,152 @@
-# Metal Tag-List Design: Inferred Requirements
+# Metal Tag-List Inference
 
-## Conclusion
+Status: supporting analysis for [PROPOSAL.md](PROPOSAL.md). The proposal is normative.
 
-`RayDataTags` should not be part of the source-level trace context. Slang can infer
-`triangle_data` and `curve_data` from reachable uses of compiler-known stage properties, and
-`world_space_data` from candidate-stage uses of world-space ray properties. The selected
-compilation capabilities supply `extended_limits`.
+## 1. Decision
 
-Stage-derived primitive data follows two source-level rules:
+Shader authors do not declare a `RayDataTags` type. Slang infers the Metal intersection tag list
+from facts already expressed by the structural API:
 
-1. `IHitContext.Primitive` determines which primitive-specific properties are legal.
-2. Using a legal property contributes its required Metal data tag.
+- `ITraceContext.AccelerationStructure` supplies topology;
+- `ITraceContext.Motion` supplies motion;
+- each generated dispatcher supplies exactly one primitive selector;
+- reachable stage-input property uses supply optional data; and
+- the selected target capabilities supply target-wide requirements.
 
-For example, `input.triangle` is only available when `Primitive == TrianglePrimitive`. A reachable
-use contributes `triangle_data`. Likewise, `input.curve` is only available for `CurvePrimitive` and
-contributes `curve_data`.
+The compiler forms one shared requirement set for each `(schema, payload)` partition. Every
+primitive dispatcher in that partition uses the same shared set plus its own primitive selector:
 
-Declaring a primitive does not by itself request its optional data. A triangle group that never
-reads barycentrics or front-facing state does not require `triangle_data`.
+```text
+SharedTags(schema, payload)
+    = topology
+    + motion
+    + union(reachable property requirements for that payload)
+    + selected target-capability requirements
 
-## Metal's Two Separate Axes
+FunctionTags(schema, payload, primitive)
+    = primitive selector
+    + SharedTags(schema, payload)
+```
 
-Metal separates the primitive handled by one intersection function from the shared tag signature:
+This decomposition prevents contradictory primitive selectors while preserving Metal's requirement
+that functions used with one intersector agree on a shared signature.
+
+## 2. Primitive selector versus optional data
+
+Metal separates the geometry kind handled by an intersection function from optional data carried
+by the intersector. For example, `triangle` selects a triangle function, while `triangle_data`
+permits triangle-specific inputs such as barycentrics.
+
+A local compiler experiment with Apple Metal compiler 32023.883 confirmed that Metal 3.1 accepts a
+function tag list containing both optional data tags:
 
 ```metal
 [[intersection(triangle, triangle_data, curve_data)]]
 bool triangleFunction();
 ```
 
-The first argument says that this function handles triangle candidates. The remaining arguments
-form the shared signature used by the trace program.
-
-Apple Metal compiler version 32023.883 accepts the mixed tag list above under Metal 3.1,
-including with the two data tags reversed. It rejects primitive-incompatible input attributes:
-
-```metal
-[[intersection(triangle, triangle_data, curve_data)]]
-bool invalidTriangleFunction(float parameter [[curve_parameter]]);
-```
-
-The diagnostic identifies `curve_parameter` as invalid for a triangle intersection function. The
-opposite mismatch, `barycentric_coord` on a curve function, is also rejected.
-
-Therefore:
+It still rejects a primitive-incompatible parameter, such as `[[curve_parameter]]` on that triangle
+function. Therefore:
 
 ```text
-Primitive
-    controls which primitive-specific inputs may be consumed
+primitive selector
+    chooses which geometry kind the function handles
 
-Shared tag signature
-    controls which optional data capabilities are carried by the trace program
+optional data tags
+    declare data capabilities shared by the intersector and function tables
+
+stage-input type constraints
+    decide which primitive-specific properties source code may read
 ```
 
-Both `triangle_data` and `curve_data` may appear in one shared signature, but each generated
-intersection function consumes only data valid for its primitive.
+`IHitContext.Primitive` gates the source properties. A triangle context can read `input.triangle`
+but not `input.curve`; a curve context has the opposite rule. Merely declaring a triangle or curve
+does not request its optional data tag.
 
-## Source-Level Model
+## 3. Complete inference table
 
-The trace context contains trace-wide properties, but no authored primitive-data tags:
+| Metal tag | Axis | Inference source | Validation |
+| --- | --- | --- | --- |
+| `triangle` | Per-function primitive selector | Triangle dispatcher | Mutually exclusive with the other primitive selectors |
+| `bounding_box` | Per-function primitive selector | Bounding-box dispatcher | Mutually exclusive with the other primitive selectors |
+| `curve` | Per-function primitive selector | Curve dispatcher | Requires the Metal curve capability |
+| `instancing` | Shared topology | `AccelerationStructure`, or `MultiLevelAccelerationStructure<N>` with `N >= 2` | Omitted for direct primitive-AS traversal |
+| `max_levels<N>` | Shared topology | `MultiLevelAccelerationStructure<N>` with `N >= 2` | Requires `instancing` and a supported `N` |
+| `primitive_motion` | Shared motion | `PrimitiveMotion` or `PrimitiveAndInstanceMotion` | Capability-gated |
+| `instance_motion` | Shared motion | `InstanceMotion` or `PrimitiveAndInstanceMotion` | Requires instancing and target support |
+| `triangle_data` | Shared optional data | Reachable triangle barycentric/front-facing property, or triangle `hitKind` | Source property must belong to a triangle context |
+| `curve_data` | Shared optional data | Reachable curve-parameter property | Source property must belong to a curve context |
+| `world_space_data` | Shared optional data | Reachable candidate world-ray property, _ClosestHit_ object-space ray, or hit-stage transform property | Requires instancing |
+| `extended_limits` | Shared target requirement | `metal_raytracing_extended_limits` capability | Supplied by target selection |
+| `intersection_function_buffer` | Future lowering | None in version one | Excluded |
+| `user_data` | Future IFB data | None in version one | Excluded |
 
-```slang
-interface ITraceContext
-{
-    associatedtype Payload;
-    associatedtype AccelerationStructure;
-    associatedtype Motion;
-    __constraint AccelerationStructure : IAccelerationStructure;
-    __constraint Motion : IRayMotion;
-}
-```
+There is no remaining tag axis that shader authors must specify independently.
 
-The four motion markers are `NoMotion`, `PrimitiveMotion`, `InstanceMotion`, and
-`PrimitiveAndInstanceMotion`. The last three require Metal 2.4. `RayTraversalDesc.time` supplies
-the motion time when one of those modes is selected and is ignored for `NoMotion`.
+## 4. Property triggers
 
-Each hit context fixes one primitive kind:
-
-```slang
-interface IHitContext
-{
-    associatedtype TraceContext;
-    associatedtype Primitive;
-    associatedtype Record;
-    __constraint TraceContext : ITraceContext;
-    __constraint Primitive : IIntersectionPrimitive;
-}
-```
-
-Primitive-specific properties are supplied through constrained extensions:
-
-```slang
-public extension<Context> AnyHitInput<Context>
-    where Context : IHitContext
-    where Context.Primitive == TrianglePrimitive
-{
-    public property TriangleHitAttributes triangle
-    {
-        get { return __rtAnyHitTriangle<Context>(); }
-    }
-}
-```
-
-The property is absent from `AnyHitInput<CurveContext>` and
-`AnyHitInput<BoundingBoxContext>`. Invalid cross-primitive access is rejected during Slang type
-checking, before Metal code is generated.
-
-The property getter is compiler-known. A reachable `triangle` getter records a `triangle_data`
-requirement. A reachable `curve` getter records `curve_data`.
-
-## Concrete Inference Example
-
-This source does not declare any Metal data tags:
-
-```slang
-struct PrimaryTraceContext : rt::ITraceContext
-{
-    typealias Payload = RadiancePayload;
-    typealias AccelerationStructure = rt::AccelerationStructure;
-    typealias Motion = rt::NoMotion;
-}
-
-struct TriangleContext : rt::IHitContext
-{
-    typealias TraceContext = PrimaryTraceContext;
-    typealias Primitive = rt::TrianglePrimitive;
-    typealias Record = TriangleRecord;
-}
-
-struct RejectBackFaces : rt::IAnyHitShader<TriangleContext>
-{
-    void invoke(rt::AnyHitInput<TriangleContext> input)
-    {
-        if (!input.triangle.frontFacing)
-            input.ignoreHit();
-    }
-}
-```
-
-The use of `input.triangle` contributes `triangle_data`. Slang applies the inferred tag to every
-related Metal declaration:
-
-```metal
-intersector<instancing, triangle_data> tracer;
-intersection_function_table<instancing, triangle_data> table;
-
-[[intersection(triangle, instancing, triangle_data)]]
-bool generatedAnyHit(bool frontFacing [[front_facing]]);
-```
-
-If the trace program also contains a curve group that uses `input.curve`, Slang adds `curve_data`
-to the same shared signature. If the curve group does not access curve-specific data, its presence
-alone does not add the tag.
-
-## Inference Sources
-
-The sources describe separate semantic axes. Topology and lowering select one trace-wide mode, the
-primitive selector is chosen independently for each generated function, and optional data
-requirements are combined by set union. Motion selects one valid trace-wide configuration, which
-may contain both motion tags.
-
-### Type-Directed Inference
-
-`TraceContext.AccelerationStructure` supplies the topology tags:
+The optional-data triggers are deliberately based on reachable use after specialization:
 
 ```text
-AccelerationStructure
-    -> instancing
+input.triangle.barycentricCoord  ─┐
+input.triangle.frontFacing       ├─> triangle_data
+triangle input.hitKind           ─┘
 
-MultiLevelAccelerationStructure<1>
-    -> no instancing and no max_levels
+input.curve.parameter             ─> curve_data
 
-MultiLevelAccelerationStructure<N>, N >= 2
-    -> instancing, max_levels<N>
+AnyHitInput.worldSpaceOrigin      ─┐
+AnyHitInput.worldSpaceDirection    │
+IntersectionInput.worldSpaceOrigin │
+IntersectionInput.worldSpaceDirection
+ClosestHitInput.objectSpaceRay     ├─> world_space_data
+hit-stage input.objectToWorld      │
+hit-stage input.worldToObject     ─┘
 ```
 
-`TraceContext.Motion` supplies `primitive_motion`, `instance_motion`, both, or neither through the
-four marker types above. Every group in a program layout is constrained to the same trace context,
-so all reachable stages have one topology and motion configuration.
+_ClosestHit_ and _Miss_ world-space origin/direction are reconstructed from the original ray and do
+not request `world_space_data`. Metal candidate functions need Metal-provided world-space state, so
+the analogous _AnyHit_ and _Intersection_ uses do request it.
 
-`IHitContext.Primitive` selects `triangle`, `bounding_box`, or `curve` independently for each
-generated `[[intersection(...)]]` function. This primitive selector is not part of the shared tag
-set.
+Transform and object-space reconstruction require an instance transform. A schema using direct
+primitive-AS traversal (`MultiLevelAccelerationStructure<1>`) is therefore rejected when reachable
+code would require `world_space_data`.
 
-### Reachability-Directed Inference
+Reachability is transitive. If `invoke` calls a helper and the helper reads one of these properties,
+the property still contributes its requirement. Uses eliminated by specialization do not.
 
-Reachable compiler-known properties contribute target requirements:
+## 5. Payload partitioning
+
+Shared tags are computed per payload, not once for the entire schema. Consider:
 
 ```text
-ClosestHitInput.triangle or AnyHitInput.triangle     -> triangle_data
-ClosestHitInput.curve or AnyHitInput.curve           -> curve_data
-AnyHit/Intersection worldSpaceOrigin or Direction    -> world_space_data on Metal
-ClosestHit/Miss worldSpaceOrigin or Direction        -> original trace ray on Metal
+RadiancePayload groups
+    read triangle barycentrics
+
+ShadowPayload groups
+    do not read triangle data
 ```
 
-D3D and Vulkan lower all four world-space property forms to native world-ray builtins. Metal's
-candidate stages require `[[world_space_origin]]` or `[[world_space_direction]]`, so their uses add
-`world_space_data`. Metal's generated post-trace _ClosestHit_ and _Miss_ dispatch instead forwards
-the original `RayTraversalDesc.ray`, so those uses add no tag.
+The radiance IFT signature includes `triangle_data`; the shadow signature does not. Both still use
+the same schema and runtime record buffer.
 
-The compiler unions the tag-producing requirements across reachable stages. The constrained input
-APIs prevent primitive-incompatible property access. They also reject candidate-stage
-`world_space_data` with the primitive-only topology, for which Metal has no valid pipeline
-intersector combination. Post-trace world-ray access remains valid for that topology.
+All trace operations using the same schema and payload contribute to one normalized partition
+signature. This makes the result independent of link or entry-point processing order. The final
+signature is published in target metadata and keyed by exact schema name plus reflected payload
+index.
 
-### Capability-Directed Inference
+## 6. Why the combinations are valid
 
-The selected compilation capabilities contribute `extended_limits`. The capability represents an
-enabled build mode, not merely hardware support. Metal emits the tag and reflects the requirement
-to the host. D3D and Vulkan emit no shader tag and validate native acceleration-structure limits on
-the host.
+Each potentially conflicting choice has one canonical source:
 
-### Lowering-Directed Inference
+- A generated function has one primitive kind.
+- A schema has one acceleration-structure topology.
+- A schema has one sealed motion mode.
+- A payload partition unions only compatible optional data and target requirements.
 
-The first version always chooses ordinary `intersection_function_table` lowering and contributes
-no lowering tag. A future function-buffer lowering contributes `intersection_function_buffer`;
-using its user-data argument additionally contributes `user_data`.
+The compiler checks capability and cross-axis rules before creating the Metal descriptor. A source
+program can therefore either produce one valid normalized signature or receive a compile-time
+diagnostic; it cannot silently create two incompatible signatures for one payload table.
 
-## Complete Metal Tag Coverage
-
-| Metal item                          | Axis                            | Inference source                                                                                                                                                     | Combination and validation rule                                                                                                    |
-| ----------------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `triangle`, `bounding_box`, `curve` | Per-function primitive selector | `IHitContext.Primitive`                                                                                                                                              | Emit exactly one per generated function; reject primitive-incompatible properties.                                                 |
-| `instancing`                        | Acceleration-structure topology | `TraceContext.AccelerationStructure`                                                                                                                                 | The one acceleration-structure type fixes the program-wide topology.                                                               |
-| `max_levels<N>`                     | Acceleration-structure topology | `MultiLevelAccelerationStructure<N>`, `N >= 2`                                                                                                                       | Require `instancing`; validate one supported level count.                                                                          |
-| `primitive_motion`                  | Motion configuration            | `TraceContext.Motion`                                                                                                                                                | Select as part of one trace-wide configuration; allow coexistence with `instance_motion`; validate target support.                 |
-| `instance_motion`                   | Motion configuration            | `TraceContext.Motion`                                                                                                                                                | Allow coexistence with `primitive_motion`; require `instancing`.                                                                   |
-| `triangle_data`                     | Shared optional data            | Reachable use of `ClosestHitInput.triangle` or `AnyHitInput.triangle`                                                                                                | Union with other data requirements; expose both properties only for `TrianglePrimitive`.                                           |
-| `curve_data`                        | Shared optional data            | Reachable use of `ClosestHitInput.curve` or `AnyHitInput.curve`                                                                                                      | Union with other data requirements; expose both properties only for `CurvePrimitive`.                                              |
-| `world_space_data`                  | Shared optional data            | Reachable use of `AnyHitInput.worldSpaceOrigin`, `AnyHitInput.worldSpaceDirection`, `IntersectionInput.worldSpaceOrigin`, or `IntersectionInput.worldSpaceDirection` | Union with other data requirements; require an instanced acceleration structure. _ClosestHit_ and _Miss_ uses do not add this tag. |
-| `extended_limits`                   | Build capability                | Selected compilation capabilities                                                                                                                                    | Add only when selected, reflect the mode, and reject unsupported targets.                                                          |
-| `intersection_function_buffer`      | Lowering mode                   | Future IFB lowering                                                                                                                                                  | Select one trace-wide IFB path instead of an ordinary IFT; unavailable in the first version.                                       |
-| `user_data`                         | Function-buffer data            | Future IFB user-data argument                                                                                                                                        | Union into an IFB signature; require `intersection_function_buffer`.                                                               |
-
-This table covers all Metal ray-tracing template tags. The first row additionally covers the
-primitive selector that precedes the shared tags in `[[intersection(...)]]`.
-
-## Signature Construction
-
-For a program layout `L`, selected capabilities `C`, and lowering `M`, Slang constructs:
-
-```text
-ReachableStageRequirements(L)
-    = union of requirements from reachable compiler-known stage properties
-
-SharedMetalTags(L, C, M)
-    = validateAndNormalize(
-          L.TraceContext.AccelerationStructure.sharedRequirements,
-          L.TraceContext.Motion.requirements,
-          ReachableStageRequirements(L),
-          C.requirements,
-          M.requirements)
-```
-
-The compiler must then:
-
-1. Check that every group uses `L.TraceContext`.
-2. Select one primitive for each generated intersection function.
-3. Collect and union requirements from every reachable stage operation.
-4. Add the selected capability and lowering requirements.
-5. Validate dependencies, parameter values, and target availability.
-6. Choose one deterministic tag order.
-7. Project only valid topology and motion tags onto the Metal acceleration-structure parameter.
-8. Reuse the same ordered shared signature for the intersector, result, and ordinary function
-   table, and append it after the primitive selector on every generated intersection function.
-
-For future IFB lowering, step 8 uses the IFB-compatible declarations instead of an ordinary
-function table.
-
-## Why Source-Level Tag Conflicts Cannot Survive
-
-- One `TraceContext` fixes topology, level count, and motion for the entire program layout.
-- One `IHitContext.Primitive` fixes the primitive selector for each generated function.
-- Optional data requirements are monotonic: compatible requirements are unioned rather than chosen
-  independently for each stage.
-- Parameterized and dependent tags are validated before Metal emission.
-- One lowering mode fixes IFT versus IFB for the entire trace-program descriptor.
-- One canonical order is reused for every related native declaration.
-
-Consequently, Slang either generates one compatible tag signature or diagnoses the conflict during
-compilation. Host code can still violate the reflected contract by binding an incompatible
-acceleration structure or function table; reflection and runtime validation address that separate
-problem.
-
-## Simplified Conceptual Split
-
-```text
-TraceContext types
-    AccelerationStructure -> instancing, max_levels<N>
-    Motion                -> primitive_motion, instance_motion
-
-IHitContext
-    Primitive -> one per-function primitive selector
-
-Reachable stage operations
-    ClosestHitInput.triangle or AnyHitInput.triangle -> triangle_data
-    ClosestHitInput.curve or AnyHitInput.curve       -> curve_data
-    candidate-stage worldSpaceOrigin/Direction -> world_space_data
-    post-trace worldSpaceOrigin/Direction       -> original trace ray
-
-Selected compilation capabilities
-    extended-limits mode -> extended_limits
-
-Lowering
-    first version: OrdinaryIFT
-    future: IFB -> intersection_function_buffer, optional user_data
-```
-
-## Source
-
-The native rules summarized here come from the
-[Metal Shading Language Specification](https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf),
-especially sections 2.17.1, 2.17.4, 5.1.6, 5.2.3.7, and 6.19.5.
+The host does not reconstruct this logic. It queries the finalized
+`IStructuralRayTracingMetadata` payload record and uses the returned
+`MTLIntersectionFunctionSignature` when constructing Metal resources.

@@ -1,65 +1,63 @@
-# Structural Ray Tracing Design
+# Structural Ray-Tracing Design
 
-This directory defines a structural shader-binding-table API that maps to native D3D/Vulkan ray
-tracing and synthesized Metal dispatch.
+This directory defines a structural ray-tracing API that maps to native D3D, Vulkan, and OptiX
+pipeline stages and to synthesized Metal dispatch.
 
-Start with [PROPOSAL.md](PROPOSAL.md) for the source model and target semantics. Use
-[TUTORIAL.md](TUTORIAL.md) for a user-oriented walkthrough and
-[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for compiler boundaries, sequencing, and tests.
-The focused analyses cover [Metal tag inference](METAL_TAG_LIST_ANALYSIS.md),
-[payload behavior](RAY_PAYLOAD_MODEL.md), and [callable shaders](CALLABLE_SHADER_CONCERNS.md).
+[PROPOSAL.md](PROPOSAL.md) is the sole normative design. Start there for the source contract,
+target semantics, Metal tag inference, and host/reflection boundary. Use
+[TUTORIAL.md](TUTORIAL.md) for a compact shader-and-host walkthrough and
+[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for compiler ownership, repository structure, and
+tests.
+
+The focused analyses give additional rationale for the
+[dynamic SBT](DYNAMIC_SBT_DESIGN.md), [payload-partition model](PAYLOAD_SAFE_TRACE_VARIANTS.md),
+[Metal tag inference](METAL_TAG_LIST_ANALYSIS.md), and
+[callable shaders](CALLABLE_SHADER_CONCERNS.md). Historical analysis is non-normative when it
+conflicts with the proposal.
 
 ## Design Summary
 
-Shader authors explicitly describe one logical SBT in source:
+The API separates the shader-owned program schema from the host-owned SBT:
 
-1. Hit, miss, and callable logic is written as structs implementing the corresponding
-   `IClosestHitShader`, `IAnyHitShader`, `IIntersectionShader`, `IMissShader`, and
-   `ICallableShader` interfaces.
-2. `IHitGroup`, `IMissGroup`, and `ICallableGroup` declarations associate those stages with a
-   logical slot and context.
-3. Group lists and `ITraceProgramLayout` describe the complete logical SBT. The layout gives Slang
-   the finite stage set needed to preserve and synthesize target entry points.
-4. `RayTracer<ProgramLayout>` traces through a `TraceProgramDescriptor<ProgramLayout>`. The same
-   layout type drives entry synthesis, reflection, and Metal post-trace dispatch.
+```text
+ITraceProgramSchema                         runtime SBT
+├── TraceContext                            ├── any number of hit records
+├── HitGroups : IHitGroupList               ├── any number of miss records
+├── MissShaders : IMissShaderList           └── any number of callable records
+└── CallableShaders : ICallableShaderList
+          │                                           │
+          └──────────── Slang reflection ─────────────┘
+```
 
-Stage-input structs contain intrinsic properties rather than stored built-in state. Slang lowers
-only the properties reachable from a selected stage, so generated entry-point signatures and Metal
-tag lists contain only the required native inputs.
+- Stage logic is written as structs implementing `IClosestHitShader`, `IAnyHitShader`,
+  `IIntersectionShader`, `IMissShader`, or `ICallableShader`.
+- `IHitGroup` associates the _ClosestHit_, _AnyHit_, and _Intersection_ stages that form one native
+  hit group. _Miss_ and _Callable_ sections list stage structs directly.
+- Contexts define payload, primitive, record data, acceleration-structure topology, and motion.
+- A schema lists the finite executable entries but assigns no physical record positions.
+- The compiler reflects a dense function index for each finalized entry. The host may reuse one
+  entry in any number of physical records with different record data.
+- Stage inputs expose built-in state as zero-storage properties. Reachable optional-property use
+  drives additional native parameters and Metal tag inference; mandatory payload, hit-attribute,
+  and callable-data ABI parameters remain present.
+
+`RayTracer<Schema>` provides trace and callable operations.
+`TraceProgramDescriptor<Schema>` is erased on D3D, Vulkan, and OptiX, and specializes to Metal
+function tables plus a dynamic record buffer on Metal.
 
 ## Target Mapping
 
-| Source contract                          | D3D/Vulkan                                                | Metal                                                       |
-| ---------------------------------------- | --------------------------------------------------------- | ----------------------------------------------------------- |
-| `ITraceProgramLayout`                    | Native pipeline entry points and SBT records              | Generated IFT/VFT functions and logical-slot tables         |
-| `RayTracer.trace`                        | Existing native trace operation                           | `intersector::intersect` plus generated post-trace dispatch |
-| _ClosestHit_, _Miss_, _Callable_         | Native stages                                             | Visible-function-table dispatch                             |
-| Triangle/curve _AnyHit_                  | Native _AnyHit_ where supported                           | Generated candidate function in the IFT                     |
-| Bounding-box _Intersection_ and _AnyHit_ | Native `ReportHit` and _AnyHit_ control transfer          | One generated IFT function that composes both source stages |
-| `TraceProgramDescriptor`                 | No physical shader binding beyond the native pipeline/SBT | Parameter-block-like IFT, VFT, and record-buffer resources  |
+| Source contract | D3D / Vulkan / OptiX | Metal |
+| --- | --- | --- |
+| Schema entries | Native pipeline programs and shader identifiers | Functions and generated dispatch arms |
+| Runtime records | Native SBT | Compiler-defined record buffer |
+| `RayTracer.trace` | Native trace operation | Intersector traversal plus generated dispatch |
+| _ClosestHit_, _Miss_, _Callable_ | Native stages | Visible-function-table dispatch |
+| Triangle/curve _AnyHit_ | Native _AnyHit_ where supported | Per-primitive candidate-dispatch arm |
+| Procedural _Intersection_ + _AnyHit_ | Native report-intersection control transfer | Generated `reportHit` composition inside the candidate arm |
 
-The compiler infers Metal primitive, topology, motion, level, and optional-data tags from the trace
-context, selected capabilities, and reachable stage-input properties. Conflicting requirements are
-diagnosed before target emission.
+The module is activated only by `import slang.raytracing` with the experimental-feature flag.
+Without that import, the compiler does no structural ray-tracing work.
 
-Version one excludes shader execution reordering, `intersection_function_buffer`, and `user_data`.
-Those exclusions do not change the logical SBT contract.
-
-## Implementation And Tests
-
-The implementation is organized under:
-
-```text
-source/standard-modules/raytracing/        source contracts
-source/slang/*structural-ray-tracing*      compiler identity, checks, synthesis, and lowering
-tests/ray-tracing-2/                       focused and integration coverage
-tools/gfx-unit-test/structural-ray-tracing D3D12/Vulkan runtime host
-tools/metal-structural-raytracing-test/    local native Metal runtime host
-```
-
-`slang.raytracing` is an explicitly imported experimental standard module. It depends on `core`;
-`core` does not depend on it. The compiler performs no structural ray-tracing work when the module
-is not imported.
-
-The checked-in [coverage manifest](../../../../tests/ray-tracing-2/coverage-manifest.md) maps the
-existing Slang ray-tracing scenarios to focused compiler tests and complete runtime pipelines.
+Version one excludes Shader Execution Reordering, Metal intersection-function-buffer arguments,
+and Metal `[[user_data]]`.

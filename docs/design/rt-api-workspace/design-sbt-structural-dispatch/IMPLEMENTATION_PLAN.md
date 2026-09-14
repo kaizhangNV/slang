@@ -1,7 +1,9 @@
 # Structural Ray Tracing API Implementation Plan
 
-Status: implementation plan for [PROPOSAL.md](PROPOSAL.md), with the revisions in
-[proposal-revised.md](proposal-revised.md). When the two documents differ, the revision is current.
+Status: implementation architecture for [PROPOSAL.md](PROPOSAL.md). The draft implementation
+through the dynamic-schema and open-section work is recorded by checkpoint
+`dcec1f948` (`(Checkpoint Commit) Finalize dynamic structural ray tracing`) in PR #12691.
+[PROPOSAL.md](PROPOSAL.md) is the sole normative design.
 
 The revised API describes a compile-time **trace program schema**. The host creates the runtime
 shader binding table (SBT) from that schema. Shader source no longer declares record slots.
@@ -68,11 +70,9 @@ Do not add a structural-ray-tracing workaround for an independent compiler defec
 the defect, fix it in a separate PR/branch when it blocks this work, then rebase the implementation
 on that fix. Record nonblocking defects in PR #12691 without changing unrelated compiler behavior.
 
-The revised contracts currently depend on:
-
-- The merged fix for stable linkage of multiple associated-type equality requirements (#12817).
-- The open fix for generic type specialization with associated-type equality constraints
-  (#12822 / PR #12827) before generic stage coverage can be accepted.
+The checkpoint contains the prerequisite associated-type fixes it needs. There is no unresolved
+compiler prerequisite blocking the current draft. Any newly exposed independent defect still
+follows the policy above.
 
 Use a separate `__constraint` declaration for every associated-type bound or relationship. Reserve
 `where` clauses for generic parameters, functions, extensions, and other ordinary generic
@@ -116,6 +116,7 @@ source/slang/
 ├── slang-ir-structural-ray-tracing.{h,cpp}               # Shared IR queries
 ├── slang-ir-synthesize-structural-ray-tracing.{h,cpp}    # Schema discovery and adapters
 ├── slang-ir-metal-structural-ray-tracing.{h,cpp}         # Metal descriptor and dispatch
+├── slang-ir-optix-ray-tracing-abi.{h,cpp}                # OptiX payload/attribute ABI
 └── slang-reflection-structural-ray-tracing.{h,cpp}       # Schema reflection
 ```
 
@@ -134,10 +135,10 @@ Keep focused compiler tests under `tests/ray-tracing-2/` and the existing runtim
 tests/ray-tracing-2/
 ├── frontend/
 ├── ir/
-├── target/{portable,d3d,vulkan,metal}/
+├── target/{portable,vulkan,metal}/
 ├── reflection/
 ├── compatibility/
-├── runtime/
+├── runtime/{shaders,metal}/
 ├── integrate/
 └── coverage-manifest.md
 
@@ -194,11 +195,11 @@ ICallableContext : IStageContext
 
 Each stage interface exposes `Context` as an associated type. `IHitGroup` contains one context and
 uses separate `__constraint` declarations to require its `_ClosestHit_`, `_AnyHit_`, and
-`_Intersection_` associated types to name that exact context. Miss and callable sections list stage
-types directly; `IMissGroup` and `ICallableGroup` do not exist.
+`_Intersection_` associated types to name that exact context. _Miss_ and _Callable_ sections list
+stage types directly; only native multi-stage hit records use a group abstraction.
 
-There is no `IShaderGroupSlot`, slot alias, or `Slot` associated type. `ITraceContext` does not own a
-payload. Each hit or miss context owns the payload used by its stages.
+Schemas describe executable entries only; the host owns physical record positions. `ITraceContext`
+does not own a payload. Each hit or miss context owns the payload used by its stages.
 
 ### 3.2 Trace And Stage Inputs
 
@@ -475,22 +476,27 @@ global-parameter use in Metal candidate logic.
 
 ## 7. Reflection And Host Construction
 
-Rename the unreleased reflection surface from `TraceProgramLayout` to `TraceProgramSchema` and
-delete all slot accessors. Reflect:
+Use `TraceProgramSchema` consistently in the reflection surface and expose no physical-record
+position accessor. Reflect:
 
 - Schema and trace-context types.
 - Payload partitions and payload layouts.
 - Hit groups and miss shaders in per-payload function-index order.
-- Callable shaders in program-wide function-index order.
+- _Callable_ shaders in program-wide function-index order.
 - Listed versus linked origin and open-section state.
 - Context, record, attributes, and exact emitted stage symbols.
-- Native payload/attribute sizes and target record strides.
-- Metal descriptor fields, no-op closest-hit functions, and candidate dispatchers.
+- Native payload/attribute sizes, per-entry record layouts, and Metal record-buffer strides.
+- Metal descriptor fields, argument-buffer IDs, no-op closest-hit functions, candidate
+  dispatchers, and finalized per-payload IFT signatures in target metadata.
 
 Hosts look up entries by qualified name after every link and write the reflected function index or
 native identifier into each runtime record. Numeric function indices are not persistent identifiers.
 
 ## 8. Implementation Milestones
+
+Phases 0A through 3 are present in checkpoint `dcec1f948`. Phase 4 remains the validation and
+performance-completion list; its Windows D3D12 runtime rerun and cost measurements must not be
+treated as complete until they are recorded separately.
 
 ### Phase 0A: Schema Terminology
 
@@ -515,9 +521,6 @@ name remains in the public unreleased structural surface.
   associated context.
 - Keep the existing payload location, record-position declarations, and miss/callable wrappers for
   this phase; changing them independently would create a transient mixed contract.
-
-This phase requires #12817 in the base branch. Generic stage coverage waits for #12822 / PR #12827;
-do not add a structural workaround.
 
 Exit: the pre-cutover schema shape works with associated-context stages, standalone stage
 compilation still works, and the focused tests pass.
