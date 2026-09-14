@@ -38,7 +38,7 @@ Metal test host) for what was actually built from it. Where they differ, both ar
 | 2.2.1, 2.2.3 | `IHitContext`, `IMissGroupContext`, and `ICallableGroupContext` each repeat the trace context and the record type | One hierarchy: `IStageContext { TraceContext; Record }`, `IPayloadContext : IStageContext { Payload }`, `IHitContext : IPayloadContext { Primitive }`, `ICallableContext : IStageContext { CallableData }`; a miss shader may name a hit context | The repeated members were one fact spelled three times, and a miss that shares the hit record needed a second declaration for nothing |
 | 2.2.1 | `IMissGroup` and `ICallableGroup` wrap one shader with a context; every stage contract takes its context as a generic parameter | Stage contracts expose `Context` as an associated type; `IHitGroup` is the only group and requires its three stages to share its context; the miss and callable sections list shaders directly | A miss or callable record binds exactly one shader, so the wrapper only restated a context the shader's conformance had already fixed; "group" survives where it is native |
 | 2.2.1 | `input.record` on Metal is loaded "from the descriptor's generated data buffer before dispatching the logical stage"; the draft implementation realizes this by reading the record inside each generated stage through the group's compile-time slot | The trace dispatch resolves the record and passes a pointer; `input.record` means "per SBT record" on all targets | Today Metal reads per group, D3D/Vulkan per record; the two disagree |
-| 2.2.2.1 | One visible-function-table entry per record; a four-word buffer header of table offsets; records carry no identity of their own; host maps `metalIFTIndex` to `logicalHitSlot` 1:1 | Tables hold one function per hit group and per miss shader of each payload, and one per callable shader; the record buffer is a real SBT: a four-word header of section offsets, then fixed-stride records whose first word is the function index; no IFT mapping constraint | Tables become fixed per pipeline; scene changes are buffer writes |
+| 2.2.2.1 | One visible-function-table entry per record; records carry no identity of their own; host maps `metalIFTIndex` to `logicalHitSlot` 1:1 | Tables hold one function per hit group and per miss shader of each payload, and one per callable shader; the record buffer contains an instance-path trie and fixed-stride records whose first word is the function index; no IFT mapping constraint | Tables become fixed per pipeline; scene changes are buffer writes |
 | 2.2.2.2, 3.3 Pattern B | Future IFB text indexes the closest-hit table by `logicalHitSlot` and installs by `hit.slot` | Same future item, indexed by the record's function index; the function buffer holds one candidate handle per record | Follows from the above |
 | 2.3.1 | At most one generated Metal candidate function per hit group, installed by the host at a chosen IFT index when non-null | One generated candidate **dispatcher per primitive kind per payload** at fixed IFT indices 0/1/2, selecting the group from the record; per-group bodies become arms | Metal's IFT index has no ray-type term, so a per-group entry cannot follow the record |
 | new | Entry set is closed in the ray-generation module | A section may be **open**: linked entries (hit groups or shaders) conforming to a tag interface join it at Slang link time | Separately compiled material modules without a declared target ABI |
@@ -68,7 +68,7 @@ the static assumption actually lives:
   native entry points; `input.record` lowers to native shader-record data. The slot only feeds the
   negative/duplicate diagnostics and reflection.
 - On Metal the trace dispatch already computes the hit record index at runtime
-  (`instanceOffset[instance_id] + geometry_id * sbtStride + sbtOffset`) and indexes the
+  (`lookupInstanceContribution(instancePath) + geometry_id * sbtStride + sbtOffset`) and indexes the
   visible-function table with it. But inside every generated stage function, `input.record` is read
   through the group's compile-time slot constant. One generated function installed at two table
   indices with two different records would read the same record twice.
@@ -149,9 +149,9 @@ function indices; on Metal each payload gets its own tables.
 Which record a ray reaches is not part of the schema:
 
 ```text
-record = instanceContribution[instance] + geometryIndex * desc.sbtStride + desc.sbtOffset
-          ─────────┬────────────           ──────┬──────   ───────┬──────   ───────┬──────
-              host (TLAS)                   host (BLAS)     shader, runtime   shader, runtime
+record = lookupInstanceContribution(instancePath) + geometryIndex * desc.sbtStride + desc.sbtOffset
+         ──────────────────┬─────────────────   ──────┬──────   ───────┬──────   ───────┬──────
+                       host (AS)                  host (AS)      shader, runtime   shader, runtime
 invoked stage = sbt[record].entry                                              host writes sbt[]
 ```
 
@@ -162,9 +162,11 @@ cannot establish that the *table* places a `P` entry where a `P` trace looks, be
 not in the program. That residual is one
 host rule, reflected to the host; the payload model's Section 5 states it precisely.
 
-For a primitive-only trace context (`MultiLevelAccelerationStructure<1>`, no `instancing` tag) the
-instance term is absent on every target and no instance table is written; under `max_levels<N>` the
-innermost instance id is used, as the trace dispatch already does.
+For a primitive-only trace context (`MultiLevelAccelerationStructure<1>`, no `instancing` tag), the
+instance term is absent and no instance lookup is performed. Single-level instancing uses a flat
+table indexed by scalar `instance_id`. Under `max_levels<N>`, the lookup follows the complete
+outer-to-inner `instance_id` path through a trie, so equal leaf IDs below different outer instances
+can select different records.
 
 ## 3. Revised Contracts
 
@@ -624,12 +626,9 @@ payload compiles, because where the host put the occlusion records is not in the
 
 ### 4.1 Native Layout (2.2.2.1)
 
-Was: "`visible_function_table_1` is the _ClosestHit_ table ... entry `logicalHitSlot` -> generated
-_ClosestHit_ function", that is, one table entry per record; and "The first Metal layout uses four
-header words in `descriptorData`. They contain the word offsets of the instance hit-group-offset
-table and the hit, _Miss_, and _Callable_ record tables. Each record table entry is a byte offset
-... to that record's data." Records carried no identity of their own because the table index *was*
-the slot; the descriptor had exactly five fields.
+Was: `visible_function_table_1` had one _ClosestHit_ entry per logical record, and records carried no
+identity of their own because the table index *was* the slot. The descriptor had exactly five
+fields.
 
 Now: tables are per payload and indexed by function index; the record buffer is a shader binding
 table in the D3D12 sense. Because each payload has its own `ray_data` type, it has its own
@@ -662,13 +661,16 @@ Record buffer:
 
 ```text
 Header (16 bytes, four u32 byte offsets from the buffer base)
-   0  instanceTableOffset    u32 per TLAS instance: hit-record base for that instance;
-                             absent for a primitive-only trace context
+   0  instanceTrieOffset     root of the instance-path trie; not read for primitive-AS traversal
    4  hitOffset
    8  missOffset
   12  callableOffset
 
-Hit record  i  at hitOffset      + i * HIT_STRIDE        i = instanceContribution + geometryIndex * desc.sbtStride + desc.sbtOffset
+Instance-path trie (u32 words)
+      non-leaf value         word offset from the trie root to the next node
+      leaf value             logical hit-record contribution
+
+Hit record  i  at hitOffset      + i * HIT_STRIDE        i = lookupInstanceContribution(instancePath) + geometryIndex * desc.sbtStride + desc.sbtOffset
 Miss record m  at missOffset     + m * MISS_STRIDE       m = desc.missIndex
 Callable rec k at callableOffset + k * CALLABLE_STRIDE   k = the callShader argument
 
@@ -687,17 +689,17 @@ running sums of `count * stride` and the counts are the scene's. A host helper c
 reflection:
 
 ```text
-instanceTableOffset = 16
-hitOffset           = align16(instanceTableOffset + instanceCount * 4)
+instanceTrieOffset = 16
+hitOffset          = align16(instanceTrieOffset + instanceTrieWordCount * 4)
 missOffset          = align16(hitOffset + hitCount * hitStride)
 callableOffset      = align16(missOffset + missCount * missStride)
 ```
 
-**Relationship to PROPOSAL.md.** PROPOSAL 2.2.2.1's four header words were word offsets of
-per-record *offset tables*; the version-1 record had no identity because the table index was the
-slot. This layout keeps four offset words but makes records fixed-pitch with the function index in
-the record, so the tables can be per entry. The former implementation plan described the version-1
-buffer; the current [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) incorporates the layout above.
+`records[0]` is a byte offset to the trie root. For each outer-to-inner instance ID, the lookup
+indexes the current node. A non-final result is a word offset relative to that same root; the final
+result is the record contribution. A single-level instance path is therefore one flat root lookup.
+Primitive-AS traversal skips the trie. The other three header words are byte offsets to the record
+sections. Fixed-pitch records carry their function index, so tables can be per entry.
 
 ### 4.2 Lowering Strategy (2.2.2.1)
 
@@ -717,6 +719,17 @@ else
 
 Now, for a trace whose payload is `P1` (the payload is a compile-time type at the call site, so the
 table set is selected statically; the record index uses the runtime `desc` fields as today):
+
+```text
+lookupInstanceContribution(records, intersection):
+    primitive-AS traversal:  return 0
+    single-level instancing: return records[(records[0] >> 2) + intersection.instance_id]
+    multilevel instancing:
+        value = 0
+        for id in intersection.instance_id from outermost to innermost:
+            value = records[(records[0] >> 2) + value + id]
+        return value
+```
 
 ```metal
 // Internal Metal-shaped pseudocode for a trace of payload P1 in a two-payload program.
@@ -739,7 +752,8 @@ if (R.type == intersection_type::none)
 }
 else if ((desc.rayFlags & RAY_FLAG_SKIP_CLOSEST_HIT_SHADER) == 0)
 {
-    uint recordIndex = h[(h[0] >> 2) + R.instance_id] + R.geometry_id * desc.sbtStride + desc.sbtOffset;
+    uint instanceContribution = lookupInstanceContribution(h, R);
+    uint recordIndex = instanceContribution + R.geometry_id * desc.sbtStride + desc.sbtOffset;
     uchar device const* rec = (uchar device const*)h + h[1] + recordIndex * HIT_STRIDE;
     uint fn = *(uint device const*)rec;
     if (fn != 0xFFFFFFFFu)
@@ -748,9 +762,9 @@ else if ((desc.rayFlags & RAY_FLAG_SKIP_CLOSEST_HIT_SHADER) == 0)
 payload = rayData.payload;
 ```
 
-Two dependent loads on the hit path (instance contribution, function index), the same count as the
-draft implementation today; one on the miss path. A generated stage function reads its record from
-the pointer:
+Single-level instancing adds one contribution load before the function-index load. Multilevel
+instancing adds one trie load per instance depth. The miss path needs only the function-index load.
+A generated stage function reads its record from the pointer:
 
 ```metal
 [[visible]] void ShadowHit(Schema_P1_rayData thread* rayData, float distance, float2 barycentrics,
@@ -794,8 +808,8 @@ so `HIT_STRIDE = 32`, `Record = void` for miss so `MISS_STRIDE = 16`; the engine
 stride 2:
 
 ```text
-bytes 0..15    header: 16, 32, 160, 192          (instance table, hit, miss, callable offsets)
-byte  16       instance table: 0                  (padded to 32)
+bytes 0..15    header: 16, 32, 160, 192          (instance trie, hit, miss, callable byte offsets)
+byte  16       flat trie root: 0                  (single-level instance contribution; padded to 32)
 byte  32       hit record 0: geometry 0, primary  fn=1 (AlphaTestedGroup, RadiancePayload table)   data {materialIndex 7, alpha 0.5}
 byte  64       hit record 1: geometry 0, shadow   fn=1 (ShadowAlphaGroup, OcclusionPayload table)  same data
 byte  96       hit record 2: geometry 1, primary  fn=0 (OpaqueGroup, RadiancePayload table)        data {materialIndex 3, alpha 0}
@@ -805,10 +819,8 @@ byte  176      miss record 1: shadow              fn=0 (ShadowMiss, OcclusionPay
 byte  192      callable section: empty
 ```
 
-replacing the version-1 word array the draft Metal test host writes today
-(`{4, 5, 7, 9, 0, 36, 40, 44, 48, 100, 200, 300, 400}`, `metal-test-host.mm:409-423`). At engine
-scale, 20,000 hit records at 32 bytes is 640 KB and each closest-hit table still has one entry per
-group of its payload.
+At engine scale, 20,000 hit records at 32 bytes is 640 KB and each closest-hit table still has one
+entry per group of its payload.
 
 ### 4.5 Future IFB Lowering (2.2.2.2)
 
@@ -852,7 +864,8 @@ bool SceneSchema_P1_triangleCandidate(
     ray_data SceneSchema_P1_rayData& rayData [[payload]])
 {
     uint32_t device const* h = rayData.descriptorData;
-    uint recordIndex = h[(h[0] >> 2) + instanceIndex] + geometryIndex * rayData.sbtStride + rayData.sbtOffset;
+    uint instanceContribution = lookupInstanceContribution(h, instanceIndex);
+    uint recordIndex = instanceContribution + geometryIndex * rayData.sbtStride + rayData.sbtOffset;
     uchar device const* record = (uchar device const*)h + h[1] + recordIndex * HIT_STRIDE;
     uint fn = *(uint device const*)record;
     switch (fn)
@@ -864,6 +877,10 @@ bool SceneSchema_P1_triangleCandidate(
     }
 }
 ```
+
+A `max_levels<N>` dispatcher receives `metal::array_ref<uint> instancePath [[instance_id]]` instead
+and passes that full outer-to-inner path to the same lookup used by committed _ClosestHit_
+dispatch. Primitive-AS traversal has no instance parameter or lookup.
 
 A bounding-box dispatcher composes each group's _Intersection_ and _AnyHit_ inside its arm with the
 existing `reportHit` accumulator and returns a rejection for `default` and empty records.
@@ -1065,7 +1082,7 @@ Now:
    payload passes no IFT, as with today's unused IFT.
 5. Set every geometry's `intersectionFunctionTableOffset` to its primitive-kind constant and every
    instance's to 0.
-6. Write the SBT buffer (Section 4.1): the four offsets; the instance table (omitted for a
+6. Write the SBT buffer (Section 4.1): the four byte offsets; the instance-path trie (not read for a
    primitive-only trace context); one hit record per `(instance, geometry, rayType)` at the position
    the engine's convention gives it, naming a group by function index and carrying its record bytes
    packed from the reflected record layout; one miss record per
@@ -1308,8 +1325,6 @@ Added:
   tables rather than AST witnesses; the largest new compiler piece.
 - Whether the front end accepts an interface type as the `Tag` generic argument as written, or
   needs an explicit rule.
-- The dispatcher under `max_levels<N>` (innermost instance id) and the MSL attribute form for
-  intersection functions in that configuration.
 - Record layout portability: D3D/Vulkan records use constant-buffer packing, Metal natural layout.
   Whether to mandate one portable rule for `Record`.
 - Whether candidate logic on Metal should gain access to global parameters through an argument

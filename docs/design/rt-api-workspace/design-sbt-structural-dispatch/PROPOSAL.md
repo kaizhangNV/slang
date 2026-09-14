@@ -456,18 +456,22 @@ if (result.isNone)
 }
 else
 {
+    uint instanceContribution =
+        lookupInstanceContribution(descriptorData, result);
     uint logicalHitSlot =
-        instanceOffset + geometryId * desc.sbtStride + desc.sbtOffset;
+        instanceContribution + geometryId * desc.sbtStride + desc.sbtOffset;
 
     closestHitFns[logicalHitSlot](payload, descriptorData, logicalHitSlot, result);
 }
 ```
 
-The first Metal layout uses four header words in `descriptorData`. They contain the word offsets of
-the instance hit-group-offset table and the hit, _Miss_, and _Callable_ record tables. Each record
-table entry is a byte offset from the start of `descriptorData` to that record's data. This keeps
-function selection and `input.record` access indexed by the same logical slots without exposing the
-physical buffer layout in shader source.
+The Metal data buffer begins with four `u32` byte offsets. `descriptorData[0]` locates the root of
+the instance-path trie; the other words locate the hit, _Miss_, and _Callable_ record sections.
+For single-level instancing, the root is a flat table indexed by scalar `instance_id`. For
+`MultiLevelAccelerationStructure<N>` where `N >= 2`, the generated lookup follows every
+`instance_id` from outermost to innermost. Each non-leaf value is a word offset relative to the
+root, and the final value is the logical hit-record contribution. Primitive-AS traversal performs
+no instance lookup. Candidate dispatch and committed _ClosestHit_ dispatch use the same lookup.
 
 **Gaps, Fixes, And Constraints**
 
@@ -497,7 +501,7 @@ physical buffer layout in shader source.
   Slang treats `logicalHitSlot` as the portable identity of the hit group:
 
   ```text
-  logicalHitSlot = instanceOffset + geometryId * desc.sbtStride + desc.sbtOffset
+  logicalHitSlot = instanceContribution + geometryId * desc.sbtStride + desc.sbtOffset
   ```
 
   **Constraint:** the host must construct acceleration-structure function-table offsets and function
@@ -520,8 +524,8 @@ physical buffer layout in shader source.
 
 **Concrete Example**
 
-Suppose one trace call uses `desc.sbtStride = 2`, `desc.sbtOffset = 1`, and logical
-`instanceOffset = 0`. The portable logical slots are:
+Suppose one trace call uses `desc.sbtStride = 2`, `desc.sbtOffset = 1`, and
+`instanceContribution = 0`. The portable logical slots are:
 
 ```text
 logicalHitSlot(geometry 0) = 0 + geometryId 0 * 2 + 1 = 1
@@ -623,8 +627,10 @@ if (result.isNone)
 }
 else
 {
+    uint instanceContribution =
+        lookupInstanceContribution(descriptorData, result);
     uint logicalHitSlot =
-        instanceOffset + geometryId * desc.sbtStride + desc.sbtOffset;
+        instanceContribution + geometryId * desc.sbtStride + desc.sbtOffset;
 
     closestHitFns[logicalHitSlot](payload, descriptorData, logicalHitSlot, result);
 }
@@ -648,7 +654,7 @@ else
   portable hit slot directly:
 
   ```text
-  logicalHitSlot = instanceOffset + geometryId * desc.sbtStride + desc.sbtOffset
+  logicalHitSlot = instanceContribution + geometryId * desc.sbtStride + desc.sbtOffset
   ```
 
   **Constraint:** the host or Slang runtime must populate the function buffer consistently with the
@@ -666,9 +672,9 @@ else
 
 **Concrete Example**
 
-Suppose one trace call uses `desc.sbtStride = 2`, `desc.sbtOffset = 1`, and logical
-`instanceOffset = 0`. The portable logical slots are the same as in the ordinary function-table
-example:
+Suppose one trace call uses `desc.sbtStride = 2`, `desc.sbtOffset = 1`, and
+`instanceContribution = 0`. The portable logical slots are the same as in the ordinary
+function-table example:
 
 ```text
 logicalHitSlot(geometry 0) = 0 + geometryId 0 * 2 + 1 = 1

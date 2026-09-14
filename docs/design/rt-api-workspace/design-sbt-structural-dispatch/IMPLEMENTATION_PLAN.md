@@ -418,10 +418,14 @@ The record buffer is:
 
 ```text
 16-byte header
-├── instanceTableOffset
+├── instanceTrieOffset
 ├── hitOffset
 ├── missOffset
 └── callableOffset
+
+instance-path trie
+├── non-leaf u32: word offset from the trie root to the next node
+└── leaf u32: logical hit-record contribution
 
 fixed-stride record
 ├── +0  u32 functionIndex
@@ -433,9 +437,16 @@ Hit, miss, and callable strides are compile-time constants derived from the larg
 corresponding section and rounded to 16 bytes. Section offsets, counts, function indices, and record
 values are host-written runtime data. `0xFFFFFFFF` denotes an empty record.
 
-Post-trace and callable dispatch first resolve the runtime record, then read its function index,
-then call the corresponding VFT entry while passing `record + 16`. Generated stage inputs read
-`input.record` through that pointer.
+`records[0]` is the byte offset to the trie root. For `max_levels<N>`, one shared generated helper
+walks all `instance_id` values from outermost to innermost; each intermediate value is relative to
+that same root, and the leaf is the record contribution. Single-level instancing uses the root as a
+flat table indexed by scalar `instance_id`. Primitive-AS traversal performs no instance lookup.
+Candidate dispatch and committed _ClosestHit_ dispatch call the same helper, so they cannot select
+different records for one hit.
+
+Post-trace and callable dispatch read the resolved record's function index, then call the
+corresponding VFT entry while passing `record + 16`. Generated stage inputs read `input.record`
+through that pointer.
 
 ### 6.3 Metal Candidate Dispatch
 
@@ -448,8 +459,8 @@ primitive kind, at fixed indices:
 2 = curve
 ```
 
-The dispatcher recomputes the runtime hit-record index using the instance contribution,
-`geometryIndex`, `sbtStride`, and `sbtOffset`; reads the record's function index; and switches over
+The dispatcher obtains the instance contribution from the shared lookup above, combines it with
+`geometryIndex`, `sbtStride`, and `sbtOffset`, reads the record's function index, and switches over
 the hit groups of that payload. Existing per-group `_AnyHit_`/`_Intersection_` composition becomes
 an ordinary dispatcher arm. A trace whose payload partition has no candidate logic passes no IFT,
 even when another payload in the same schema needs one. Keep the existing Metal `reportHit`
@@ -604,7 +615,8 @@ unloaded when it is not imported.
 - Runtime record replacement without rebuilding function tables.
 - Generated code accepted by the native Metal compiler and runtime results matching portable
   D3D12/Vulkan cases.
-- Metal-only curve and multilevel-acceleration cases.
+- Metal-only curve and multilevel-acceleration cases, including sibling outer instances whose leaf
+  `instance_id` values are equal but whose record contributions differ.
 
 ### 9.4 Cross-Platform And Cost
 
