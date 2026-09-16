@@ -12,8 +12,10 @@ tests.
 The focused analyses give additional rationale for the
 [dynamic SBT](DYNAMIC_SBT_DESIGN.md), [payload-partition model](PAYLOAD_SAFE_TRACE_VARIANTS.md),
 [Metal tag inference](METAL_TAG_LIST_ANALYSIS.md), and
-[callable shaders](CALLABLE_SHADER_CONCERNS.md). Historical analysis is non-normative when it
-conflicts with the proposal.
+[callable shaders](CALLABLE_SHADER_CONCERNS.md). The
+[D3D12 `Record` RHI implementation](D3D12_RECORD_RHI_IMPLEMENTATION.md) explains how reflected
+constant-buffer bindings become local-root arguments and per-entry SBT data. Historical analysis
+is non-normative when it conflicts with the proposal.
 
 ## Design Summary
 
