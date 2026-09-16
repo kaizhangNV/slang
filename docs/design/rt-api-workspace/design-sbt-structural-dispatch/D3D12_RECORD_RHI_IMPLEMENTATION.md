@@ -8,12 +8,15 @@ The compiler must lower a non-void `Record` as an ordinary constant buffer with 
 
 These are two independent properties:
 
-| Property | Owner | Purpose |
-| --- | --- | --- |
-| Constant-buffer type, layout, `bN, spaceM`, HLSL register, and reflection | Compiler | Gives the generated variable an ordinary D3D resource ABI |
-| Shader-record role and per-export local root association | Slang RHI | Makes the binding read from the selected SBT record instead of the global shader object |
+| Property                                                                  | Owner     | Purpose                                                                                 |
+| ------------------------------------------------------------------------- | --------- | --------------------------------------------------------------------------------------- |
+| Constant-buffer type, layout, `bN, spaceM`, HLSL register, and reflection | Compiler  | Gives the generated variable an ordinary D3D resource ABI                               |
+| Shader-record role and per-export local root association                  | Slang RHI | Makes the binding read from the selected SBT record instead of the global shader object |
 
 The public structural ray-tracing API does not need to change.
+
+The RHI work is tracked by
+[slang-rhi #874](https://github.com/shader-slang/slang-rhi/issues/874).
 
 ## 2. What D3D12 Requires
 
@@ -160,6 +163,27 @@ Each native SBT entry for either group stores the same record-data address three
 
 Selected structural hit-stage exports that are not used by any hit group are associated directly with their own local root signature. Stages used by a group are associated only through the group/component signature; adding a conflicting direct association would be invalid.
 
+### 5.3 Groups that only inherit the component signature
+
+A connected component can include a native hit group whose own stages do not use a structural
+`Record`. For example, it can share a legacy, record-free _AnyHit_ export with another hit group
+whose structural _ClosestHit_ uses a generated CBV. DXR still requires both hit groups to use the
+same component-wide local root signature.
+
+This does not turn the record-free hit group into a structural-record consumer. DXR only requires
+an individual local-root argument to be initialized when the executing shader references it. The
+RHI therefore distinguishes these cases explicitly:
+
+| Hit-group contract                                    | `ShaderRecordData` interpretation                                      |
+| ----------------------------------------------------- | ---------------------------------------------------------------------- |
+| At least one stage has a non-void structural `Record` | Reflected application data placed in RHI-owned constant-buffer storage |
+| The group only inherits the component signature       | Legacy raw bytes kept inline after the shader identifier               |
+
+The distinction cannot be inferred from byte size because a non-void `Record` can have a zero-byte
+target layout. The RHI carries an explicit `hasStructuralRecord` bit from reflected stage metadata.
+It also rejects a legacy `ShaderRecordOverwrite` for an actual structural record instead of letting
+an absolute overwrite silently corrupt the generated root-CBV address.
+
 ## 6. RHI Shader-Table Construction
 
 The structural API exposes one logical application record. The D3D12 backend materializes it as follows:
@@ -224,5 +248,8 @@ The implementation needs coverage for:
 - coexistence with user resources at ordinary `bN, spaceM` bindings;
 - reflection of the generated constant-buffer register, space, and layout; and
 - void `Record`, which must not allocate a local-record binding.
+- a record-free hit group that inherits another group's component signature while retaining legacy
+  inline record bytes; and
+- rejection of a legacy native-record overwrite on an actual structural `Record`.
 
 The expected end state is simple from the user's perspective: `input.record` behaves as a typed per-SBT-entry constant buffer, and the RHI hides all D3D12 local-root bookkeeping.
