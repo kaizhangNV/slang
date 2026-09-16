@@ -156,7 +156,7 @@ component { HitGroupA, HitGroupB }
 └── shared local root signature { b0, b1, b2 }
 ```
 
-Each native SBT entry for either group stores the same record-data address three times, once for each root CBV. A D3D12 local root signature is limited to 64 DWORDs, and a root CBV costs two DWORDs, so one component can contain at most 32 such CBVs.
+Each native SBT entry for either group stores the same record-data address three times, once for each root CBV. DXR local root signatures are exempt from the ordinary 64-DWORD root-signature limit. Their local-argument footprint is bounded by the 4,096-byte maximum shader-record stride minus the 32-byte shader identifier, so this representation can contain at most 508 root-CBV addresses.
 
 Selected structural hit-stage exports that are not used by any hit group are associated directly with their own local root signature. Stages used by a group are associated only through the group/component signature; adding a conflicting direct association would be invalid.
 
