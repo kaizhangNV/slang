@@ -129,7 +129,7 @@ Both root parameters receive the same record-data address. The separate CBVs exi
 
 ### 5.2 Hit groups that share a stage
 
-D3D12 requires a shader export to have one compatible local-root association everywhere it is used. Consider:
+D3D12 requires a shader export to have one compatible local-root association everywhere it is used. The [DXR functional specification](https://microsoft.github.io/DirectX-Specs/d3d/Raytracing.html#subobject-associations-for-hit-groups) states that a hit-group association applies to its component shaders and that group/component associations must match. Consider:
 
 ```text
 ClosestHitA    → b0, space2
@@ -156,7 +156,7 @@ component { HitGroupA, HitGroupB }
 └── shared local root signature { b0, b1, b2 }
 ```
 
-Each native SBT entry for either group stores the same record-data address three times, once for each root CBV. DXR local root signatures are exempt from the ordinary 64-DWORD root-signature limit. Their local-argument footprint is bounded by the 4,096-byte maximum shader-record stride minus the 32-byte shader identifier, so this representation can contain at most 508 root-CBV addresses.
+Each native SBT entry for either group stores the same record-data address three times, once for each root CBV. As specified under [local root signatures versus global root signatures](https://microsoft.github.io/DirectX-Specs/d3d/Raytracing.html#local-root-signatures-vs-global-root-signatures), DXR local root signatures are exempt from the ordinary 64-DWORD root-signature limit. Their local-argument footprint is bounded by the 4,096-byte maximum shader-record stride minus the 32-byte shader identifier, so this representation can contain at most 508 root-CBV addresses.
 
 Selected structural hit-stage exports that are not used by any hit group are associated directly with their own local root signature. Stages used by a group are associated only through the group/component signature; adding a conflicting direct association would be invalid.
 
