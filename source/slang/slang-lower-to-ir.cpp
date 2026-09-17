@@ -35,6 +35,7 @@
 #include "slang-ir-ssa.h"
 #include "slang-ir-string-hash.h"
 #include "slang-ir-strip.h"
+#include "slang-ir-structural-ray-tracing.h"
 #include "slang-ir-use-uninitialized-values.h"
 #include "slang-ir-util.h"
 #include "slang-ir-validate.h"
@@ -948,6 +949,31 @@ IRInst* AstOrIRType::getIRType(IRGenContext* context)
         return irType;
     irType = lowerType(context, astType);
     return irType;
+}
+
+/// Lowers the user-facing spelling of a structural stage type while its AST identity is present.
+///
+/// Later adapter synthesis uses this name for diagnostics and generated symbols. Recovering it
+/// from an IR name hint would be unreliable after specialization or obfuscation.
+static IRStringLit* _lowerStructuralRayTracingSourceTypeName(IRGenContext* context, Type* type)
+{
+    auto sourceTypeName = getStructuralRayTracingSourceTypeName(context->astBuilder, type);
+    SLANG_RELEASE_ASSERT(sourceTypeName.getLength() != 0);
+    return context->irBuilder->getStringValue(sourceTypeName.getUnownedSlice());
+}
+
+/// Lowers an opaque canonical identity for a structural stage type.
+///
+/// Empty nominal structs can have the same physical IR shape. The mangled canonical type keeps
+/// their source identities distinct without asking downstream consumers to reconstruct AST types.
+static IRStringLit* _lowerStructuralRayTracingCanonicalTypeIdentity(
+    IRGenContext* context,
+    Type* type)
+{
+    SLANG_RELEASE_ASSERT(type);
+    auto identity = getMangledTypeName(context->astBuilder, type->getCanonicalType());
+    SLANG_RELEASE_ASSERT(identity.getLength() != 0);
+    return context->irBuilder->getStringValue(identity.getUnownedSlice());
 }
 
 // Given a `DeclRef` for something callable, along with a bunch of
@@ -12421,8 +12447,19 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
             operandCount++;
         }
 
-        // Allocate an IRInterfaceType with the `operandCount` operands.
-        IRInterfaceType* irInterface = subBuilder->createInterfaceType(operandCount, nullptr);
+        // Preserve compiler-owned stage identity when lowering the exact declarations registered
+        // from the trusted `slang.raytracing` standard module. The distinct opcode changes only the
+        // nominal identity: requirements and witness-table lowering remain ordinary interface IR.
+        // A user module that shadows these names is absent from the registry and therefore cannot
+        // manufacture a structural stage-interface instruction.
+        auto interfaceOp = kIROp_InterfaceType;
+        auto stageKind =
+            context->getLinkage()->getStructuralRayTracingDeclRegistry().getStageKind(decl);
+        if (stageKind != StructuralRayTracingStageKind::Count)
+            interfaceOp = getStructuralRayTracingStageInterfaceOp(stageKind);
+
+        IRInterfaceType* irInterface =
+            subBuilder->createInterfaceType(interfaceOp, operandCount, nullptr);
         auto finalVal = finishOuterGenerics(subBuilder, irInterface, outerGeneric);
 
         // Add `irInterface` to decl mapping now to prevent cyclic lowering.
@@ -15565,6 +15602,11 @@ LoweredValInfo emitDeclRef(IRGenContext* context, DeclRef<Decl> declRef, IRType*
     return info;
 }
 
+static void _lowerStructuralRayTracingEntryPointInfo(
+    IRGenContext* context,
+    EntryPoint* entryPoint,
+    IRInst* entryPointValue);
+
 static void lowerFrontEndEntryPointToIR(
     IRGenContext* context,
     EntryPoint* entryPoint,
@@ -15582,7 +15624,8 @@ static void lowerFrontEndEntryPointToIR(
 
     auto entryPointFuncDecl = entryPoint->getFuncDecl();
 
-    if (!entryPointFuncDecl->findModifier<EntryPointAttribute>())
+    if (!entryPoint->isStructuralRayTracingEntryPoint() &&
+        !entryPointFuncDecl->findModifier<EntryPointAttribute>())
     {
         // If the entry point doesn't have an explicit `[shader("...")]` attribute,
         // then we make sure to add one here, so the lowering logic knows it is an
@@ -15612,9 +15655,18 @@ static void lowerFrontEndEntryPointToIR(
     if (instToDecorate->findDecoration<IREntryPointDecoration>())
         return;
 
+    // A raw function nested under an AST generic is the shared definition for every closed
+    // specialization. Its structural metadata contains specialization-specific context and record
+    // types, so attaching it here would let the first selected specialization contaminate the
+    // others. The program component below owns the corresponding `IRSpecialize` and attaches the
+    // metadata there. A non-generic function can retain the metadata on its source-module
+    // definition so IR dumps and cached-module linking preserve the same contract.
+    if (auto directEntryPointFunc = as<IRFunc>(loweredEntryPointFunc))
+        _lowerStructuralRayTracingEntryPointInfo(context, entryPoint, directEntryPointFunc);
+
     {
 
-        Name* entryPointName = entryPoint->getFuncDecl()->getName();
+        Name* entryPointName = entryPoint->getName();
         builder->addEntryPointDecoration(
             instToDecorate,
             entryPoint->getProfile(),
@@ -15660,6 +15712,54 @@ static void lowerFrontEndEntryPointToIR(
         builder->addSimpleDecoration<IRShader64BitIndexingDecoration>(instToDecorate);
 }
 
+/// Preserves the checked source contract on a selected structural stage entry point.
+///
+/// At this boundary the selected function is still the logical `invoke` method. Recording its
+/// context, payload, record, and attribute types here lets linking and adapter synthesis operate
+/// on IR without rediscovering those roles from a generic function signature.
+static void _lowerStructuralRayTracingEntryPointInfo(
+    IRGenContext* context,
+    EntryPoint* entryPoint,
+    IRInst* entryPointValue)
+{
+    if (!entryPoint->isStructuralRayTracingEntryPoint())
+        return;
+    SLANG_RELEASE_ASSERT(entryPointValue);
+
+    auto& structuralInfo = entryPoint->getStructuralRayTracingInfo();
+    if (entryPointValue->findDecoration<IRStructuralRayTracingEntryPointInfoDecoration>())
+        return;
+
+    // The caller produced `entryPointValue` from the exact checked `DeclRef<FuncDecl>` selected for
+    // this program. Re-emitting the bare declaration here would either discard an outer generic
+    // substitution or create a second, unrelated `IRSpecialize`. Use that existing semantic value
+    // as both the decoration owner and the selected logical `invoke` implementation.
+    addStructuralRayTracingEntryPointInfo(
+        *context->irBuilder,
+        entryPointValue,
+        {
+            .stageKind = structuralInfo.stageKind,
+            .stageType = lowerType(context, structuralInfo.stageType),
+            .stageSourceTypeName =
+                _lowerStructuralRayTracingSourceTypeName(context, structuralInfo.stageType),
+            .stageTypeIdentity =
+                _lowerStructuralRayTracingCanonicalTypeIdentity(context, structuralInfo.stageType),
+            .contextType = lowerType(context, structuralInfo.contextType),
+            .payloadType = structuralInfo.payloadType
+                               ? lowerType(context, structuralInfo.payloadType)
+                               : nullptr,
+            .recordType =
+                structuralInfo.recordType ? lowerType(context, structuralInfo.recordType) : nullptr,
+            .hitAttributesType = structuralInfo.hitAttributesType
+                                     ? lowerType(context, structuralInfo.hitAttributesType)
+                                     : nullptr,
+            .callableDataType = structuralInfo.callableDataType
+                                    ? lowerType(context, structuralInfo.callableDataType)
+                                    : nullptr,
+            .hitAttributesKind = structuralInfo.hitAttributesKind,
+        });
+}
+
 static void lowerProgramEntryPointToIR(
     IRGenContext* context,
     EntryPoint* entryPoint,
@@ -15679,6 +15779,8 @@ static void lowerProgramEntryPointToIR(
 
     auto loweredEntryPointFunc =
         getSimpleVal(context, emitDeclRef(context, entryPointFuncDeclRef, entryPointFuncType));
+
+    _lowerStructuralRayTracingEntryPointInfo(context, entryPoint, loweredEntryPointFunc);
 
     if (!loweredEntryPointFunc->findDecoration<IRLinkageDecoration>())
     {
@@ -16831,21 +16933,17 @@ RefPtr<IRModule> TargetProgram::createIRModuleForLayout(DiagnosticSink* sink)
     auto latestSpirvAtom = getLatestSpirvAtom();
     auto latestMetalAtom = getLatestMetalAtom();
 
-    // Map each entry-point function declaration to the capability set inferred for it *as an entry
-    // point*, which can exceed the function declaration's own requirements (see
-    // `EntryPoint::getInferredCapabilityRequirements`). The layout list below is keyed by
-    // `DeclRef<FuncDecl>`, so we look up the owning `EntryPoint` here to read its stored set.
-    Dictionary<FuncDecl*, CapabilitySetVal*> entryPointInferredCaps;
-    for (Index i = 0; i < program->getEntryPointCount(); ++i)
+    // `collectEntryPointParameters` appends layouts while visiting the program's entry points in
+    // component order, so the two lists describe the same entry points in the same order. Keep the
+    // checked `EntryPoint` available while materializing each layout symbol: a closed generic
+    // structural stage needs its specialization-specific metadata attached to this exact
+    // `IRSpecialize`, rather than to the generic function body shared by every specialization.
+    SLANG_RELEASE_ASSERT(programLayout->entryPoints.getCount() == program->getEntryPointCount());
+    for (Index entryPointIndex = 0; entryPointIndex < programLayout->entryPoints.getCount();
+         ++entryPointIndex)
     {
-        auto entryPoint = program->getEntryPoint(i);
-        if (auto entryPointFuncDecl = entryPoint->getFuncDecl())
-            entryPointInferredCaps[entryPointFuncDecl] =
-                entryPoint->getInferredCapabilityRequirements();
-    }
-
-    for (auto entryPointLayout : programLayout->entryPoints)
-    {
+        auto entryPointLayout = programLayout->entryPoints[entryPointIndex];
+        auto entryPoint = program->getEntryPoint(entryPointIndex).get();
         auto funcDeclRef = entryPointLayout->entryPoint;
 
         // HACK: skip over entry points that came from deserialization,
@@ -16862,6 +16960,18 @@ RefPtr<IRModule> TargetProgram::createIRModuleForLayout(DiagnosticSink* sink)
         auto irFuncType = lowerType(context, getFuncType(astBuilder, funcDeclRef));
         auto irFunc = getSimpleVal(context, emitDeclRef(context, funcDeclRef, irFuncType));
 
+        // Consider this entry point:
+        //
+        //     struct Miss<T> : rt::IMissShader { ... }
+        //     -entry Miss<Payload>
+        //
+        // The source module contains one generic `invoke` body, but this layout module contains
+        // the selected `invoke<Payload>` specialization. Attach the checked stage contract here so
+        // linking receives the same specialization-specific context, payload, and record types as
+        // the entry-point layout. Non-generic stages also take this path; the helper avoids a
+        // duplicate when their source definition already carries the decoration.
+        _lowerStructuralRayTracingEntryPointInfo(context, entryPoint, irFunc);
+
         if (!irFunc->findDecoration<IRLinkageDecoration>())
         {
             builder->addImportDecoration(
@@ -16869,14 +16979,12 @@ RefPtr<IRModule> TargetProgram::createIRModuleForLayout(DiagnosticSink* sink)
                 getMangledName(astBuilder, funcDeclRef).getUnownedSlice());
         }
 
-        auto asFuncDecl = as<FuncDecl>(funcDeclRef.getDecl());
-        SLANG_ASSERT(asFuncDecl);
-        // Every layout entry point is one of the program's entry points (both come from the same
-        // component-type walk), so its inferred capability set — which can exceed the function
-        // declaration's own requirements — is always in the map.
-        auto found = entryPointInferredCaps.tryGetValue(asFuncDecl);
-        SLANG_RELEASE_ASSERT(found);
-        CapabilitySet set{*found};
+        // Capability requirements are specialization-specific entry-point metadata. For example,
+        // two closed specializations of one generic structural stage share a `FuncDecl` but may
+        // infer different target requirements. The layout and component lists have the same order,
+        // so read the exact `EntryPoint` selected above instead of collapsing specializations by
+        // their common declaration.
+        CapabilitySet set{entryPoint->getInferredCapabilityRequirements()};
         for (auto atomSet : set.getAtomSets())
         {
             for (auto atomVal : atomSet)
