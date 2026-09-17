@@ -5,7 +5,7 @@ Status: PR 1 is reconstructed from current `master` and ready for API/frontend r
 | Artifact                                                                                                                           | Purpose                                               | Status                                                |
 | ---------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- | ----------------------------------------------------- |
 | [Issue #13162](https://github.com/shader-slang/slang/issues/13162) / [PR #13163](https://github.com/shader-slang/slang/pull/13163) | Enforce experimental-module import gates consistently | Independent prerequisite; review and merge first      |
-| [Fork PR #24](https://github.com/kaizhangNV/slang/pull/24)                                                                         | Structural ray-tracing API and frontend contracts     | PR 1; checkpoint `5594bfc66`                          |
+| [Fork PR #24](https://github.com/kaizhangNV/slang/pull/24)                                                                         | Structural ray-tracing API and frontend contracts     | PR 1; checkpoint `46a5e07c3`                          |
 | [Draft PR #12691](https://github.com/shader-slang/slang/pull/12691)                                                                | Complete implementation reference                     | Keep open as a reference; do not review as one change |
 
 The design documents remain only on the archive branch. They are not in PR 1's history or diff.
@@ -111,11 +111,12 @@ integrate the existing Slang ray-tracing tests under the new API, and add platfo
 
 ## 5. PR 1 Readiness Record
 
-PR 1 is one checkpoint commit on PR #13163 and is rebased on `master` commit `ebf1c81c3`.
+PR 1 checkpoint `46a5e07c3` is one commit on PR #13163 checkpoint `3eeda37f0`; the stack is
+rebased on `master` commit `ebf1c81c3`.
 
 - Release `slang-test` build passed with four build jobs.
 - `tests/ray-tracing-2`: 79/79 passed.
-- Structural entry-point and experimental-module unit regressions: 5/5 passed.
+- Structural entry-point and experimental-module unit regressions: 6/6 passed.
 - Focused generic entry-point regressions: 13/13 passed.
 - Formatting and `git diff --check` passed.
 - All review threads are answered and resolved.
