@@ -22373,6 +22373,8 @@ bool isOpaqueHandleType(Type* type)
 {
     while (auto modifiedType = as<ModifiedType>(type))
         type = modifiedType->getBase();
+    if (as<TraceProgramDescriptorType>(type))
+        return true;
     if (as<ResourceType>(type))
         return true;
     if (as<SamplerStateType>(type))

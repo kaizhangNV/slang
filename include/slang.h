@@ -1334,6 +1334,10 @@ typedef uint32_t SlangSizeT;
         // command-line parser.
         GetCompilerPath = 159,
 
+        // CLI-only authority for building the packaged slang.raytracing module. This permits
+        // its descriptor type without granting general core-module semantics.
+        CompileSlangRayTracingModule = 160,
+
         // Do not assign an explicit value to CountOf. It must remain one past the last option,
         // which it derives implicitly from the preceding (highest-valued) enumerator.
         CountOf,
