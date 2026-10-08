@@ -22393,7 +22393,7 @@ bool isOpaqueHandleType(Type* type)
 {
     while (auto modifiedType = as<ModifiedType>(type))
         type = modifiedType->getBase();
-    if (as<TraceProgramDescriptorType>(type))
+    if (isIntrinsicTypeWithOp(type, kIROp_TraceProgramDescriptorType))
         return true;
     if (as<ResourceType>(type))
         return true;
