@@ -2972,6 +2972,7 @@ public:
         DeclRef<InterfaceDecl> superInterfaceDeclRef,
         SubtypeWitness* subTypeConformsToSuperInterfaceWitness);
 
+    void beginStructuralRayTracingModule();
     void checkStructuralRayTracingModule(ModuleDecl* moduleDecl);
     void checkStructuralRayTracingStageConformance(
         DeclRef<InterfaceDecl> superInterfaceDeclRef,
@@ -2992,8 +2993,6 @@ public:
     bool diagnoseInvalidStructuralRayTracingGenericTypeApplication(
         GenericAppExpr* genericApplication,
         Expr* checkedResult);
-    bool diagnoseInvalidStructuralRayTracingEmptyPayloadArgument(InvokeExpr* invoke);
-    bool diagnoseInvalidStructuralRayTracingEmptyPayloadAccess(DeclRefExpr* propertyExpr);
 
     void _checkDifferentialConformance(
         ConformanceCheckingContext* context,

@@ -491,10 +491,7 @@ TypeTag SemanticsVisitor::getTypeTags(Type* type)
         elementTags = (TypeTag)(((int)elementTags & ~(int)TypeTag::Unsized) | (int)TypeTag::Opaque);
         return elementTags;
     }
-    // The descriptor has no fields, but its intrinsic type represents a host-bound handle.
-    // Read its intrinsic modifier so opacity checks and IR lowering agree on the representation,
-    // including when the declaration comes from an ordinary source or serialized module.
-    else if (isIntrinsicTypeWithOp(type, kIROp_TraceProgramDescriptorType))
+    else if (isStructuralRayTracingOpaqueHandleType(type))
     {
         return TypeTag::Opaque;
     }
