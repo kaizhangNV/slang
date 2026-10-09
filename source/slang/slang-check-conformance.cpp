@@ -491,6 +491,10 @@ TypeTag SemanticsVisitor::getTypeTags(Type* type)
         elementTags = (TypeTag)(((int)elementTags & ~(int)TypeTag::Unsized) | (int)TypeTag::Opaque);
         return elementTags;
     }
+    else if (isStructuralRayTracingOpaqueHandleType(type))
+    {
+        return TypeTag::Opaque;
+    }
     else if (
         as<UntypedBufferResourceType>(type) || as<ResourceType>(type) ||
         as<SamplerStateType>(type) || as<HLSLStructuredBufferTypeBase>(type) ||

@@ -143,6 +143,46 @@ class BuiltinType : public DeclRefType
     FIDDLE(...)
 };
 
+// Executable stage interfaces share ordinary interface conformance semantics. For example,
+// `struct Sky : IMissShader` is selected as a miss entry point through this AST identity.
+// Their complete representation is the inherited declaration reference; ordinary imported
+// modules can declare these interfaces without registering declarations in a global table.
+FIDDLE(abstract)
+class RayTracingStageInterfaceType : public BuiltinType
+{
+    FIDDLE(...)
+};
+
+FIDDLE()
+class ClosestHitShaderType : public RayTracingStageInterfaceType
+{
+    FIDDLE(...)
+};
+
+FIDDLE()
+class AnyHitShaderType : public RayTracingStageInterfaceType
+{
+    FIDDLE(...)
+};
+
+FIDDLE()
+class IntersectionShaderType : public RayTracingStageInterfaceType
+{
+    FIDDLE(...)
+};
+
+FIDDLE()
+class MissShaderType : public RayTracingStageInterfaceType
+{
+    FIDDLE(...)
+};
+
+FIDDLE()
+class CallableShaderType : public RayTracingStageInterfaceType
+{
+    FIDDLE(...)
+};
+
 FIDDLE(abstract)
 class DataLayoutType : public BuiltinType
 {

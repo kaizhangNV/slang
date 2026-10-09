@@ -950,6 +950,32 @@ struct ConformanceCheckingContext : public RefObject
     Dictionary<DeclRef<InterfaceDecl>, RefPtr<WitnessTable>> mapInterfaceToWitnessTable;
 };
 
+/// A checked source type use whose structural restrictions require completed inheritance.
+/// This retains semantic types and their source locations, not syntax that checking may replace.
+struct StructuralRayTracingTypeUse
+{
+    enum class Kind
+    {
+        Value,
+        ReadOnlyInputParameter,
+        Construction,
+        GenericArguments,
+    };
+
+    struct Argument
+    {
+        Type* type = nullptr;
+        SourceLoc location;
+    };
+
+    Kind kind = Kind::Value;
+    Type* type = nullptr;
+    SourceLoc location;
+    /// A type application's result determines whether it owns structural generic arguments.
+    Type* genericApplicationType = nullptr;
+    ShortList<Argument, 4> genericArguments;
+};
+
 /// Shared state for a semantics-checking session.
 struct SharedSemanticsContext : public RefObject
 {
@@ -1019,6 +1045,11 @@ struct SharedSemanticsContext : public RefObject
     // Track diagnostics that have already been reported to avoid duplicates.
     // Key format: "diagnosticId|sourceLocRaw" or "diagnosticId|sourceLocRaw|extraInfo"
     HashSet<String> m_reportedDiagnosticKeys;
+
+    /// Whole-module checking records type uses until signatures and conformances are complete.
+    /// Ad hoc checking of already checked declarations evaluates these restrictions immediately.
+    bool m_deferStructuralRayTracingTypeUses = false;
+    List<StructuralRayTracingTypeUse> m_pendingStructuralRayTracingTypeUses;
 
     /// Whether semantic checking has imported the `glsl` module.
     bool m_hasImportedGLSLModule = false;
@@ -1178,6 +1209,18 @@ public:
         DeclRef<ExtensionDecl> const& extension,
         InheritanceCircularityInfo* circularityInfo = nullptr,
         HashSet<DeclRef<Decl>>* ioSkippedIncompleteFacet = nullptr);
+
+    /// Project a checked `Self : Base` witness through `Base`'s interface inheritance.
+    ///
+    /// Consider a generic function that knows `T : IDerived`, where `IDerived : IBase`, while
+    /// the concrete `T` also has another direct `IBase` conformance. A fresh subtype query for
+    /// `T : IBase` is allowed to select that direct conformance. This operation instead preserves
+    /// the caller's supplied `T : IDerived` path and returns its corresponding `T : IBase`
+    /// witness. It returns null when the supplied witness is not rooted in an interface or the
+    /// target is not one of that interface's bases.
+    SubtypeWitness* tryProjectInterfaceSubtypeWitness(
+        SubtypeWitness* selfIsSubtypeOfBase,
+        Type* targetInterfaceType);
 
     /// Prevent an unsupported case of
     /// ```
@@ -2478,7 +2521,8 @@ public:
     bool doesTypeSatisfyAssociatedTypeRequirement(
         Type* satisfyingType,
         DeclRef<AssocTypeDecl> requiredAssociatedTypeDeclRef,
-        RefPtr<WitnessTable> witnessTable);
+        RefPtr<WitnessTable> witnessTable,
+        Decl* satisfyingDecl);
 
     // Does the given `memberDecl` work as an implementation
     // to satisfy the requirement `requiredMemberDeclRef`
@@ -2927,6 +2971,28 @@ public:
         InheritanceDecl* inheritanceDecl,
         DeclRef<InterfaceDecl> superInterfaceDeclRef,
         SubtypeWitness* subTypeConformsToSuperInterfaceWitness);
+
+    void beginStructuralRayTracingModule();
+    void checkStructuralRayTracingModule(ModuleDecl* moduleDecl);
+    void checkStructuralRayTracingStageConformance(
+        DeclRef<InterfaceDecl> superInterfaceDeclRef,
+        WitnessTable* witnessTable,
+        SourceLoc conformanceLoc);
+    void diagnoseDuplicateStructuralRayTracingSchemaEntries(
+        Type* entryListType,
+        AssocTypeDecl* associatedTypeRequirement,
+        Type* schemaType,
+        Decl* satisfyingDecl);
+    void diagnoseInvalidStructuralRayTracingVariableType(VarDeclBase* varDecl);
+    void diagnosePendingStructuralRayTracingTypeUses();
+    void diagnoseInvalidStructuralRayTracingCallableResult(CallableDecl* callableDecl);
+    void diagnoseInvalidStructuralRayTracingPropertyType(PropertyDecl* propertyDecl);
+    bool diagnoseInvalidStructuralRayTracingConstruction(InvokeExpr* invoke);
+    bool diagnoseInvalidStructuralRayTracingInvokeResult(InvokeExpr* invoke);
+    bool diagnoseInvalidStructuralRayTracingGenericArguments(InvokeExpr* invoke);
+    bool diagnoseInvalidStructuralRayTracingGenericTypeApplication(
+        GenericAppExpr* genericApplication,
+        Expr* checkedResult);
 
     void _checkDifferentialConformance(
         ConformanceCheckingContext* context,
@@ -4005,6 +4071,9 @@ public:
         InvokeExpr* invoke,
         FuncType* funcType,
         FunctionDeclBase* funcDeclBase);
+    bool diagnoseDirectStructuralRayTracingStageInvoke(
+        InvokeExpr* invoke,
+        FunctionDeclBase* functionDecl);
     Expr* CheckInvokeExprWithCheckedOperands(InvokeExpr* expr);
     // Get the type to use when referencing a declaration
     QualType GetTypeForDeclRef(DeclRef<Decl> declRef, SourceLoc loc);
@@ -4129,6 +4198,20 @@ public:
     SubtypeWitness* isFuncForwardDifferentiable(DeclRef<CallableDecl> declRef);
     SubtypeWitness* isFuncBackwardDifferentiable(DeclRef<CallableDecl> declRef);
 };
+
+DeclRef<FuncDecl> findStructuralRayTracingEntryPointByName(
+    Linkage* linkage,
+    Module* module,
+    Name* name,
+    Profile& ioProfile,
+    DiagnosticSink* sink,
+    bool* outFoundStruct,
+    StructuralRayTracingEntryPointInfo* outInfo);
+void diagnoseMixedRayTracingAPIUse(EntryPoint* entryPoint, DiagnosticSink* sink);
+void checkRayTracingAPICall(
+    FunctionDeclBase* caller,
+    FunctionDeclBase* callee,
+    DiagnosticSink* sink);
 
 
 inline void ensureDecl(SemanticsVisitor* visitor, Decl* decl, DeclCheckState state)
@@ -4482,6 +4565,12 @@ bool isUnsizedArrayType(Type* type);
 bool isInterfaceType(Type* type);
 
 bool isImmutableBufferType(Type* type);
+
+/// Returns whether the checked declaration of `type` carries `__intrinsic_type(op)`.
+/// Types such as `CoopMat` and `TraceProgramDescriptor` use this modifier without a dedicated
+/// AST type class. Read their declared opcode so aliases and generic substitutions retain the
+/// same classification without depending on the module or declaration name.
+bool isIntrinsicTypeWithOp(Type* type, IROp op);
 
 // Check if `type` is nullable. An `Optional<T>` will occupy the same space as `T`, if `T`
 // is nullable.

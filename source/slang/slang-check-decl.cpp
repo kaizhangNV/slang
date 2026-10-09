@@ -2744,6 +2744,8 @@ void SemanticsDeclHeaderVisitor::checkVarDeclCommon(VarDeclBase* varDecl)
         validateArrayElementTypeForVariable(varDecl);
     }
 
+    diagnoseInvalidStructuralRayTracingVariableType(varDecl);
+
     // If there is a matrix layout modifier or texture format modifier, we will modify the type now.
     maybeApplyLayoutModifier(varDecl);
 
@@ -5038,7 +5040,11 @@ void _collectBuiltinDeclsThatNeedRegistrationRec(Decl* decl, List<Decl*>& ioDecl
 
 void collectBuiltinDeclsThatNeedRegistration(ModuleDecl* moduleDecl, List<Decl*>& outDecls)
 {
-    _collectBuiltinDeclsThatNeedRegistrationRec(moduleDecl, outDecls);
+    // Only core declarations belong to the session-wide builtin lookup. An ordinary module's
+    // `__magic_type` annotation already preserves its special AST class through serialization;
+    // registering it globally would let unrelated modules overwrite each other's declarations.
+    if (isFromCoreModule(moduleDecl))
+        _collectBuiltinDeclsThatNeedRegistrationRec(moduleDecl, outDecls);
 }
 
 Type* unwrapArrayType(Type* type)
@@ -5106,6 +5112,8 @@ void discoverNamespaceDecls(List<NamespaceDecl*>& decls, Decl* parent)
 
 void SemanticsDeclVisitorBase::checkModule(ModuleDecl* moduleDecl)
 {
+    beginStructuralRayTracingModule();
+
     // When we are dealing with code from the core modules,
     // there is a potential problem where we might need to look
     // up built-in types like `Int` through the session (e.g.,
@@ -5325,6 +5333,8 @@ void SemanticsDeclVisitorBase::checkModule(ModuleDecl* moduleDecl)
     // Furthermore, because a fully checked function will have checked
     // its body, this also means that all function bodies and the
     // declarations they contain should be fully checked.
+    diagnosePendingStructuralRayTracingTypeUses();
+    checkStructuralRayTracingModule(moduleDecl);
 }
 
 static bool _hasNoDiffParameterSignature(ParamDecl* decl, Type* type)
@@ -6411,7 +6421,8 @@ bool SemanticsVisitor::doesTypeSatisfyConstraintRequirements(
 bool SemanticsVisitor::doesTypeSatisfyAssociatedTypeRequirement(
     Type* satisfyingType,
     DeclRef<AssocTypeDecl> requiredAssociatedTypeDeclRef,
-    RefPtr<WitnessTable> witnessTable)
+    RefPtr<WitnessTable> witnessTable,
+    Decl* satisfyingDecl)
 {
     if (auto declRefType = as<DeclRefType>(satisfyingType))
     {
@@ -6420,6 +6431,12 @@ bool SemanticsVisitor::doesTypeSatisfyAssociatedTypeRequirement(
         if (declRefType->getDeclRef().getDecl()->hasModifier<ToBeSynthesizedModifier>())
             return false;
     }
+
+    diagnoseDuplicateStructuralRayTracingSchemaEntries(
+        satisfyingType,
+        requiredAssociatedTypeDeclRef.getDecl(),
+        witnessTable->witnessedType,
+        satisfyingDecl);
 
     // Register the satisfying type to the witness table. Any constraints
     // written on this associated type are sibling interface requirements, and
@@ -6532,7 +6549,8 @@ bool SemanticsVisitor::doesMemberSatisfyRequirement(
             return doesTypeSatisfyAssociatedTypeRequirement(
                 satisfyingType,
                 requiredTypeDeclRef,
-                witnessTable);
+                witnessTable,
+                subAggTypeDeclRef.getDecl());
         }
     }
     else if (auto typedefDeclRef = memberDeclRef.as<TypeDefDecl>())
@@ -6547,7 +6565,8 @@ bool SemanticsVisitor::doesMemberSatisfyRequirement(
             return doesTypeSatisfyAssociatedTypeRequirement(
                 satisfyingType,
                 requiredTypeDeclRef,
-                witnessTable);
+                witnessTable,
+                typedefDeclRef.getDecl());
         }
     }
     else if (auto propertyDeclRef = memberDeclRef.as<PropertyDecl>())
@@ -11366,6 +11385,10 @@ RefPtr<WitnessTable> SemanticsVisitor::checkInterfaceConformance(
     }
 
     interfaceState->status = ConformanceInterfaceCheckStatus::Succeeded;
+    checkStructuralRayTracingStageConformance(
+        superInterfaceDeclRef,
+        witnessTable,
+        inheritanceDecl->loc);
     return witnessTable;
 }
 
@@ -16290,7 +16313,10 @@ void SemanticsDeclHeaderVisitor::checkCallableDeclCommon(CallableDecl* decl)
     for (auto paramDecl : decl->getParameters())
     {
         ensureDecl(paramDecl, DeclCheckState::ReadyForReference);
+        diagnoseInvalidStructuralRayTracingVariableType(paramDecl);
     }
+
+    diagnoseInvalidStructuralRayTracingCallableResult(decl);
 
     maybeInferPrefixModifierForOperator(decl);
 
@@ -17348,6 +17374,7 @@ void SemanticsDeclHeaderVisitor::visitPropertyDecl(PropertyDecl* decl)
 {
     SemanticsVisitor subVisitor(withDeclToExcludeFromLookup(decl));
     decl->type = subVisitor.CheckUsableType(decl->type, decl);
+    diagnoseInvalidStructuralRayTracingPropertyType(decl);
     visitAbstractStorageDeclCommon(decl);
     checkVisibility(decl);
 }
@@ -21329,6 +21356,30 @@ struct CapabilityDeclReferenceVisitor
         if (decl)
             handleProcessFunc(decl, decl->inferredCapabilityRequirements, refLoc);
     }
+    // Collect the capabilities of the individual conformances in a type-pack proof.
+    // Consider this example:
+    //
+    //     [require(metal)] interface IMetalItem {}
+    //     struct Items<each T> where expand each T : IMetalItem
+    //     {
+    //         static const int count = countof(T);
+    //     }
+    //     [require(hlsl)] export int emptyCount() { return Items<>.count; }
+    //
+    // SemanticsVisitor::isSubtype uses getSubtypeWitnessPack to represent the empty pack's
+    // vacuously satisfied constraint. That canonical witness retains IMetalItem as its
+    // supertype, but has no element conformances requiring Metal. Visiting every operand
+    // would incorrectly restrict emptyCount to Metal. Visit the element witnesses instead:
+    // nonempty packs still propagate each conformance's capabilities, while an empty pack
+    // contributes none. General declaration-reference collection still visits the supertype
+    // because it remains part of the proof's identity.
+    void visitTypePackSubtypeWitness(TypePackSubtypeWitness* witness)
+    {
+        if (!this->visitedVals.add(witness))
+            return;
+        for (Index i = 0; i < witness->getCount(); i++)
+            this->dispatchIfNotNull(witness->getWitness(i));
+    }
     // Join a user-defined derivative's capability requirements into the differentiating
     // function, gated on the derivative carrying an explicit `[require]`. The gate is
     // essential rather than cosmetic: the core module differentiates its own builtins
@@ -22341,6 +22392,8 @@ bool isOpaqueHandleType(Type* type)
 {
     while (auto modifiedType = as<ModifiedType>(type))
         type = modifiedType->getBase();
+    if (isStructuralRayTracingOpaqueHandleType(type))
+        return true;
     if (as<ResourceType>(type))
         return true;
     if (as<SamplerStateType>(type))

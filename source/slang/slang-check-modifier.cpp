@@ -1953,14 +1953,15 @@ Modifier* SemanticsVisitor::checkModifier(
 
     if (auto decl = as<Decl>(syntaxNode))
     {
-        // These modifiers bind a declaration to compiler-internal type / requirement
-        // registration and are valid only in the core module; drop them on a user declaration
-        // here at `ModifiersChecked`, before any `Type` for the declaration can be formed, so no
-        // downstream consumer sees them. (`__intrinsic_type` is not in this set: it only records
-        // an IR opcode and is valid user syntax.)
+        // Core builtin annotations require compiler-owned declaration shapes. Ordinary modules
+        // may instead select a ray-tracing stage interface, whose shape is the checked declaration
+        // reference. Reject other builtin annotations before forming a Type, so downstream
+        // consumers never see unsupported shapes. `__intrinsic_type` only records an IR opcode
+        // and remains valid user syntax.
         if ((as<MagicTypeModifier>(m) || as<BuiltinTypeModifier>(m) ||
              as<BuiltinRequirementModifier>(m)) &&
-            !isFromCoreModule(decl))
+            !isFromCoreModule(decl) &&
+            !isRayTracingStageInterfaceModifier(as<MagicTypeModifier>(m), decl))
         {
             if (!ignoreUnallowedModifier)
                 getSink()->diagnose(Diagnostics::BuiltinOnlyModifierOnNonCoreDecl{.modifier = m});

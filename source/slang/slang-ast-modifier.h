@@ -2318,4 +2318,26 @@ class FunctionInterfaceAttribute : public Attribute
     FIDDLE(...)
 };
 
+/// Identifies a structural trace declaration whose body requires structural operation lowering.
+FIDDLE()
+class RayTracingTraceAttribute : public Attribute
+{
+    FIDDLE(...)
+};
+
+/// Identifies a structural callable-dispatch declaration for ordinary function lowering.
+FIDDLE()
+class RayTracingCallShaderAttribute : public Attribute
+{
+    FIDDLE(...)
+};
+
+/// Identifies the payload parameter of a trace overload for its source-operation IR marker.
+/// An explicitly passed empty struct is a valid payload and uses the same marker.
+FIDDLE()
+class RayTracingPayloadAttribute : public Attribute
+{
+    FIDDLE(...)
+};
+
 } // namespace Slang
