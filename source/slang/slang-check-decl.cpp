@@ -5339,6 +5339,7 @@ void SemanticsDeclVisitorBase::checkModule(ModuleDecl* moduleDecl)
     // its body, this also means that all function bodies and the
     // declarations they contain should be fully checked.
     diagnosePendingStructuralRayTracingTypeUses();
+    checkStructuralRayTracingModule(moduleDecl);
 }
 
 static bool _hasNoDiffParameterSignature(ParamDecl* decl, Type* type)
@@ -11331,10 +11332,6 @@ RefPtr<WitnessTable> SemanticsVisitor::checkInterfaceConformance(
         {
         case ConformanceInterfaceCheckStatus::Checking:
         case ConformanceInterfaceCheckStatus::Succeeded:
-            registerStructuralRayTracingStageConformance(
-                superInterfaceDeclRef,
-                witnessTable,
-                inheritanceDecl->loc);
             return witnessTable;
         case ConformanceInterfaceCheckStatus::Failed:
             return nullptr;
@@ -11393,7 +11390,7 @@ RefPtr<WitnessTable> SemanticsVisitor::checkInterfaceConformance(
     }
 
     interfaceState->status = ConformanceInterfaceCheckStatus::Succeeded;
-    registerStructuralRayTracingStageConformance(
+    checkStructuralRayTracingStageConformance(
         superInterfaceDeclRef,
         witnessTable,
         inheritanceDecl->loc);
@@ -11706,11 +11703,6 @@ bool SemanticsVisitor::checkInterfaceConformance(
 
     // The conformance was satisfied if all the requirements were satisfied.
     //
-    if (result)
-        registerStructuralRayTracingStageConformance(
-            superInterfaceDeclRef,
-            witnessTable,
-            inheritanceDecl->loc);
     return result;
 }
 
