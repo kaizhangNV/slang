@@ -1855,7 +1855,9 @@ RefPtr<Module> Linkage::_findOrImportModuleWithoutPolicy(
                     nullptr,
                     ModuleBlobType::IR);
                 if (module)
+                {
                     return module;
+                }
             }
         }
     }
