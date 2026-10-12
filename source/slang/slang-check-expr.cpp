@@ -4304,8 +4304,6 @@ Expr* SemanticsVisitor::CheckInvokeExprWithCheckedOperands(InvokeExpr* expr)
             if (funcDeclRefExpr)
                 funcDeclBase = as<FunctionDeclBase>(funcDeclRefExpr->declRef.getDecl());
 
-            checkRayTracingAPICall(m_parentFunc, funcDeclBase, getSink());
-
             if (funcDeclBase && diagnoseDirectStructuralRayTracingStageInvoke(invoke, funcDeclBase))
             {
                 return CreateErrorExpr(invoke);
