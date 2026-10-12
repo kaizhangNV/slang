@@ -884,5 +884,6 @@ return {
 	["Type.RaytracingStageInterface.callable_stage_interface"] = 908,
 	["Decoration.structuralRayTracingEntryPointInfo"] = 909,
 	["Decoration.structuralRayTracingSourceOperation"] = 910,
-	["Type.TraceProgramDescriptor"] = 911
+	["Type.TraceProgramDescriptor"] = 911,
+	["metalTraceRay"] = 912
 }
