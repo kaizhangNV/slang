@@ -492,7 +492,7 @@ TypeTag SemanticsVisitor::getTypeTags(Type* type)
         return elementTags;
     }
     else if (
-        isStructuralRayTracingOpaqueHandleType(type) || as<UntypedBufferResourceType>(type) ||
+        as<TraceProgramDescriptorType>(type) || as<UntypedBufferResourceType>(type) ||
         as<ResourceType>(type) || as<SamplerStateType>(type) ||
         as<HLSLStructuredBufferTypeBase>(type) || as<DynamicResourceType>(type))
     {
