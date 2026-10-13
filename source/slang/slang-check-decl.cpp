@@ -16312,7 +16312,7 @@ void SemanticsDeclHeaderVisitor::checkCallableDeclCommon(CallableDecl* decl)
         diagnoseInvalidStructuralRayTracingVariableType(paramDecl);
     }
 
-    diagnoseInvalidStructuralRayTracingCallableResult(decl);
+    diagnoseInvalidStructuralRayTracingReturnType(decl);
 
     maybeInferPrefixModifierForOperator(decl);
 
