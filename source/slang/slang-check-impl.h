@@ -2949,7 +2949,7 @@ public:
 
     void beginStructuralRayTracingModule();
     void checkStructuralRayTracingModule(ModuleDecl* moduleDecl);
-    void checkStructuralRayTracingStageConformance(
+    void checkStructuralRayTracingStageRestrictions(
         DeclRef<InterfaceDecl> superInterfaceDeclRef,
         WitnessTable* witnessTable,
         SourceLoc conformanceLoc);
