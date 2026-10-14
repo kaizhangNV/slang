@@ -4045,9 +4045,6 @@ public:
         InvokeExpr* invoke,
         FuncType* funcType,
         FunctionDeclBase* funcDeclBase);
-    bool diagnoseDirectStructuralRayTracingStageInvoke(
-        InvokeExpr* invoke,
-        FunctionDeclBase* functionDecl);
     Expr* CheckInvokeExprWithCheckedOperands(InvokeExpr* expr);
     // Get the type to use when referencing a declaration
     QualType GetTypeForDeclRef(DeclRef<Decl> declRef, SourceLoc loc);
