@@ -4263,10 +4263,15 @@ void SemanticsVisitor::_checkAliasedOutArguments(
 Expr* SemanticsVisitor::CheckInvokeExprWithCheckedOperands(InvokeExpr* expr)
 {
     auto rs = ResolveInvoke(expr);
-    // A same-type coercion reuses its argument, so its creation (if any) was already checked.
+    // ResolveInvoke can return the existing argument for a same-type cast, such as
+    // rt::MissInput<C>(input) or (T)(functionReturningT()). That argument was already checked.
+    // Return before the checks below: the outer cast adds no new call or construction.
     if (expr->arguments.getCount() == 1 && rs == expr->arguments[0])
         return rs;
 
+    // Check what the resolved expression produces. For example, rt::MissInput<C>() constructs
+    // a forbidden fresh input; makeValue<rt::MissInput<C>>() can also return an input after
+    // substituting its type arguments. The shared RT checker handles both cases.
     if (diagnoseInvalidStructuralRayTracingExpression(rs))
         return CreateErrorExpr(rs);
 
@@ -4275,9 +4280,8 @@ Expr* SemanticsVisitor::CheckInvokeExprWithCheckedOperands(InvokeExpr* expr)
         if (!invoke->functionExpr)
             return rs;
 
-        // if this is still an invoke expression, test arguments passed to inout/out parameter
-        // are LValues.
-        //
+        // Check generic arguments even when the result is void. A call to make<MissInput<C>>()
+        // could otherwise hide construction inside a generic body such as void make<T>() { T(); }.
         if (diagnoseInvalidStructuralRayTracingGenericArguments(invoke))
             return CreateErrorExpr(invoke);
 
@@ -4298,6 +4302,9 @@ Expr* SemanticsVisitor::CheckInvokeExprWithCheckedOperands(InvokeExpr* expr)
             if (funcDeclRefExpr)
                 funcDeclBase = as<FunctionDeclBase>(funcDeclRefExpr->declRef.getDecl());
 
+            // Reject stage.invoke(input) when this method implements a shader stage. An ordinary
+            // method with the same name remains legal; the RT checker uses the selected
+            // conformance.
             if (funcDeclBase && diagnoseDirectStructuralRayTracingStageInvoke(invoke, funcDeclBase))
             {
                 return CreateErrorExpr(invoke);
@@ -4305,6 +4312,8 @@ Expr* SemanticsVisitor::CheckInvokeExprWithCheckedOperands(InvokeExpr* expr)
 
             Index paramCount = funcType->getParamCount();
 
+            // Check argument requirements for the selected function. In particular, arguments
+            // passed to out, inout, and ref parameters must be writable.
             for (Index pp = 0; pp < paramCount; ++pp)
             {
                 auto paramType = funcType->getParamTypeWithModeWrapper(pp);
@@ -9108,9 +9117,7 @@ Expr* SemanticsVisitor::checkGeneralMemberLookupExpr(MemberExpr* expr, Type* bas
             }
         }
     }
-    auto resultExpr =
-        createLookupResultExpr(expr->name, lookupResult, expr->baseExpression, expr->loc, expr);
-    return resultExpr;
+    return createLookupResultExpr(expr->name, lookupResult, expr->baseExpression, expr->loc, expr);
 }
 
 Expr* SemanticsExprVisitor::visitMemberExpr(MemberExpr* expr)
