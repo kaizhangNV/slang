@@ -225,12 +225,7 @@ Expr* SemanticsVisitor::dispatchExpr(Expr* expr, SemanticsContext const& context
     SemanticsExprVisitor visitor(context);
     try
     {
-        auto result = visitor.dispatch(expr);
-        // An `as` expression can produce Optional<MissInput<C>> without naming Optional in
-        // source. Check the result before a parent expression extracts its `.value`.
-        if (visitor.diagnoseInvalidStructuralRayTracingOptionalExpression(result))
-            return visitor.CreateErrorExpr(result);
-        return result;
+        return visitor.dispatch(expr);
     }
     catch (const AbortCompilationException&)
     {
