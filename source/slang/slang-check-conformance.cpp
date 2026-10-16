@@ -492,9 +492,9 @@ TypeTag SemanticsVisitor::getTypeTags(Type* type)
         return elementTags;
     }
     else if (
-        as<UntypedBufferResourceType>(type) || as<ResourceType>(type) ||
-        as<SamplerStateType>(type) || as<HLSLStructuredBufferTypeBase>(type) ||
-        as<DynamicResourceType>(type))
+        as<TraceProgramDescriptorType>(type) || as<UntypedBufferResourceType>(type) ||
+        as<ResourceType>(type) || as<SamplerStateType>(type) ||
+        as<HLSLStructuredBufferTypeBase>(type) || as<DynamicResourceType>(type))
     {
         return TypeTag::Opaque;
     }

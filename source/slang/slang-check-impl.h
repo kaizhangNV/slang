@@ -1179,6 +1179,18 @@ public:
         InheritanceCircularityInfo* circularityInfo = nullptr,
         HashSet<DeclRef<Decl>>* ioSkippedIncompleteFacet = nullptr);
 
+    /// Project a checked `Self : Base` witness through `Base`'s interface inheritance.
+    ///
+    /// Consider a generic function that knows `T : IDerived`, where `IDerived : IBase`, while
+    /// the concrete `T` also has another direct `IBase` conformance. A fresh subtype query for
+    /// `T : IBase` is allowed to select that direct conformance. This operation instead preserves
+    /// the caller's supplied `T : IDerived` path and returns its corresponding `T : IBase`
+    /// witness. It returns null when the supplied witness is not rooted in an interface or the
+    /// target is not one of that interface's bases.
+    SubtypeWitness* tryProjectInterfaceSubtypeWitness(
+        SubtypeWitness* selfIsSubtypeOfBase,
+        Type* targetInterfaceType);
+
     /// Prevent an unsupported case of
     /// ```
     ///     extension<T:IFoo> : IBar{};
@@ -2478,7 +2490,8 @@ public:
     bool doesTypeSatisfyAssociatedTypeRequirement(
         Type* satisfyingType,
         DeclRef<AssocTypeDecl> requiredAssociatedTypeDeclRef,
-        RefPtr<WitnessTable> witnessTable);
+        RefPtr<WitnessTable> witnessTable,
+        SourceLoc satisfyingDeclLoc);
 
     // Does the given `memberDecl` work as an implementation
     // to satisfy the requirement `requiredMemberDeclRef`
@@ -2927,6 +2940,25 @@ public:
         InheritanceDecl* inheritanceDecl,
         DeclRef<InterfaceDecl> superInterfaceDeclRef,
         SubtypeWitness* subTypeConformsToSuperInterfaceWitness);
+
+    void checkStructuralRayTracingModule(ModuleDecl* moduleDecl);
+    void checkStructuralRayTracingStageRestrictions(
+        DeclRef<InterfaceDecl> superInterfaceDeclRef,
+        WitnessTable* witnessTable,
+        SourceLoc conformanceLoc);
+    void diagnoseDuplicateStructuralRayTracingSchemaEntries(
+        Type* entryListType,
+        AssocTypeDecl* associatedTypeRequirement,
+        Type* schemaType,
+        SourceLoc satisfyingDeclLoc);
+    void diagnoseInvalidStructuralRayTracingVariableType(VarDeclBase* varDecl);
+    void diagnoseInvalidStructuralRayTracingReturnType(CallableDecl* decl);
+    void diagnoseInvalidStructuralRayTracingPropertyType(PropertyDecl* propertyDecl);
+    bool diagnoseInvalidStructuralRayTracingExpression(Expr* expr);
+    bool diagnoseInvalidStructuralRayTracingGenericArguments(InvokeExpr* invoke);
+    bool diagnoseInvalidStructuralRayTracingGenericTypeApplication(
+        GenericAppExpr* genericApplication,
+        Expr* checkedResult);
 
     void _checkDifferentialConformance(
         ConformanceCheckingContext* context,
@@ -4129,6 +4161,16 @@ public:
     SubtypeWitness* isFuncForwardDifferentiable(DeclRef<CallableDecl> declRef);
     SubtypeWitness* isFuncBackwardDifferentiable(DeclRef<CallableDecl> declRef);
 };
+
+DeclRef<FuncDecl> findStructuralRayTracingEntryPointByName(
+    Linkage* linkage,
+    Module* module,
+    Name* name,
+    Profile& ioProfile,
+    DiagnosticSink* sink,
+    bool* outFoundStruct,
+    StructuralRayTracingEntryPointInfo* outInfo);
+void diagnoseMixedRayTracingAPIUse(EntryPoint* entryPoint, DiagnosticSink* sink);
 
 
 inline void ensureDecl(SemanticsVisitor* visitor, Decl* decl, DeclCheckState state)

@@ -2318,4 +2318,11 @@ class FunctionInterfaceAttribute : public Attribute
     FIDDLE(...)
 };
 
+/// Identifies a structural callable-dispatch declaration for ordinary function lowering.
+FIDDLE()
+class RayTracingCallShaderAttribute : public Attribute
+{
+    FIDDLE(...)
+};
+
 } // namespace Slang

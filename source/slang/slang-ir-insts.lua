@@ -735,6 +735,19 @@ local insts = {
 				},
 			},
 			{
+				TraceProgramDescriptor = {
+					-- An opaque structural ray-tracing program descriptor. Its operands retain the
+					-- schema type argument and conformance witness without exposing any
+					-- target-specific resource representation in source or IR.
+					struct_name = "TraceProgramDescriptorType",
+					operands = {
+						{ "schema", "IRType" },
+						{ "schemaWitness" },
+					},
+					hoistable = true,
+				},
+			},
+			{
 				struct = {
 					-- A user-defined structure declaration at the IR level.
 					-- Unlike in the AST where there is a distinction between
@@ -752,6 +765,40 @@ local insts = {
 				class = { struct_name = "ClassType", parent = true },
 			},
 			{ interface = { struct_name = "InterfaceType", global = true } },
+			-- Structural ray-tracing stage interfaces retain ordinary interface requirements and
+			-- witness-table behavior. Their magic AST types select these opcodes during normal
+			-- interface lowering, preserving stage identity through serialization and linking.
+			-- An ordinary interface with the same source name still lowers to `interface`.
+			{
+				RaytracingStageInterface = {
+					global = true,
+					{
+						closest_hit_stage_interface = {
+							struct_name = "ClosestHitStageInterface",
+						},
+					},
+					{
+						any_hit_stage_interface = {
+							struct_name = "AnyHitStageInterface",
+						},
+					},
+					{
+						intersection_stage_interface = {
+							struct_name = "IntersectionStageInterface",
+						},
+					},
+					{
+						miss_stage_interface = {
+							struct_name = "MissStageInterface",
+						},
+					},
+					{
+						callable_stage_interface = {
+							struct_name = "CallableStageInterface",
+						},
+					},
+				},
+			},
 			{
 				associated_type = {
 					struct_name = "AssociatedType",
@@ -1668,6 +1715,31 @@ local insts = {
 	-- mirroring the read side (`emitOptiXAttributeFetch`). The CUDA emitter renders this as a
 	-- single `optixReportIntersection(tHit, hitKind, a0..aN)`.
 	{ reportOptiXIntersection = { min_operands = 2 } },
+	{
+		metalTraceRay = {
+			-- The two internal Metal trace functions lower to this instruction through
+			-- ordinary __intrinsic_op calls. No time operand means no motion; a present
+			-- time, including zero, means motion. The descriptor type retains the schema
+			-- and its witness, including the selected motion model, while the payload
+			-- pointer retains its concrete type. Later Metal lowering consumes this
+			-- operation before native entry-point legalization and emission.
+			operands = {
+				{ "accelerationStructure" },
+				{ "descriptor" },
+				{ "rayFlags" },
+				{ "instanceMask" },
+				{ "sbtOffset" },
+				{ "sbtStride" },
+				{ "missIndex" },
+				{ "rayOrigin" },
+				{ "rayTMin" },
+				{ "rayDirection" },
+				{ "rayTMax" },
+				{ "payload" },
+				{ "time", optional = true },
+			},
+		},
+	},
 	{ GetVulkanRayTracingPayloadLocation = { min_operands = 1 } },
 	{ GetLegalizedSPIRVGlobalParamAddr = { min_operands = 1 } },
 	{
@@ -2104,6 +2176,33 @@ local insts = {
 						{ "name", "IRStringLit" },
 						{ "moduleName", "IRStringLit", optional = true },
 					},
+				},
+			},
+			{
+				-- Records the checked source contract for a selected structural stage. This metadata is
+				-- descriptive: later lowering consumes it when it creates a native entry-point adapter.
+				structuralRayTracingEntryPointInfo = {
+					struct_name = "StructuralRayTracingEntryPointInfoDecoration",
+					operands = {
+						{ "stageKind", "IRIntLit" },
+						{ "stageType", "IRType" },
+						{ "stageSourceTypeName", "IRStringLit" },
+						{ "stageTypeIdentity", "IRStringLit" },
+						{ "contextType", "IRType" },
+						{ "payloadType", "IRType" },
+						{ "recordType", "IRType" },
+						{ "hitAttributesType", "IRType" },
+						{ "callableDataType", "IRType" },
+						{ "hitAttributesKind", "IRIntLit" },
+					},
+				},
+			},
+			{
+				-- Marks an annotated structural operation whose source semantics must be lowered before
+				-- ordinary entry-point ABI legalization. This decoration is deliberately non-operational.
+				structuralRayTracingSourceOperation = {
+					struct_name = "StructuralRayTracingSourceOperationDecoration",
+					operands = { { "operationKind", "IRIntLit" } },
 				},
 			},
 			{ CudaKernel = { struct_name = "CudaKernelDecoration" } },
