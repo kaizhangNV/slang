@@ -22,7 +22,6 @@ enum class KnownBuiltinDeclName : uint32_t
     OperatorAddressOf,
     WaveIsFirstLane,
     WaveReadLaneFirst,
-    RayTracingShaderList,
     RayTracingClosestHitInput,
     RayTracingAnyHitInput,
     RayTracingIntersectionInput,
