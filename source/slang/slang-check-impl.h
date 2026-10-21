@@ -4570,10 +4570,7 @@ bool getExtensionTargetDeclList(
     ExtensionDecl* extDeclRef,
     ShortList<AggTypeDecl*>& targetDecls);
 
-void validateEntryPoint(
-    EntryPoint* entryPoint,
-    DiagnosticSink* sink,
-    bool hasCheckedStageConformance = false);
+void validateEntryPoint(EntryPoint* entryPoint, DiagnosticSink* sink);
 
 RefPtr<ComponentType> createUnspecializedGlobalComponentType(
     FrontEndCompileRequest* compileRequest);
