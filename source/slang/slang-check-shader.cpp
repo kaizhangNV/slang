@@ -1,5 +1,6 @@
 // slang-check-shader.cpp
 #include "slang-check-impl.h"
+#include "slang-structural-ray-tracing.h"
 
 // This file encapsulates semantic checking logic primarily
 // related to shaders, including validating entry points,
@@ -824,6 +825,11 @@ void EntryPoint::_collectShaderParams()
     // along with those of any outer generics first.
     //
     _collectGenericSpecializationParamsRec(getFuncDecl());
+
+    // A stage input such as MissInput<C> is supplied by the compiler. Keep it in the checked
+    // function signature, but do not expose it as a host-bound shader parameter.
+    if (getStructuralRayTracingEntryPointInputType(this))
+        return;
 
     // After geneic specialization parameters have been collected,
     // we look through the value parameters of the entry point
@@ -1760,12 +1766,13 @@ static void collectGenericStructTypeUses(
 static void _validateEntryPointTargetCapabilities(
     EntryPoint* entryPoint,
     CapabilitySet entryPointInferredCaps,
+    CapabilitySet stageCapabilitySet,
     const List<GenericStructTypeUse>& signatureStructUses,
     DiagnosticSink* sink)
 {
     auto entryPointFuncDecl = entryPoint->getFuncDecl();
     auto linkage = entryPoint->getLinkage();
-    auto diagnosticDecl = getEntryPointCapabilityDiagnosticDecl(entryPoint);
+    auto diagnosticDecl = entryPointFuncDecl;
 
     // The entry point's stage-specific requirements belong to the `EntryPoint`, not the
     // stage-agnostic `FuncDecl`; store the finalized set there as the source of truth for
@@ -1776,7 +1783,6 @@ static void _validateEntryPointTargetCapabilities(
     for (auto target : linkage->targets)
     {
         auto targetCaps = target->getTargetCaps();
-        auto stageCapabilitySet = getEntryPointStageCapabilities(entryPoint);
         targetCaps.join(stageCapabilitySet);
         if (targetCaps.isIncompatibleWith(entryPointInferredCaps))
         {
@@ -1907,12 +1913,15 @@ static void _validateEntryPointTargetCapabilities(
 
 // Validate that an entry point function conforms to any additional
 // constraints based on the stage (and profile?) it specifies.
-void validateEntryPoint(EntryPoint* entryPoint, DiagnosticSink* sink)
+void validateEntryPoint(
+    EntryPoint* entryPoint,
+    DiagnosticSink* sink,
+    bool hasCheckedStageConformance)
 {
     auto entryPointFuncDecl = entryPoint->getFuncDecl();
     auto linkage = entryPoint->getLinkage();
 
-    if (entryPoint->isStructuralRayTracingEntryPoint())
+    if (hasCheckedStageConformance)
     {
         // Conformance already checks invoke's signature. Its RT input is supplied by the
         // compiler, so native uniform/varying parameter rules do not apply. The selected
@@ -1923,10 +1932,17 @@ void validateEntryPoint(EntryPoint* entryPoint, DiagnosticSink* sink)
         entryPointInferredCaps.nonDestructiveJoin(
             getStructuralRayTracingPrimitiveCapabilities(entryPoint));
 
+        // MissInput<C>, for example, declares the source miss-stage capabilities, including
+        // Metal's synthesized miss path. The native miss profile alone does not include Metal.
+        auto inputDecl =
+            isDeclRefTypeOf<AggTypeDecl>(getStructuralRayTracingEntryPointInputType(entryPoint))
+                .getDecl();
+        SLANG_RELEASE_ASSERT(inputDecl && inputDecl->inferredCapabilityRequirements);
         List<GenericStructTypeUse> signatureStructUses;
         _validateEntryPointTargetCapabilities(
             entryPoint,
             entryPointInferredCaps,
+            CapabilitySet{inputDecl->inferredCapabilityRequirements},
             signatureStructUses,
             sink);
         return;
@@ -2731,6 +2747,7 @@ void validateEntryPoint(EntryPoint* entryPoint, DiagnosticSink* sink)
     _validateEntryPointTargetCapabilities(
         entryPoint,
         entryPointInferredCaps,
+        entryPoint->getProfile().getCapabilityName(),
         signatureStructUses,
         sink);
 }
@@ -2813,7 +2830,7 @@ RefPtr<EntryPoint> findAndValidateEntryPoint(FrontEndEntryPointRequest* entryPoi
     DeclRef<FuncDecl> entryPointFuncDeclRef =
         findFunctionDeclByName(translationUnit->getModule(), entryPointName, sink, &notFoundSink);
     bool foundStructuralStage = false;
-    SubtypeWitness* structuralStageWitness = nullptr;
+    Type* structuralStageType = nullptr;
     if (!entryPointFuncDeclRef &&
         linkage->m_optionSet.getBoolOption(CompilerOptionName::ExperimentalFeature))
     {
@@ -2824,7 +2841,7 @@ RefPtr<EntryPoint> findAndValidateEntryPoint(FrontEndEntryPointRequest* entryPoi
             entryPointProfile,
             sink,
             &foundStructuralStage,
-            &structuralStageWitness);
+            &structuralStageType);
     }
 
     // A recognized structural type already supplies either the entry point or its own diagnostic.
@@ -2865,16 +2882,13 @@ RefPtr<EntryPoint> findAndValidateEntryPoint(FrontEndEntryPointRequest* entryPoi
         EntryPoint::create(linkage, entryPointFuncDeclRef, entryPointProfile);
     if (foundStructuralStage)
     {
-        initializeStructuralRayTracingEntryPoint(
-            entryPoint,
-            entryPointName,
-            structuralStageWitness);
+        initializeStructuralRayTracingEntryPoint(entryPoint, entryPointName, structuralStageType);
     }
 
     // Now that we've *found* the entry point, it is time to validate
     // that it actually meets the constraints for the chosen stage/profile.
     //
-    validateEntryPoint(entryPoint, sink);
+    validateEntryPoint(entryPoint, sink, foundStructuralStage);
 
     // We should return nullptr if entry point fails to validate
     if (sink->getErrorCount())
