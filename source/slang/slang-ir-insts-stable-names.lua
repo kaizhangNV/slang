@@ -877,11 +877,6 @@ return {
 	["Attr.TypeAlignment"] = 901,
 	["reportOptiXIntersection"] = 902,
 	["Decoration.postDepthCoverage"] = 903,
-	["Type.RaytracingStageInterface.closest_hit_stage_interface"] = 904,
-	["Type.RaytracingStageInterface.any_hit_stage_interface"] = 905,
-	["Type.RaytracingStageInterface.intersection_stage_interface"] = 906,
-	["Type.RaytracingStageInterface.miss_stage_interface"] = 907,
-	["Type.RaytracingStageInterface.callable_stage_interface"] = 908,
 	["Decoration.structuralRayTracingSourceOperation"] = 910,
 	["Type.TraceProgramDescriptor"] = 911,
 	["metalTraceRay"] = 912
