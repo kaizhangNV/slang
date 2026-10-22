@@ -517,9 +517,6 @@ IRGlobalVar* cloneGlobalVarImpl(
 /// associated with a specialization of a program, and not the original IR for the modules
 /// of the program.
 ///
-/// Structural callable functions retain their source-operation marker
-/// when a different module contributes the selected definition.
-///
 /// This function scans through all the `originalValues` that were considered for `clonedInst`,
 /// and copies over any decorations that are allowed to come from a non-"best" definition.
 /// For a given decoration opcode, only one such decoration will ever be copied, and nothing
@@ -546,7 +543,6 @@ static void cloneExtraDecorationsFromInst(
         case kIROp_IntrinsicOpDecoration:
         case kIROp_NonCopyableTypeDecoration:
         case kIROp_DynamicDispatchWitnessDecoration:
-        case kIROp_StructuralRayTracingSourceOperationDecoration:
             if (!clonedInst->findDecorationImpl(decoration->getOp()))
             {
                 cloneInst(context, builder, decoration);

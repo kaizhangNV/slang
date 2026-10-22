@@ -877,7 +877,6 @@ return {
 	["Attr.TypeAlignment"] = 901,
 	["reportOptiXIntersection"] = 902,
 	["Decoration.postDepthCoverage"] = 903,
-	["Decoration.structuralRayTracingSourceOperation"] = 910,
 	["Type.TraceProgramDescriptor"] = 911,
 	["metalTraceRay"] = 912
 }
