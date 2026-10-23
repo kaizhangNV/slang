@@ -3404,11 +3404,6 @@ static RefPtr<EntryPointLayout> collectEntryPointParameters(
     if (specializationInfo)
         entryPointFuncDeclRef = specializationInfo->specializedFuncDeclRef;
 
-    entryPointLayout->inferredCapabilityRequirements =
-        specializationInfo ? specializationInfo->inferredCapabilityRequirements
-                           : entryPoint->getInferredCapabilityRequirements();
-    SLANG_RELEASE_ASSERT(entryPointLayout->inferredCapabilityRequirements);
-
     auto entryPointType = DeclRefType::create(astBuilder, entryPointFuncDeclRef);
 
     entryPointLayout->entryPoint = entryPointFuncDeclRef;

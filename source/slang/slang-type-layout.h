@@ -1157,10 +1157,6 @@ StructTypeLayout* getScopeStructLayout(ScopeLayout* programLayout);
 class EntryPointLayout : public ScopeLayout
 {
 public:
-    // Requirements validated for this entry-point selection. Two specializations of the same
-    // EntryPoint can have different sets, so retain the selected set alongside the function ref.
-    CapabilitySetVal* inferredCapabilityRequirements = nullptr;
-
     // The corresponding function declaration
     DeclRef<FuncDecl> entryPoint;
 

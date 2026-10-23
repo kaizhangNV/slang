@@ -15565,32 +15565,6 @@ LoweredValInfo emitDeclRef(IRGenContext* context, DeclRef<Decl> declRef, IRType*
     return info;
 }
 
-// Emit the SPIR-V execution-mode marker when any target alternative requires it. The capability
-// set can include this requirement through an attribute, a callee, or a selected generic argument.
-static void addShader64BitIndexingDecoration(
-    IRBuilder* builder,
-    IRInst* entryPointInst,
-    CapabilitySetVal* inferredCaps)
-{
-    if (entryPointInst->findDecoration<IRShader64BitIndexingDecoration>())
-        return;
-
-    // `implies()` requires every alternative to contain the capability; here one is sufficient.
-    // A declaration has no inferred set when capability checking is disabled.
-    CapabilitySet caps{inferredCaps};
-    for (auto atomSet : caps.getAtomSets())
-    {
-        for (auto atomVal : atomSet)
-        {
-            if (asAtom(atomVal) == CapabilityAtom::spvShader64BitIndexingEXT)
-            {
-                builder->addSimpleDecoration<IRShader64BitIndexingDecoration>(entryPointInst);
-                return;
-            }
-        }
-    }
-}
-
 static void lowerFrontEndEntryPointToIR(
     IRGenContext* context,
     EntryPoint* entryPoint,
@@ -15648,13 +15622,42 @@ static void lowerFrontEndEntryPointToIR(
             moduleName.getUnownedSlice());
     }
 
-    // Keep requirements shared by every specialization in the module IR, including serialized
-    // modules. Requirements introduced by selecting concrete arguments belong on the selected
-    // symbol instead: attaching those to the generic body would affect other specializations.
-    addShader64BitIndexingDecoration(
-        builder,
-        instToDecorate,
-        entryPointFuncDecl->inferredCapabilityRequirements);
+    // The `[Shader64BitIndexing]` attribute requires the `spvShader64BitIndexingEXT` capability,
+    // which the semantic checker unions into `inferredCapabilityRequirements` for the attributed
+    // function and, transitively, for every entry point that can reach it through its call graph.
+    // The corresponding SPIR-V `Shader64BitIndexingEXT` execution mode (and its owning
+    // `OpCapability`/`OpExtension`) is entry-point scoped, so we lift the requirement onto the
+    // entry point here (never onto an attributed callee, where an execution mode would be invalid).
+    // The SPIR-V back-end emits all three from this single decoration. Reading the inferred
+    // capability set rather than the attribute directly covers the direct, call-graph, and
+    // `[require(spvShader64BitIndexingEXT)]` cases uniformly.
+    // Read the entry point's inferred requirements, which include stage-dependent contributions
+    // such as `SV_` semantic capabilities. `validateEntryPoint` runs before front-end IR lowering
+    // and always stores a (possibly empty but non-null) frozen set here, so this is never null for
+    // a front-end entry point.
+    auto inferredCaps = entryPoint->getInferredCapabilityRequirements();
+    SLANG_RELEASE_ASSERT(inferredCaps);
+    CapabilitySet caps{inferredCaps};
+    bool requiresShader64BitIndexing = false;
+    // Scan for membership of the atom in *any* alternative of the capability set. We iterate
+    // `getAtomSets()` rather than calling `caps.implies(spvShader64BitIndexingEXT)` because
+    // `implies()` is AND-across-all-alternatives: it would only report the atom when *every*
+    // target alternative requires it, which is too strict for a presence test.
+    for (auto atomSet : caps.getAtomSets())
+    {
+        for (auto atomVal : atomSet)
+        {
+            if (asAtom(atomVal) == CapabilityAtom::spvShader64BitIndexingEXT)
+            {
+                requiresShader64BitIndexing = true;
+                break;
+            }
+        }
+        if (requiresShader64BitIndexing)
+            break;
+    }
+    if (requiresShader64BitIndexing)
+        builder->addSimpleDecoration<IRShader64BitIndexingDecoration>(instToDecorate);
 }
 
 static void lowerProgramEntryPointToIR(
@@ -15683,12 +15686,6 @@ static void lowerProgramEntryPointToIR(
             loweredEntryPointFunc,
             getMangledName(context->astBuilder, entryPointFuncDeclRef).getUnownedSlice());
     }
-
-    addShader64BitIndexingDecoration(
-        builder,
-        loweredEntryPointFunc,
-        specializationInfo ? specializationInfo->inferredCapabilityRequirements
-                           : entryPoint->getInferredCapabilityRequirements());
 
     // We may have shader parameters of interface/existential type,
     // which need us to supply concrete type information for specialization.
@@ -16834,6 +16831,19 @@ RefPtr<IRModule> TargetProgram::createIRModuleForLayout(DiagnosticSink* sink)
     auto latestSpirvAtom = getLatestSpirvAtom();
     auto latestMetalAtom = getLatestMetalAtom();
 
+    // Map each entry-point function declaration to the capability set inferred for it *as an entry
+    // point*, which can exceed the function declaration's own requirements (see
+    // `EntryPoint::getInferredCapabilityRequirements`). The layout list below is keyed by
+    // `DeclRef<FuncDecl>`, so we look up the owning `EntryPoint` here to read its stored set.
+    Dictionary<FuncDecl*, CapabilitySetVal*> entryPointInferredCaps;
+    for (Index i = 0; i < program->getEntryPointCount(); ++i)
+    {
+        auto entryPoint = program->getEntryPoint(i);
+        if (auto entryPointFuncDecl = entryPoint->getFuncDecl())
+            entryPointInferredCaps[entryPointFuncDecl] =
+                entryPoint->getInferredCapabilityRequirements();
+    }
+
     for (auto entryPointLayout : programLayout->entryPoints)
     {
         auto funcDeclRef = entryPointLayout->entryPoint;
@@ -16859,8 +16869,14 @@ RefPtr<IRModule> TargetProgram::createIRModuleForLayout(DiagnosticSink* sink)
                 getMangledName(astBuilder, funcDeclRef).getUnownedSlice());
         }
 
-        // Copy this entry point's validated SPIR-V/Metal version requirements into IR.
-        CapabilitySet set{entryPointLayout->inferredCapabilityRequirements};
+        auto asFuncDecl = as<FuncDecl>(funcDeclRef.getDecl());
+        SLANG_ASSERT(asFuncDecl);
+        // Every layout entry point is one of the program's entry points (both come from the same
+        // component-type walk), so its inferred capability set — which can exceed the function
+        // declaration's own requirements — is always in the map.
+        auto found = entryPointInferredCaps.tryGetValue(asFuncDecl);
+        SLANG_RELEASE_ASSERT(found);
+        CapabilitySet set{*found};
         for (auto atomSet : set.getAtomSets())
         {
             for (auto atomVal : atomSet)
@@ -16873,11 +16889,6 @@ RefPtr<IRModule> TargetProgram::createIRModuleForLayout(DiagnosticSink* sink)
                 }
             }
         }
-
-        addShader64BitIndexingDecoration(
-            builder,
-            irFunc,
-            entryPointLayout->inferredCapabilityRequirements);
 
         auto irEntryPointLayout = lowerEntryPointLayout(context, entryPointLayout);
 

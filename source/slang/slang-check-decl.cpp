@@ -21750,38 +21750,6 @@ void visitReferencedDecls(
         visitor.dispatchIfNotNull(decl);
 }
 
-CapabilitySet getReferencedCapabilityRequirements(SemanticsVisitor* visitor, Val* value)
-{
-    SLANG_RELEASE_ASSERT(value);
-
-    CapabilitySet requirements;
-    auto includeDecl = [&](Decl* decl)
-    {
-        visitor->ensureDecl(decl, DeclCheckState::CapabilityChecked);
-        requirements.join(decl->inferredCapabilityRequirements);
-    };
-
-    // An ordinary function-reference expression visits both the reference's operands and the
-    // selected declaration. For main<MetalOnly>, these contribute MetalOnly's requirements and
-    // main's own requirements, respectively. Keep the result separate from the shared declaration.
-    if (auto declRef = as<DeclRefBase>(value))
-        includeDecl(declRef->getDecl());
-
-    visitReferencedDecls(
-        *visitor,
-        value,
-        SourceLoc(),
-        nullptr,
-        [&](SyntaxNode* node, const CapabilitySetVal*, SourceLoc)
-        {
-            auto decl = as<Decl>(node);
-            SLANG_RELEASE_ASSERT(decl);
-            includeDecl(decl);
-        },
-        [](DiagnosticCategory) {});
-    return requirements;
-}
-
 CapabilitySet getStatementCapabilityUsage(SemanticsVisitor* visitor, Stmt* stmt)
 {
     if (stmt == nullptr)

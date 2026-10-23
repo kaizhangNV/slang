@@ -43,9 +43,5 @@ OrderedDictionary<Type*, List<Type*>> getCanonicalGenericConstraints2(
 // General utility function to collect all referenced declarations from a syntax node
 void collectReferencedDecls(SemanticsVisitor* context, NodeBase* node, HashSet<Decl*>& outDecls);
 
-/// Collect the capability requirements of a checked value and its referenced declarations.
-/// A specialized function reference includes its selected type arguments and witnesses.
-CapabilitySet getReferencedCapabilityRequirements(SemanticsVisitor* visitor, Val* value);
-
 void registerAssociatedMethods(SemanticsVisitor* context, DeclRef<Decl> declRef);
 } // namespace Slang
