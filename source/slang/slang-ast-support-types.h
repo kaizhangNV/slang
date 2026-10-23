@@ -6,6 +6,7 @@
 #include "core/slang-basic.h"
 #include "core/slang-semantic-version.h"
 #include "slang-ast-forward-declarations.h"
+#include "slang-known-builtin-decl-name.h"
 #include "slang-profile.h"
 #include "slang-type-system-shared.h"
 #include "slang.h"
@@ -221,27 +222,6 @@ FIDDLE() namespace Slang
     bool findVkImageFormatByName(const UnownedStringSlice& name, ImageFormat* outFormat);
 
     char const* getGLSLNameForImageFormat(ImageFormat format);
-
-    /// Enum for known built-in function names to replace string-based comparisons
-    enum class KnownBuiltinDeclName : uint32_t
-    {
-        GeometryStreamAppend,
-        GeometryStreamRestart,
-        GetAttributeAtVertex,
-        DispatchMesh,
-        saturated_cooperation,
-        saturated_cooperation_using,
-        IDifferentiable,
-        IDifferentiablePtr,
-        IForwardDifferentiable,
-        IBackwardDifferentiable,
-        IBwdCallable,
-        NullDifferential,
-        OperatorAddressOf,
-        WaveIsFirstLane,
-        WaveReadLaneFirst,
-        COUNT
-    };
 
     /// Convert string name to KnownBuiltinDeclName enum
     KnownBuiltinDeclName getKnownBuiltinDeclNameFromString(UnownedStringSlice name);

@@ -4,6 +4,7 @@
 #include "core/slang-process.h"
 #include "slang-com-ptr.h"
 #include "slang.h"
+#include "slang/slang-entry-point.h"
 #include "unit-test/slang-unit-test.h"
 
 #include <stdio.h>
@@ -70,6 +71,173 @@ SLANG_UNIT_TEST(findAndCheckEntryPoint)
     linkedProgram->getEntryPointCode(0, 0, code.writeRef(), diagnosticBlob.writeRef());
     SLANG_CHECK(code != nullptr);
     SLANG_CHECK(code->getBufferSize() != 0);
+}
+
+// Loading the structural ray-tracing module in one compilation must not reinterpret declarations
+// from an independent module in the same session. The trusted-declaration registry is
+// linkage-wide, but structural entry-point lookup is valid only in a module whose dependency graph
+// contains `slang.raytracing`.
+SLANG_UNIT_TEST(structuralRayTracingEntryPointLookupIsModuleLocal)
+{
+    ComPtr<slang::IGlobalSession> globalSession;
+    SLANG_CHECK_ABORT(
+        slang_createGlobalSession(SLANG_API_VERSION, globalSession.writeRef()) == SLANG_OK);
+
+    slang::CompilerOptionEntry experimentalFeature = {};
+    experimentalFeature.name = slang::CompilerOptionName::ExperimentalFeature;
+    experimentalFeature.value.kind = slang::CompilerOptionValueKind::Int;
+    experimentalFeature.value.intValue0 = 1;
+    slang::SessionDesc sessionDesc = {};
+    sessionDesc.compilerOptionEntryCount = 1;
+    sessionDesc.compilerOptionEntries = &experimentalFeature;
+
+    ComPtr<slang::ISession> session;
+    SLANG_CHECK_ABORT(globalSession->createSession(sessionDesc, session.writeRef()) == SLANG_OK);
+
+    ComPtr<slang::IBlob> diagnostics;
+    auto importingModule = session->loadModuleFromSourceString(
+        "StructuralImporter",
+        "StructuralImporter.slang",
+        "import slang.raytracing;",
+        diagnostics.writeRef());
+    SLANG_CHECK_ABORT(importingModule != nullptr);
+
+    diagnostics.setNull();
+    auto unrelatedModule = session->loadModuleFromSourceString(
+        "UnrelatedModule",
+        "UnrelatedModule.slang",
+        "struct Plain {}",
+        diagnostics.writeRef());
+    SLANG_CHECK_ABORT(unrelatedModule != nullptr);
+
+    diagnostics.setNull();
+    ComPtr<slang::IEntryPoint> entryPoint;
+    auto result = unrelatedModule->findAndCheckEntryPoint(
+        "Plain",
+        SLANG_STAGE_MISS,
+        entryPoint.writeRef(),
+        diagnostics.writeRef());
+    SLANG_CHECK(SLANG_FAILED(result));
+    SLANG_CHECK(entryPoint == nullptr);
+    SLANG_CHECK_ABORT(diagnostics != nullptr);
+
+    auto diagnosticText = UnownedStringSlice(
+        (const char*)diagnostics->getBufferPointer(),
+        diagnostics->getBufferSize());
+    SLANG_CHECK(
+        diagnosticText.indexOf(toSlice("no function found matching entry point name 'Plain'")) !=
+        -1);
+    SLANG_CHECK(diagnosticText.indexOf(toSlice("structural ray-tracing")) == -1);
+}
+
+// Selecting two stages implemented by the same struct must give them distinct target names.
+// Qualified names should remain readable, with dots replaced by underscores. Generic types use
+// ordinary mangling to retain their arguments. Check the overrides supplied to IR linking.
+SLANG_UNIT_TEST(structuralRayTracingEntryPointNamesIncludeStage)
+{
+    ComPtr<slang::IGlobalSession> globalSession;
+    SLANG_CHECK_ABORT(
+        slang_createGlobalSession(SLANG_API_VERSION, globalSession.writeRef()) == SLANG_OK);
+
+    slang::CompilerOptionEntry experimentalFeature = {};
+    experimentalFeature.name = slang::CompilerOptionName::ExperimentalFeature;
+    experimentalFeature.value.kind = slang::CompilerOptionValueKind::Int;
+    experimentalFeature.value.intValue0 = 1;
+    slang::SessionDesc sessionDesc = {};
+    sessionDesc.compilerOptionEntryCount = 1;
+    sessionDesc.compilerOptionEntries = &experimentalFeature;
+
+    ComPtr<slang::ISession> session;
+    SLANG_CHECK_ABORT(globalSession->createSession(sessionDesc, session.writeRef()) == SLANG_OK);
+
+    const char* sourcePath =
+        "tests/ray-tracing-2/frontend/entry-point/struct-entry-ambiguous.slang";
+    String source;
+    SLANG_CHECK_ABORT(SLANG_SUCCEEDED(File::readAllText(sourcePath, source)));
+    ComPtr<slang::IBlob> diagnostics;
+    auto module = session->loadModuleFromSourceString(
+        "MultiStageModule",
+        sourcePath,
+        source.getBuffer(),
+        diagnostics.writeRef());
+    SLANG_CHECK_ABORT(module != nullptr);
+
+    ComPtr<slang::IEntryPoint> closestHit;
+    SLANG_CHECK_ABORT(SLANG_SUCCEEDED(module->findAndCheckEntryPoint(
+        "MultiStage",
+        SLANG_STAGE_CLOSEST_HIT,
+        closestHit.writeRef(),
+        diagnostics.writeRef())));
+    ComPtr<slang::IEntryPoint> anyHit;
+    SLANG_CHECK_ABORT(SLANG_SUCCEEDED(module->findAndCheckEntryPoint(
+        "MultiStage",
+        SLANG_STAGE_ANY_HIT,
+        anyHit.writeRef(),
+        diagnostics.writeRef())));
+
+    // The public selection name stays the same; only the target names distinguish the stages.
+    SLANG_CHECK(static_cast<EntryPoint*>(closestHit.get())->getName()->text == "MultiStage");
+    SLANG_CHECK(static_cast<EntryPoint*>(anyHit.get())->getName()->text == "MultiStage");
+
+    slang::IComponentType* components[] = {module, closestHit.get(), anyHit.get()};
+    ComPtr<slang::IComponentType> program;
+    SLANG_CHECK_ABORT(SLANG_SUCCEEDED(session->createCompositeComponentType(
+        components,
+        SLANG_COUNT_OF(components),
+        program.writeRef(),
+        diagnostics.writeRef())));
+    auto internalProgram = static_cast<ComponentType*>(program.get());
+    SLANG_CHECK(internalProgram->getEntryPointCount() == 2);
+    SLANG_CHECK(internalProgram->getEntryPointNameOverride(0) == "MultiStage_closesthit");
+    SLANG_CHECK(internalProgram->getEntryPointNameOverride(1) == "MultiStage_anyhit");
+
+    const char* qualifiedSourcePath = "tests/ray-tracing-2/frontend/entry-point/struct-entry.slang";
+    SLANG_CHECK_ABORT(SLANG_SUCCEEDED(File::readAllText(qualifiedSourcePath, source)));
+    auto qualifiedModule = session->loadModuleFromSourceString(
+        "QualifiedStageModule",
+        qualifiedSourcePath,
+        source.getBuffer(),
+        diagnostics.writeRef());
+    SLANG_CHECK_ABORT(qualifiedModule != nullptr);
+    ComPtr<slang::IEntryPoint> qualifiedEntry;
+    SLANG_CHECK_ABORT(SLANG_SUCCEEDED(qualifiedModule->findAndCheckEntryPoint(
+        "Stages.main",
+        SLANG_STAGE_CLOSEST_HIT,
+        qualifiedEntry.writeRef(),
+        diagnostics.writeRef())));
+    auto internalEntry = static_cast<EntryPoint*>(qualifiedEntry.get());
+    SLANG_CHECK(internalEntry->getName()->text == "Stages.main");
+    ComponentType* qualifiedComponent = internalEntry;
+    SLANG_CHECK(qualifiedComponent->getEntryPointNameOverride(0) == "Stages_main_closesthit");
+
+    const char* genericSourcePath =
+        "tests/ray-tracing-2/frontend/entry-point/struct-entry-generic.slang";
+    SLANG_CHECK_ABORT(SLANG_SUCCEEDED(File::readAllText(genericSourcePath, source)));
+    auto genericModule = session->loadModuleFromSourceString(
+        "GenericStageModule",
+        genericSourcePath,
+        source.getBuffer(),
+        diagnostics.writeRef());
+    SLANG_CHECK_ABORT(genericModule != nullptr);
+
+    // The two specializations share M's declaration but retain P or R in its mangled name.
+    const char* genericEntryNames[] = {"M<P>", "M<R>"};
+    const char* genericTargetNames[] = {
+        "_ST18GenericStageModule1MG118GenericStageModule1P_miss",
+        "_ST18GenericStageModule1MG118GenericStageModule1R_miss"};
+    for (Index i = 0; i < SLANG_COUNT_OF(genericEntryNames); ++i)
+    {
+        ComPtr<slang::IEntryPoint> genericEntry;
+        SLANG_CHECK_ABORT(SLANG_SUCCEEDED(genericModule->findAndCheckEntryPoint(
+            genericEntryNames[i],
+            SLANG_STAGE_MISS,
+            genericEntry.writeRef(),
+            diagnostics.writeRef())));
+        auto internalGenericEntry = static_cast<EntryPoint*>(genericEntry.get());
+        SLANG_CHECK(internalGenericEntry->getName()->text == genericEntryNames[i]);
+        ComponentType* genericComponent = internalGenericEntry;
+        SLANG_CHECK(genericComponent->getEntryPointNameOverride(0) == genericTargetNames[i]);
+    }
 }
 
 // This test reproduces issue #6507, where it was noticed that compilation of

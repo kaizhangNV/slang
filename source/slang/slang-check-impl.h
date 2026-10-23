@@ -2478,7 +2478,8 @@ public:
     bool doesTypeSatisfyAssociatedTypeRequirement(
         Type* satisfyingType,
         DeclRef<AssocTypeDecl> requiredAssociatedTypeDeclRef,
-        RefPtr<WitnessTable> witnessTable);
+        RefPtr<WitnessTable> witnessTable,
+        SourceLoc satisfyingDeclLoc);
 
     // Does the given `memberDecl` work as an implementation
     // to satisfy the requirement `requiredMemberDeclRef`
@@ -2927,6 +2928,25 @@ public:
         InheritanceDecl* inheritanceDecl,
         DeclRef<InterfaceDecl> superInterfaceDeclRef,
         SubtypeWitness* subTypeConformsToSuperInterfaceWitness);
+
+    void checkStructuralRayTracingModule(ModuleDecl* moduleDecl);
+    void checkStructuralRayTracingStageRestrictions(
+        DeclRef<InterfaceDecl> superInterfaceDeclRef,
+        WitnessTable* witnessTable,
+        SourceLoc conformanceLoc);
+    void diagnoseDuplicateStructuralRayTracingSchemaEntries(
+        Type* entryListType,
+        AssocTypeDecl* associatedTypeRequirement,
+        Type* schemaType,
+        SourceLoc satisfyingDeclLoc);
+    void diagnoseInvalidStructuralRayTracingVariableType(VarDeclBase* varDecl);
+    void diagnoseInvalidStructuralRayTracingReturnType(CallableDecl* decl);
+    void diagnoseInvalidStructuralRayTracingPropertyType(PropertyDecl* propertyDecl);
+    bool diagnoseInvalidStructuralRayTracingExpression(Expr* expr);
+    bool diagnoseInvalidStructuralRayTracingGenericArguments(InvokeExpr* invoke);
+    bool diagnoseInvalidStructuralRayTracingGenericTypeApplication(
+        GenericAppExpr* genericApplication,
+        Expr* checkedResult);
 
     void _checkDifferentialConformance(
         ConformanceCheckingContext* context,
@@ -4129,6 +4149,16 @@ public:
     SubtypeWitness* isFuncForwardDifferentiable(DeclRef<CallableDecl> declRef);
     SubtypeWitness* isFuncBackwardDifferentiable(DeclRef<CallableDecl> declRef);
 };
+
+DeclRef<FuncDecl> findStructuralRayTracingEntryPointByName(
+    Linkage* linkage,
+    Module* module,
+    Name* name,
+    Profile& ioProfile,
+    DiagnosticSink* sink,
+    bool* outFoundStruct,
+    Type** outStageType);
+void diagnoseMixedRayTracingAPIUse(EntryPoint* entryPoint, DiagnosticSink* sink);
 
 
 inline void ensureDecl(SemanticsVisitor* visitor, Decl* decl, DeclCheckState state)
