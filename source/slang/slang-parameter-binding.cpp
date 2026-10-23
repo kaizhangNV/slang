@@ -3366,7 +3366,7 @@ static RefPtr<EntryPointLayout> collectEntryPointParameters(
     // We will take responsibility for creating and filling in
     // the `EntryPointLayout` object here.
     //
-    RefPtr<EntryPointLayout> entryPointLayout = new EntryPointLayout();
+    RefPtr<EntryPointLayout> entryPointLayout = new EntryPointLayout(entryPoint);
     entryPointLayout->profile = entryPoint->getProfile();
     entryPointLayout->name = entryPoint->getName();
     entryPointLayout->nameOverride = entryPointNameOverride;

@@ -16831,14 +16831,8 @@ RefPtr<IRModule> TargetProgram::createIRModuleForLayout(DiagnosticSink* sink)
     auto latestSpirvAtom = getLatestSpirvAtom();
     auto latestMetalAtom = getLatestMetalAtom();
 
-    // `collectEntryPointParameters` appends layouts in component entry-point order. Keep the
-    // matching EntryPoint available for its specialization-specific capability requirements.
-    SLANG_RELEASE_ASSERT(programLayout->entryPoints.getCount() == program->getEntryPointCount());
-    for (Index entryPointIndex = 0; entryPointIndex < programLayout->entryPoints.getCount();
-         ++entryPointIndex)
+    for (auto entryPointLayout : programLayout->entryPoints)
     {
-        auto entryPointLayout = programLayout->entryPoints[entryPointIndex];
-        auto entryPoint = program->getEntryPoint(entryPointIndex).get();
         auto funcDeclRef = entryPointLayout->entryPoint;
 
         // HACK: skip over entry points that came from deserialization,
@@ -16862,12 +16856,9 @@ RefPtr<IRModule> TargetProgram::createIRModuleForLayout(DiagnosticSink* sink)
                 getMangledName(astBuilder, funcDeclRef).getUnownedSlice());
         }
 
-        // Capability requirements are specialization-specific entry-point metadata. For example,
-        // two closed specializations of one generic structural stage share a `FuncDecl` but may
-        // infer different target requirements. The layout and component lists have the same order,
-        // so read the exact `EntryPoint` selected above instead of collapsing specializations by
-        // their common declaration.
-        CapabilitySet set{entryPoint->getInferredCapabilityRequirements()};
+        // Copy this entry point's validated SPIR-V/Metal version requirements into IR.
+        CapabilitySet set{
+            entryPointLayout->entryPointComponent->getInferredCapabilityRequirements()};
         for (auto atomSet : set.getAtomSets())
         {
             for (auto atomVal : atomSet)
