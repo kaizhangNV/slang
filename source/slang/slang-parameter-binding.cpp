@@ -3366,7 +3366,7 @@ static RefPtr<EntryPointLayout> collectEntryPointParameters(
     // We will take responsibility for creating and filling in
     // the `EntryPointLayout` object here.
     //
-    RefPtr<EntryPointLayout> entryPointLayout = new EntryPointLayout(entryPoint);
+    RefPtr<EntryPointLayout> entryPointLayout = new EntryPointLayout();
     entryPointLayout->profile = entryPoint->getProfile();
     entryPointLayout->name = entryPoint->getName();
     entryPointLayout->nameOverride = entryPointNameOverride;
@@ -3403,6 +3403,11 @@ static RefPtr<EntryPointLayout> collectEntryPointParameters(
     //
     if (specializationInfo)
         entryPointFuncDeclRef = specializationInfo->specializedFuncDeclRef;
+
+    entryPointLayout->inferredCapabilityRequirements =
+        specializationInfo ? specializationInfo->inferredCapabilityRequirements
+                           : entryPoint->getInferredCapabilityRequirements();
+    SLANG_RELEASE_ASSERT(entryPointLayout->inferredCapabilityRequirements);
 
     auto entryPointType = DeclRefType::create(astBuilder, entryPointFuncDeclRef);
 

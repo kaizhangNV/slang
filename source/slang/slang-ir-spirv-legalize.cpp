@@ -2515,13 +2515,13 @@ struct SPIRVLegalizationContext : public SourceEmitterBase
         }
     }
 
-    void determineSpirvVersion()
+    // Apply the same SPIR-V requirements whether they came from a target profile or from IR.
+    // CapabilitySet expands names such as `spirv_1_5` to their underlying `_spirv_1_5` atoms.
+    void applySpirvCapabilityRequirements(const CapabilitySet& capabilities)
     {
-        // Determine minimum spirv version from target request.
-        auto targetCaps = m_sharedContext->m_targetProgram->getTargetReq()->getTargetCaps();
-        for (auto targetAtomSet : targetCaps.getAtomSets())
+        for (auto atomSet : capabilities.getAtomSets())
         {
-            for (auto atom : targetAtomSet)
+            for (auto atom : atomSet)
             {
                 auto spirvAtom = ((CapabilityName)atom);
                 switch (spirvAtom)
@@ -2555,6 +2555,13 @@ struct SPIRVLegalizationContext : public SourceEmitterBase
                 }
             }
         }
+    }
+
+    void determineSpirvVersion()
+    {
+        // Determine minimum spirv version from target request.
+        auto targetCaps = m_sharedContext->m_targetProgram->getTargetReq()->getTargetCaps();
+        applySpirvCapabilityRequirements(targetCaps);
 
         // Scan through the entry points and find the max version required.
         auto processInst = [&](IRInst* globalInst)
@@ -2574,21 +2581,7 @@ struct SPIRVLegalizationContext : public SourceEmitterBase
                 case kIROp_RequireCapabilityAtomDecoration:
                     {
                         auto atomDecor = as<IRRequireCapabilityAtomDecoration>(decor);
-                        switch (atomDecor->getAtom())
-                        {
-                        case CapabilityName::spirv_1_3:
-                            m_sharedContext->requireSpirvVersion(0X10300);
-                            break;
-                        case CapabilityName::spirv_1_4:
-                            m_sharedContext->requireSpirvVersion(0X10400);
-                            break;
-                        case CapabilityName::spirv_1_5:
-                            m_sharedContext->requireSpirvVersion(0X10500);
-                            break;
-                        case CapabilityName::spirv_1_6:
-                            m_sharedContext->requireSpirvVersion(0X10600);
-                            break;
-                        }
+                        applySpirvCapabilityRequirements(CapabilitySet{atomDecor->getAtom()});
                         break;
                     }
                 }

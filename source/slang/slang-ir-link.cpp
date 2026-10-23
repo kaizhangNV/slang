@@ -519,9 +519,8 @@ IRGlobalVar* cloneGlobalVarImpl(
 ///
 /// This function scans through all the `originalValues` that were considered for `clonedInst`,
 /// and copies over any decorations that are allowed to come from a non-"best" definition.
-/// For a given decoration opcode, only one such decoration will ever be copied, and nothing
-/// will be copied if the instruction already has a matching decoration (that was cloned
-/// from the "best" definition).
+/// Capability requirements are deduplicated by their atom; the other supported decorations
+/// are deduplicated by opcode. Existing decorations from the "best" definition are retained.
 ///
 static void cloneExtraDecorationsFromInst(
     IRSpecContextBase* context,
@@ -534,6 +533,27 @@ static void cloneExtraDecorationsFromInst(
         switch (decoration->getOp())
         {
         default:
+            break;
+        case kIROp_RequireCapabilityAtomDecoration:
+            {
+                // Layout IR can add different version requirements to different specializations
+                // of one function. Preserve every required atom on the selected function.
+                auto atom = cast<IRRequireCapabilityAtomDecoration>(decoration)->getAtom();
+                bool alreadyPresent = false;
+                for (auto existing : clonedInst->getDecorations())
+                {
+                    if (auto requirement = as<IRRequireCapabilityAtomDecoration>(existing))
+                    {
+                        if (requirement->getAtom() == atom)
+                        {
+                            alreadyPresent = true;
+                            break;
+                        }
+                    }
+                }
+                if (!alreadyPresent)
+                    cloneInst(context, builder, decoration);
+            }
             break;
         case kIROp_HLSLExportDecoration:
         case kIROp_BindExistentialSlotsDecoration:

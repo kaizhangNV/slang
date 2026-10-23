@@ -446,6 +446,7 @@ static void validateSystemValueSemantic(
     SemanticsVisitor* visitor,
     DiagnosticSink* sink,
     Decl* decl,
+    Type* type,
     Stage stage,
     SemanticDirection direction,
     Scope* scope,
@@ -465,15 +466,6 @@ static void validateSystemValueSemantic(
         }
         return;
     }
-
-    // Get the type from the declaration
-    Type* type = nullptr;
-    if (auto varDecl = as<VarDeclBase>(decl))
-        type = varDecl->getType();
-    else if (auto funcDecl = as<FuncDecl>(decl))
-        type = funcDecl->returnType.type;
-    else
-        return;
 
     if (!type)
         return;
@@ -535,6 +527,7 @@ static void validateSystemValueSemantic(
                     visitor,
                     sink,
                     fieldDecl,
+                    getType(astBuilder, fieldDeclRef),
                     stage,
                     direction,
                     scope,
@@ -1752,7 +1745,109 @@ static void collectGenericStructTypeUses(
     }
 }
 
-/// Stores and validates the effective capabilities of an entry point against every target.
+// Infer requirements using the selected function reference, including its concrete arguments.
+// For example, main<MetalOnly> must retain MetalOnly's requirements even when main<T>'s body
+// never uses T. API specialization calls this with its own reference, without changing the
+// requirements stored on the shared function declaration or unspecialized EntryPoint.
+static CapabilitySet _inferEntryPointCapabilityRequirements(
+    EntryPoint* entryPoint,
+    DeclRef<FuncDecl> funcDeclRef,
+    List<GenericStructTypeUse>& signatureStructUses,
+    DiagnosticSink* sink)
+{
+    auto linkage = entryPoint->getLinkage();
+    auto astBuilder = linkage->getASTBuilder();
+    auto funcDecl = funcDeclRef.getDecl();
+    auto shared = SharedSemanticsContext::createForOptionalModule(
+        linkage,
+        getModule(funcDecl),
+        linkage->m_optionSet.getLanguageVersion(),
+        sink);
+    SemanticsVisitor visitor(shared);
+    auto inferredCaps = getReferencedCapabilityRequirements(&visitor, funcDeclRef.declRefBase);
+    inferredCaps.join(
+        getReferencedCapabilityRequirements(&visitor, getFuncType(astBuilder, funcDeclRef)));
+
+    // Structural inputs are compiler-supplied; their interface conformance already checks the
+    // signature. Native system-value semantics and uniform/varying rules do not apply to them.
+    if (entryPoint->isStructuralRayTracingEntryPoint())
+        return inferredCaps;
+
+    auto stage = entryPoint->getStage();
+    auto scope = linkage->getSessionImpl()->coreLanguageScope;
+    for (auto paramRef : getParameters(astBuilder, funcDeclRef))
+    {
+        auto param = paramRef.getDecl();
+        auto paramType = getType(astBuilder, paramRef);
+        if (scope)
+        {
+            if (!param->hasModifier<OutModifier>() || param->hasModifier<InOutModifier>())
+                validateSystemValueSemantic(
+                    &visitor,
+                    sink,
+                    param,
+                    paramType,
+                    stage,
+                    SemanticDirection::Input,
+                    scope,
+                    &inferredCaps);
+            if (param->hasModifier<OutModifier>())
+                validateSystemValueSemantic(
+                    &visitor,
+                    sink,
+                    param,
+                    paramType,
+                    stage,
+                    SemanticDirection::Output,
+                    scope,
+                    &inferredCaps);
+        }
+
+        // Preserve the existing check for generic structs whose own requirements are not
+        // collected by ordinary reference inference. Apply the selected arguments to the type.
+        SourceLoc useLoc = param->type.exp ? param->type.exp->loc : param->loc;
+        HashSet<Val*> visited;
+        collectGenericStructTypeUses(astBuilder, paramType, useLoc, visited, signatureStructUses);
+    }
+
+    auto returnType = getResultType(astBuilder, funcDeclRef);
+    if (scope)
+        validateSystemValueSemantic(
+            &visitor,
+            sink,
+            funcDecl,
+            returnType,
+            stage,
+            SemanticDirection::Output,
+            scope,
+            &inferredCaps);
+    SourceLoc returnLoc = funcDecl->returnType.exp ? funcDecl->returnType.exp->loc : funcDecl->loc;
+    HashSet<Val*> visited;
+    collectGenericStructTypeUses(astBuilder, returnType, returnLoc, visited, signatureStructUses);
+    for (auto& use : signatureStructUses)
+        inferredCaps.nonDestructiveJoin(use.structDecl->inferredCapabilityRequirements);
+    return inferredCaps;
+}
+
+// Return the stage requirements used for target validation. Structural input types include
+// supported synthesized stages, such as Metal's miss path, which native stage profiles omit.
+static CapabilitySet _getEntryPointStageCapabilities(
+    EntryPoint* entryPoint,
+    DeclRef<FuncDecl> funcDeclRef)
+{
+    if (!entryPoint->isStructuralRayTracingEntryPoint())
+        return entryPoint->getProfile().getCapabilityName();
+
+    auto astBuilder = entryPoint->getLinkage()->getASTBuilder();
+    auto parameters = getParameters(astBuilder, funcDeclRef);
+    SLANG_RELEASE_ASSERT(parameters.getCount() == 1);
+    auto inputType = unwrapModifiedType(getType(astBuilder, parameters[0]));
+    auto inputDecl = isDeclRefTypeOf<AggTypeDecl>(inputType).getDecl();
+    SLANG_RELEASE_ASSERT(inputDecl && inputDecl->inferredCapabilityRequirements);
+    return CapabilitySet{inputDecl->inferredCapabilityRequirements};
+}
+
+/// Validates the effective capabilities of an entry point against every target.
 ///
 /// Native and structural entry points have different ABI signatures, but target/profile
 /// compatibility is common to both. The caller supplies any requirements discovered while
@@ -1768,12 +1863,6 @@ static void _validateEntryPointTargetCapabilities(
     auto entryPointFuncDecl = entryPoint->getFuncDecl();
     auto linkage = entryPoint->getLinkage();
     auto diagnosticDecl = entryPointFuncDecl;
-
-    // The entry point's stage-specific requirements belong to the `EntryPoint`, not the
-    // stage-agnostic `FuncDecl`; store the finalized set there as the source of truth for
-    // downstream entry-point consumers.
-    entryPoint->setInferredCapabilityRequirements(
-        entryPointInferredCaps.freeze(linkage->getASTBuilder()));
 
     for (auto target : linkage->targets)
     {
@@ -1919,21 +2008,18 @@ void validateEntryPoint(EntryPoint* entryPoint, DiagnosticSink* sink)
         // compiler, so native uniform/varying parameter rules do not apply. The selected
         // implementation must still support the requested target/profile.
 
-        // Conformance guarantees one input; read its type with the selected generic arguments.
-        auto astBuilder = linkage->getASTBuilder();
-        auto parameters = getParameters(astBuilder, entryPoint->getFuncDeclRef());
-        SLANG_RELEASE_ASSERT(parameters.getCount() == 1);
-        auto inputType = unwrapModifiedType(getType(astBuilder, parameters[0]));
-
-        // MissInput<C>, for example, declares the source miss-stage capabilities, including
-        // Metal's synthesized miss path. The native miss profile alone does not include Metal.
-        auto inputDecl = isDeclRefTypeOf<AggTypeDecl>(inputType).getDecl();
-        SLANG_RELEASE_ASSERT(inputDecl && inputDecl->inferredCapabilityRequirements);
         List<GenericStructTypeUse> signatureStructUses;
+        auto entryPointInferredCaps = _inferEntryPointCapabilityRequirements(
+            entryPoint,
+            entryPoint->getFuncDeclRef(),
+            signatureStructUses,
+            sink);
+        entryPoint->setInferredCapabilityRequirements(
+            entryPointInferredCaps.freeze(linkage->getASTBuilder()));
         _validateEntryPointTargetCapabilities(
             entryPoint,
-            CapabilitySet{entryPoint->getInferredCapabilityRequirements()},
-            CapabilitySet{inputDecl->inferredCapabilityRequirements},
+            entryPointInferredCaps,
+            _getEntryPointStageCapabilities(entryPoint, entryPoint->getFuncDeclRef()),
             signatureStructUses,
             sink);
         return;
@@ -2182,89 +2268,12 @@ void validateEntryPoint(EntryPoint* entryPoint, DiagnosticSink* sink)
         }
     }
 
-    // The entry point's effective requirements, seeded from the decl's inferred set and augmented
-    // at this boundary with two contributions the per-decl capability walk does not record: the
-    // SV_ semantic-accessor requirements (walk just below) and the signature's generic-struct
-    // requirements (`signatureStructUses` loop further below). Both are gathered into this local
-    // set — matching the existing generic-struct handling — because the accessor match is resolved
-    // here using the entry-point stage, and the decl's own `inferredCapabilityRequirements` was
-    // already frozen in the earlier CapabilityChecked phase.
-    CapabilitySet entryPointInferredCaps{entryPointFuncDecl->inferredCapabilityRequirements};
-
-    // Validate system value semantics, and collect the capabilities their accessors require:
-    // general capability inference does not look through a semantic to the `[require]` on the
-    // accessor it resolves to, so a need like `fragmentshaderbarycentric` on `SV_Barycentrics`
-    // must be gathered here.
-    {
-        auto shared = SharedSemanticsContext::createForOptionalModule(
-            linkage,
-            module,
-            linkage->m_optionSet.getLanguageVersion(),
-            sink);
-        SemanticsVisitor visitor(shared);
-
-        // Use the session's coreLanguageScope which contains the SemanticDecl definitions
-        // The module's own scope may not include the core module (e.g., when loading from
-        // serialized module)
-        if (auto scope = linkage->getSessionImpl()->coreLanguageScope)
-        {
-            // Validate system value semantics for entry point parameters
-            for (const auto& param : entryPointFuncDecl->getParameters())
-            {
-                if (param->hasModifier<InOutModifier>())
-                {
-                    validateSystemValueSemantic(
-                        &visitor,
-                        sink,
-                        param,
-                        stage,
-                        SemanticDirection::Input,
-                        scope,
-                        &entryPointInferredCaps);
-                    validateSystemValueSemantic(
-                        &visitor,
-                        sink,
-                        param,
-                        stage,
-                        SemanticDirection::Output,
-                        scope,
-                        &entryPointInferredCaps);
-                }
-                else if (param->hasModifier<OutModifier>())
-                {
-                    validateSystemValueSemantic(
-                        &visitor,
-                        sink,
-                        param,
-                        stage,
-                        SemanticDirection::Output,
-                        scope,
-                        &entryPointInferredCaps);
-                }
-                else
-                {
-                    validateSystemValueSemantic(
-                        &visitor,
-                        sink,
-                        param,
-                        stage,
-                        SemanticDirection::Input,
-                        scope,
-                        &entryPointInferredCaps);
-                }
-            }
-
-            // Validate the return type semantic
-            validateSystemValueSemantic(
-                &visitor,
-                sink,
-                entryPointFuncDecl,
-                stage,
-                SemanticDirection::Output,
-                scope,
-                &entryPointInferredCaps);
-        }
-    }
+    List<GenericStructTypeUse> signatureStructUses;
+    auto entryPointInferredCaps = _inferEntryPointCapabilityRequirements(
+        entryPoint,
+        entryPoint->getFuncDeclRef(),
+        signatureStructUses,
+        sink);
 
     // HLSL allows a fragment shader to write at most one depth output. Slang previously
     // accepted multiple depth output semantics (e.g. both SV_Depth and SV_DepthGreaterEqual)
@@ -2684,56 +2693,8 @@ void validateEntryPoint(EntryPoint* entryPoint, DiagnosticSink* sink)
         }
     }
 
-    // Augment the entry point's inferred requirements with the capability
-    // requirements of the *generic* struct types in its signature (parameters and
-    // return type). The general inference walk records a type's requirements only
-    // when its decl-ref is a `DirectDeclRef`, so a non-generic struct such as
-    // `Foo a` is already covered there, but a generic one such as `Foo<int> a`
-    // (whose decl-ref is a `GenericAppDeclRef`) is not. We gather the missing
-    // generic-struct requirements here so a `[require(...)]` on `Foo` is enforced
-    // for both spellings. `signatureStructUses` keeps each contributing struct and
-    // its use location so we can point the diagnostic at the exact use site (the
-    // non-generic case is reported by `diagnoseMissingCapabilityProvenance`).
-    List<GenericStructTypeUse> signatureStructUses;
-    {
-        auto astBuilder = linkage->getASTBuilder();
-        // Use a fresh `visited` set per signature position. `Val` nodes are
-        // hash-consed, so the same specialization `Foo<int>` on two parameters is
-        // the identical `Val*`; a shared set would drop the second use site and the
-        // user would see only one "see using of 'Foo'" note. The per-position set
-        // still guards against cycles within a single type.
-        for (auto param : entryPointFuncDecl->getParameters())
-        {
-            // Prefer the written type-expression location (the `Foo<int>` use
-            // site); fall back to the parameter location if no type syntax was
-            // retained.
-            SourceLoc useLoc = (param->type.exp) ? param->type.exp->loc : param->loc;
-            HashSet<Val*> visited;
-            collectGenericStructTypeUses(
-                astBuilder,
-                param->getType(),
-                useLoc,
-                visited,
-                signatureStructUses);
-        }
-        // The return type has the same silent-compile bug as parameters: a
-        // `Foo<int> main()` whose `Foo` requires an unavailable capability must be
-        // diagnosed too.
-        SourceLoc returnLoc = (entryPointFuncDecl->returnType.exp)
-                                  ? entryPointFuncDecl->returnType.exp->loc
-                                  : entryPointFuncDecl->loc;
-        HashSet<Val*> visited;
-        collectGenericStructTypeUses(
-            astBuilder,
-            entryPointFuncDecl->returnType.type,
-            returnLoc,
-            visited,
-            signatureStructUses);
-    }
-    // Every collected use carries a non-empty requirement (filtered in the
-    // collector), so this join is unconditional.
-    for (auto& use : signatureStructUses)
-        entryPointInferredCaps.nonDestructiveJoin(use.structDecl->inferredCapabilityRequirements);
+    entryPoint->setInferredCapabilityRequirements(
+        entryPointInferredCaps.freeze(linkage->getASTBuilder()));
 
     _validateEntryPointTargetCapabilities(
         entryPoint,
@@ -3850,6 +3811,31 @@ RefPtr<ComponentType::SpecializationInfo> EntryPoint::_validateSpecializationArg
         expandedArg.witness = witness;
         info->existentialSpecializationArgs.add(expandedArg);
     }
+
+    if (sink->getErrorCount())
+        return nullptr;
+
+    // Consider specializing main<T> twice, with a Metal-only type and an unrestricted type.
+    // Both specializations reuse this EntryPoint, so keep each checked requirement set beside
+    // its specialized function reference instead of replacing the base entry's requirements.
+    List<GenericStructTypeUse> signatureStructUses;
+    auto inferredCaps = _inferEntryPointCapabilityRequirements(
+        this,
+        specializedFuncDeclRef,
+        signatureStructUses,
+        sink);
+    for (const auto& arg : info->existentialSpecializationArgs)
+    {
+        inferredCaps.join(getReferencedCapabilityRequirements(&visitor, arg.val));
+        inferredCaps.join(getReferencedCapabilityRequirements(&visitor, arg.witness));
+    }
+    info->inferredCapabilityRequirements = inferredCaps.freeze(getLinkage()->getASTBuilder());
+    _validateEntryPointTargetCapabilities(
+        this,
+        inferredCaps,
+        _getEntryPointStageCapabilities(this, specializedFuncDeclRef),
+        signatureStructUses,
+        sink);
 
     return info;
 }

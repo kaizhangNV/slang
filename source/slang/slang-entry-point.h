@@ -318,6 +318,10 @@ public:
     public:
         DeclRef<FuncDecl> specializedFuncDeclRef;
         List<ExpandedSpecializationArg> existentialSpecializationArgs;
+
+        // Requirements validated for this specialization, including its concrete arguments.
+        // Specializing the same EntryPoint again must not overwrite this set.
+        CapabilitySetVal* inferredCapabilityRequirements = nullptr;
     };
 
     SLANG_NO_THROW slang::FunctionReflection* SLANG_MCALL getFunctionReflection() SLANG_OVERRIDE

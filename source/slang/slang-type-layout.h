@@ -1157,15 +1157,9 @@ StructTypeLayout* getScopeStructLayout(ScopeLayout* programLayout);
 class EntryPointLayout : public ScopeLayout
 {
 public:
-    explicit EntryPointLayout(EntryPoint* component)
-        : entryPointComponent(component)
-    {
-        SLANG_RELEASE_ASSERT(component);
-    }
-
-    // The entry point this layout was created for. The program owns this component.
-    // Read its validated capabilities directly when emitting layout IR.
-    EntryPoint* const entryPointComponent;
+    // Requirements validated for this entry-point selection. Two specializations of the same
+    // EntryPoint can have different sets, so retain the selected set alongside the function ref.
+    CapabilitySetVal* inferredCapabilityRequirements = nullptr;
 
     // The corresponding function declaration
     DeclRef<FuncDecl> entryPoint;
