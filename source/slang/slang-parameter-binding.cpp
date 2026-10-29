@@ -2,6 +2,8 @@
 #include "slang-parameter-binding.h"
 
 #include "compiler-core/slang-artifact-desc-util.h"
+#include "slang-check-impl.h"
+#include "slang-check-portable-ray-tracing.h"
 #include "slang-compiler.h"
 #include "slang-ir-string-hash.h"
 #include "slang-ir-util.h"
@@ -1612,7 +1614,8 @@ void _generateParameterBindings(
 static void completeBindingsForParameterImpl(
     ParameterBindingContext* context,
     RefPtr<VarLayout> firstVarLayout,
-    ParameterBindingInfo bindingInfos[kLayoutResourceKindCount])
+    ParameterBindingInfo bindingInfos[kLayoutResourceKindCount],
+    UInt defaultSpace)
 {
     // TODO: check bindingInfos for finite/validity
 
@@ -1799,7 +1802,7 @@ static void completeBindingsForParameterImpl(
             // we will go ahead and allocate from the "default"
             // space.
 
-            UInt space = context->shared->defaultSpace;
+            UInt space = defaultSpace;
             RefPtr<UsedRangeSet> usedRangeSet = _getOrCreateUsedRangeSetForSpace(context, space);
 
             bindingInfo.count = count;
@@ -1863,7 +1866,11 @@ static void completeBindingsForParameter(
     auto varLayout = parameterInfo->varLayout;
     SLANG_RELEASE_ASSERT(varLayout);
 
-    completeBindingsForParameterImpl(context, varLayout, parameterInfo->bindingInfo);
+    completeBindingsForParameterImpl(
+        context,
+        varLayout,
+        parameterInfo->bindingInfo,
+        context->shared->defaultSpace);
 
     // At this point we should have explicit binding locations chosen for
     // all the relevant resource kinds, so we can apply these to the
@@ -1880,7 +1887,11 @@ static void completeBindingsForParameter(
     ParameterBindingInfo bindingInfos[kLayoutResourceKindCount];
     if (preserveExistingBindingInfo)
         copyExistingBindingInfoFromParameter(varLayout, bindingInfos);
-    completeBindingsForParameterImpl(context, varLayout, bindingInfos);
+    completeBindingsForParameterImpl(
+        context,
+        varLayout,
+        bindingInfos,
+        context->shared->defaultSpace);
     applyBindingInfoToParameter(
         varLayout,
         bindingInfos,
@@ -3353,6 +3364,113 @@ static void removePerEntryPointParameterKinds(VarLayout* varLayout)
     varLayout->removeResourceUsage(LayoutResourceKind::ExistentialTypeParam);
 }
 
+/// Computes the ordinary constant-buffer layout behind a selected stage's record property.
+///
+/// Consider a static Miss::invoke(MissInput<C> input) with C.Record = Material. Its checked
+/// parameter retains C, including any generic substitutions on the selected invoke method. The
+/// canonical associated-type lookup supplies Material without caching another conformance model.
+/// The fresh parameter-group layout uses the same packing rules as ConstantBuffer<Material>;
+/// ShaderRecord is an additional role, not a replacement for its ConstantBuffer binding.
+static RefPtr<VarLayout> _createPortableRTRecordLayout(
+    ParameterBindingContext* context,
+    DeclRef<FuncDecl> entryPoint,
+    Stage stage)
+{
+    auto astBuilder = context->getASTBuilder();
+    Type* inputType = nullptr;
+    for (auto parameter : getParameters(astBuilder, entryPoint))
+    {
+        SLANG_RELEASE_ASSERT(!inputType);
+        inputType = getType(astBuilder, parameter);
+    }
+    SLANG_RELEASE_ASSERT(inputType);
+    auto inputContext = PortableRT::getStageInputContextType(inputType);
+    SLANG_RELEASE_ASSERT(inputContext);
+
+    auto linkage = context->getTargetProgram()->getProgram()->getLinkage();
+    auto recordType = PortableRT::getAssociatedType(
+        linkage,
+        astBuilder,
+        inputContext,
+        KnownBuiltinDeclName::RayTracingContextRecord);
+    if (recordType->equals(astBuilder->getVoidType()))
+        return nullptr;
+
+    auto sharedSemantics = linkage->getSemanticsForReflection();
+    SemanticsVisitor visitor{SemanticsContext(sharedSemantics)};
+    auto bufferType = as<ConstantBufferType>(
+        visitor.getConstantBufferType(recordType, astBuilder->getDefaultLayoutType()));
+    SLANG_RELEASE_ASSERT(bufferType);
+    auto rules = context->getRulesFamily()->getConstantBufferRules(
+        context->getTargetRequest()->getOptionSet(),
+        bufferType);
+    auto bufferLayout =
+        createParameterGroupTypeLayout(context->layoutContext.with(rules), bufferType);
+
+    // An empty record consumes no bindings. A resource-only record can still consume textures
+    // or samplers without a cbuffer; preserve those just as an ordinary ConstantBuffer<T> does.
+    if (bufferLayout->resourceInfos.getCount() == 0)
+        return nullptr;
+
+    // This wrapper is new, unlike its shared application-data layout. Attaching the role here
+    // must not turn an ordinary ConstantBuffer<Material> elsewhere in the program into a record.
+    bufferLayout->addResourceUsage(LayoutResourceKind::ShaderRecord, LayoutSize(1));
+    auto groupLayout = as<ParameterGroupTypeLayout>(bufferLayout);
+    SLANG_RELEASE_ASSERT(groupLayout);
+    groupLayout->containerVarLayout->typeLayout->addResourceUsage(
+        LayoutResourceKind::ShaderRecord,
+        LayoutSize(1));
+    groupLayout->containerVarLayout->findOrAddResourceInfo(LayoutResourceKind::ShaderRecord);
+
+    RefPtr<VarLayout> recordLayout = new VarLayout();
+    recordLayout->typeLayout = bufferLayout;
+    recordLayout->stage = stage;
+    recordLayout->findOrAddResourceInfo(LayoutResourceKind::ShaderRecord);
+    return recordLayout;
+}
+
+/// Allocates local-root record bindings after ordinary user bindings have claimed their spaces.
+///
+/// Two selected miss stages may share the same Record type but still need separate registers.
+/// Reserving a compiler-owned space prevents collisions with globals and parameter blocks. Each
+/// entry exposes its exact allocated layout through the ordinary parameter reflection API before
+/// target adapters exist; the entry-owned handle also identifies this parameter during IR lowering.
+static void _allocatePortableRTRecordBindings(ParameterBindingContext* context)
+{
+    Int recordSpace = -1;
+    for (auto entryPointLayout : context->shared->programLayout->entryPoints)
+    {
+        auto recordLayout = entryPointLayout->portableRTRecordLayout;
+        if (!recordLayout)
+            continue;
+        if (recordSpace < 0)
+            recordSpace = Int(allocateUnusedSpaces(context, 1));
+
+        // Seed the role as already bound: ShaderRecord describes where the arguments come
+        // from, not another hardware register. The normal allocator handles every real resource
+        // category, including a record containing only textures and no ordinary cbuffer data.
+        ParameterBindingInfo bindingInfos[kLayoutResourceKindCount];
+        copyExistingBindingInfoFromParameter(recordLayout, bindingInfos);
+        completeBindingsForParameterImpl(context, recordLayout, bindingInfos, UInt(recordSpace));
+        applyBindingInfoToParameter(recordLayout, bindingInfos, true);
+
+        // These logical stages have no source shader parameters. The anonymous field describes
+        // the compiler-generated resource, not an extra argument passed to source invoke().
+        auto parameters = as<StructTypeLayout>(entryPointLayout->parametersLayout->typeLayout);
+        SLANG_RELEASE_ASSERT(parameters && parameters->fields.getCount() == 0);
+        parameters->fields.add(recordLayout);
+        for (auto resourceInfo : recordLayout->typeLayout->resourceInfos)
+        {
+            if (resourceInfo.kind == LayoutResourceKind::ShaderRecord)
+                continue;
+            auto& binding = bindingInfos[int(resourceInfo.kind)];
+            parameters->addResourceUsage(
+                resourceInfo.kind,
+                LayoutSize(binding.index) + binding.count);
+        }
+    }
+}
+
 /// Iterate over the parameters of an entry point to compute its requirements.
 ///
 static RefPtr<EntryPointLayout> collectEntryPointParameters(
@@ -3411,6 +3529,12 @@ static RefPtr<EntryPointLayout> collectEntryPointParameters(
 
     entryPointLayout->entryPoint = entryPointFuncDeclRef;
     entryPointLayout->program = context->getTargetProgram()->getProgram();
+
+    if (entryPoint->isStructuralRayTracingEntryPoint() && isD3DTarget(context->getTargetRequest()))
+    {
+        entryPointLayout->portableRTRecordLayout =
+            _createPortableRTRecordLayout(context, entryPointFuncDeclRef, entryPoint->getStage());
+    }
 
     // For the duration of our parameter collection work we will
     // establish this entry point as the current one in the context.
@@ -4769,6 +4893,8 @@ RefPtr<ProgramLayout> generateParameterBindings(TargetProgram* targetProgram, Di
     // parameters and entry points that need them.
     //
     _completeBindings(&context, program);
+
+    _allocatePortableRTRecordBindings(&context);
 
     // We may need to finally do any shifting if we have HLSLToVulkanLayoutOptions
     _maybeApplyHLSLToVulkanShifts(&context, globalConstantBufferBinding, targetProgram, sink);

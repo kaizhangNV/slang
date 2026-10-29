@@ -1707,6 +1707,16 @@ local insts = {
 		},
 	},
 	{ GetVulkanRayTracingPayloadLocation = { min_operands = 1 } },
+	-- These accessors bind an ordinary logical input value to the current invocation.
+	-- Payload/callable-data return a reference to shared mutable invocation storage;
+	-- the others return read-only record/attribute views or builtin scalar values.
+	-- Copies of the input token must not introduce copies of that underlying state.
+	{ portableRTGetPayload = { operands = { { "input" } } } },
+	{ portableRTGetCallableData = { operands = { { "input" } } } },
+	{ portableRTGetRecord = { operands = { { "input" } } } },
+	{ portableRTGetHitAttributes = { operands = { { "input" } } } },
+	{ portableRTGetTriangleBarycentricCoord = { operands = { { "input" } } } },
+	{ portableRTGetCurveParameter = { operands = { { "input" } } } },
 	{ GetLegalizedSPIRVGlobalParamAddr = { min_operands = 1 } },
 	{
 		GetPerVertexInputArray = {
@@ -2359,6 +2369,73 @@ local insts = {
 					-- Attaches a name to this instruction so that it can be identified
 					-- later in the compiler reliably
 					operands = { { "nameOperand", "IRIntLit" } },
+				},
+			},
+			{
+				-- Identifies the stage and its exact invoke requirement on an ordinary
+				-- IRInterfaceType. Separate declarations keep separate witness keys.
+				PortableRTStageContractDecoration = {
+					operands = { { "stageKind", "IRIntLit" }, { "invokeKey" } },
+				},
+			},
+			{
+				-- A selected native entry keeps its logical input until specialization
+				-- makes the dependent types concrete. The original method remains an
+				-- ordinary callable helper; sourceLayout owns its checked record binding.
+				PortableRTStageAdapterDecoration = {
+					operands = {
+						{ "inputType", "IRType" },
+						{ "invoke" },
+						{ "sourceLayout", "IREntryPointLayout" },
+					},
+				},
+			},
+			{
+				-- Retains checked associated types in the input struct's own generic
+				-- environment, so target ABI synthesis does not rediscover AST context.
+				-- payloadType denotes callable data for CallableInput. Non-hit inputs
+				-- carry void for primitiveType and attributesType.
+				PortableRTStageInputDecoration = {
+					operands = {
+						{ "stageKind", "IRIntLit" },
+						{ "contextType", "IRType" },
+						{ "contextWitness" },
+						{ "payloadType", "IRType" },
+						{ "recordType", "IRType" },
+						{ "primitiveType", "IRType" },
+						{ "attributesType", "IRType" },
+					},
+				},
+			},
+			{
+				-- The nominal list is empty at runtime. Its ordinary type/witness packs
+				-- retain the program choices used by dispatch and reflection consumers.
+				PortableRTShaderListDecoration = {
+					operands = { { "entryTypes" }, { "entryWitnesses" } },
+				},
+			},
+			{
+				-- Link reached conformances completely: target synthesis reads entries
+				-- that need not appear in a source lookup. This does not root witnesses.
+				PortableRTReflectedInterfaceDecoration = {},
+			},
+			{
+				-- Relates an associated-type bound key to its exact type key without
+				-- relying on adjacency or ordering of interface/witness entries.
+				PortableRTAssociatedTypeWitnessDecoration = {
+					operands = { { "typeKey" } },
+				},
+			},
+			{
+				-- Distinguishes declared inheritance from associated-type conformances
+				-- when a reflected requirement is owned by a base interface.
+				PortableRTBaseInterfaceDecoration = {},
+			},
+			{
+				-- A concrete IIntersectionStage marker conformance preserves the checked
+				-- executable proof; NoIntersection deliberately has no such proof.
+				PortableRTIntersectionStageDecoration = {
+					operands = { { "executableWitness" } },
 				},
 			},
 			{

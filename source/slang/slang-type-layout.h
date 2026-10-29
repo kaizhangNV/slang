@@ -1181,6 +1181,14 @@ public:
     // Layout for any results of the entry point
     RefPtr<VarLayout> resultLayout;
 
+    /// The compiler-provided ConstantBuffer<Record> binding for a selected portable RT stage.
+    ///
+    /// The same layout appears as an anonymous entry-point parameter for ordinary reflection.
+    /// It has no source variable: input.record is a property, not a user-declared parameter.
+    /// Keeping this layout also lets adapter synthesis consume the binding allocated before
+    /// code generation instead of inventing another register or another application-data layout.
+    RefPtr<VarLayout> portableRTRecordLayout;
+
     enum Flag : unsigned
     {
         usesAnySampleRateInput = 0x1,

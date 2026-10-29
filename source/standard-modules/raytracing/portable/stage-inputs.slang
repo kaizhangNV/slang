@@ -621,7 +621,7 @@ public struct ClosestHitInput<Context> : ICommonHitInput
     {}
 
     /// Gives mutable access to the payload supplied by the originating `RayTracer.trace` call.
-    /// @todo The compiler must synthesize this accessor from the stage's payload parameter.
+    /// The compiler maps this accessor to the invocation's native payload reference.
     ///
     /// @par Constraints
     /// The referenced type is exactly `Context.Payload`, inherited through `IPayloadContext`.
@@ -630,12 +630,13 @@ public struct ClosestHitInput<Context> : ICommonHitInput
     /// valid payload types.
     public property Context.Payload payload
     {
+        __intrinsic_op(portableRTGetPayload)
         [nonmutating]
         ref;
     }
 
     /// Reads the host-provided data in the selected shader-binding-table record.
-    /// @todo The compiler must synthesize this accessor from the target's record-data binding.
+    /// The compiler maps this accessor to the selected invocation's record-data binding.
     ///
     /// @par Constraints
     /// Read-only value of exactly `Context.Record`. The getter returns application data by value;
@@ -643,6 +644,7 @@ public struct ClosestHitInput<Context> : ICommonHitInput
     /// target layout; `void` selects a context with no application record data.
     public property Context.Record record
     {
+        __intrinsic_op(portableRTGetRecord)
         get;
     }
 
@@ -652,7 +654,7 @@ public struct ClosestHitInput<Context> : ICommonHitInput
     /// `BoundingBoxPrimitive<MyAttributes>` context exposes the `MyAttributes` value reported by
     /// its intersection shader. A curve context exposes `CurveData`. Generic callers need ordinary
     /// type constraints before accessing members of the associated attribute type.
-    /// @todo Adapter synthesis must return the built-in view or read the procedural hit attributes.
+    /// Adapter synthesis returns the built-in view or reads the procedural hit attributes.
     ///
     /// @par Constraints
     /// Read-only value of exactly `Context.Primitive.Attributes`. `TrianglePrimitive` selects
@@ -661,6 +663,7 @@ public struct ClosestHitInput<Context> : ICommonHitInput
     /// constraints.
     public property Context.Primitive.Attributes attributes
     {
+        __intrinsic_op(portableRTGetHitAttributes)
         get;
     }
 
@@ -848,7 +851,7 @@ public struct AnyHitInput<Context> : ICommonHitInput
     {}
 
     /// Gives mutable access to the payload supplied by the originating `RayTracer.trace` call.
-    /// @todo The compiler must synthesize this accessor from the stage's payload parameter.
+    /// The compiler maps this accessor to the invocation's native payload reference.
     ///
     /// @par Constraints
     /// The referenced type is exactly `Context.Payload`, inherited through `IPayloadContext`.
@@ -857,12 +860,13 @@ public struct AnyHitInput<Context> : ICommonHitInput
     /// valid payload types.
     public property Context.Payload payload
     {
+        __intrinsic_op(portableRTGetPayload)
         [nonmutating]
         ref;
     }
 
     /// Reads the host-provided data in the selected shader-binding-table record.
-    /// @todo The compiler must synthesize this accessor from the target's record-data binding.
+    /// The compiler maps this accessor to the selected invocation's record-data binding.
     ///
     /// @par Constraints
     /// Read-only value of exactly `Context.Record`. The getter returns application data by value;
@@ -870,6 +874,7 @@ public struct AnyHitInput<Context> : ICommonHitInput
     /// target layout; `void` selects a context with no application record data.
     public property Context.Record record
     {
+        __intrinsic_op(portableRTGetRecord)
         get;
     }
 
@@ -877,7 +882,7 @@ public struct AnyHitInput<Context> : ICommonHitInput
     ///
     /// Built-in primitives expose their `TriangleData` or `CurveData` view; procedural primitives
     /// expose the application-defined value supplied by the intersection shader's `reportHit` call.
-    /// @todo Adapter synthesis must return the built-in view or read the procedural hit attributes.
+    /// Adapter synthesis returns the built-in view or reads the procedural hit attributes.
     ///
     /// @par Constraints
     /// Read-only value of exactly `Context.Primitive.Attributes`. `TrianglePrimitive` selects
@@ -886,6 +891,7 @@ public struct AnyHitInput<Context> : ICommonHitInput
     /// constraints.
     public property Context.Primitive.Attributes attributes
     {
+        __intrinsic_op(portableRTGetHitAttributes)
         get;
     }
 
@@ -1133,12 +1139,13 @@ public struct IntersectionInput<Context> : ICommonHitInput
     [require(intersection, metal)]
     public property Context.Payload payload
     {
+        __intrinsic_op(portableRTGetPayload)
         [nonmutating]
         ref;
     }
 
     /// Reads the host-provided data in the selected shader-binding-table record.
-    /// @todo The compiler must synthesize this accessor from the target's record-data binding.
+    /// The compiler maps this accessor to the selected invocation's record-data binding.
     ///
     /// @par Constraints
     /// Read-only value of exactly `Context.Record`. The getter returns application data by value;
@@ -1146,6 +1153,7 @@ public struct IntersectionInput<Context> : ICommonHitInput
     /// target layout; `void` selects a context with no application record data.
     public property Context.Record record
     {
+        __intrinsic_op(portableRTGetRecord)
         get;
     }
 
@@ -1376,7 +1384,7 @@ public struct MissInput<Context>
     {}
 
     /// Gives mutable access to the payload supplied by the originating `RayTracer.trace` call.
-    /// @todo The compiler must synthesize this accessor from the stage's payload parameter.
+    /// The compiler maps this accessor to the invocation's native payload reference.
     ///
     /// @par Constraints
     /// The referenced type is exactly `Context.Payload`, inherited through `IPayloadContext`.
@@ -1385,12 +1393,13 @@ public struct MissInput<Context>
     /// valid payload types.
     public property Context.Payload payload
     {
+        __intrinsic_op(portableRTGetPayload)
         [nonmutating]
         ref;
     }
 
     /// Reads the host-provided data in the selected shader-binding-table record.
-    /// @todo The compiler must synthesize this accessor from the target's record-data binding.
+    /// The compiler maps this accessor to the selected invocation's record-data binding.
     ///
     /// @par Constraints
     /// Read-only value of exactly `Context.Record`. The getter returns application data by value;
@@ -1398,6 +1407,7 @@ public struct MissInput<Context>
     /// target layout; `void` selects a context with no application record data.
     public property Context.Record record
     {
+        __intrinsic_op(portableRTGetRecord)
         get;
     }
 
@@ -1514,7 +1524,7 @@ public struct CallableInput<Context>
     {}
 
     /// Gives mutable access to the data supplied by the originating `RayTracer.callShader` call.
-    /// @todo The compiler must synthesize this accessor from the callable-data parameter.
+    /// The compiler maps this accessor to the invocation's native callable-data reference.
     ///
     /// @par Constraints
     /// The referenced type is exactly `Context.CallableData`, required by `ICallableContext`.
@@ -1522,12 +1532,13 @@ public struct CallableInput<Context>
     /// originating callable data through an `in` parameter or immutable local copy.
     public property Context.CallableData data
     {
+        __intrinsic_op(portableRTGetCallableData)
         [nonmutating]
         ref;
     }
 
     /// Reads the host-provided data in the selected shader-binding-table record.
-    /// @todo The compiler must synthesize this accessor from the target's record-data binding.
+    /// The compiler maps this accessor to the selected invocation's record-data binding.
     ///
     /// @par Constraints
     /// Read-only value of exactly `Context.Record`. The getter returns application data by value;
@@ -1535,6 +1546,7 @@ public struct CallableInput<Context>
     /// target layout; `void` selects a context with no application record data.
     public property Context.Record record
     {
+        __intrinsic_op(portableRTGetRecord)
         get;
     }
 

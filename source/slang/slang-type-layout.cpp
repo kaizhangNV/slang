@@ -5543,6 +5543,24 @@ static TypeLayoutResult _createTypeLayout(TypeLayoutContext& context, Type* type
             type,
             rules);
     }
+    else if (as<TraceProgramDescriptorType>(type))
+    {
+        // Consider a host binding containing TraceProgramDescriptor<SceneSchema>. Reflection
+        // can be requested before linking or code generation, so the empty source declaration
+        // cannot determine its resource usage. Metal supplies one argument buffer containing
+        // the generated function tables and records. Native SBT targets supply those resources
+        // through their pipeline instead, and the descriptor consumes no shader binding.
+        if (isMetalTarget(context.targetReq))
+        {
+            return createSimpleTypeLayout(
+                rules->GetObjectLayout(
+                    ShaderParameterKind::ParameterBlock,
+                    context.objectLayoutOptions),
+                type,
+                rules);
+        }
+        return createSimpleTypeLayout(SimpleLayoutInfo(), type, rules);
+    }
     else if (auto basicType = as<BasicExpressionType>(type))
     {
         return createSimpleTypeLayout(

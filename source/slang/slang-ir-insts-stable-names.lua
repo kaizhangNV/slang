@@ -884,5 +884,19 @@ return {
 	["Decoration.uninitializedGlobalCheckFoundPossibleWrite"] = 908,
 	["Decoration.glslPatch"] = 909,
 	["Type.TraceProgramDescriptor"] = 911,
-	["metalTraceRay"] = 912
+	["metalTraceRay"] = 912,
+	["portableRTGetPayload"] = 913,
+	["portableRTGetCallableData"] = 914,
+	["portableRTGetRecord"] = 915,
+	["portableRTGetHitAttributes"] = 916,
+	["portableRTGetTriangleBarycentricCoord"] = 917,
+	["portableRTGetCurveParameter"] = 918,
+	["Decoration.PortableRTStageContractDecoration"] = 919,
+	["Decoration.PortableRTStageInputDecoration"] = 920,
+	["Decoration.PortableRTShaderListDecoration"] = 921,
+	["Decoration.PortableRTReflectedInterfaceDecoration"] = 922,
+	["Decoration.PortableRTAssociatedTypeWitnessDecoration"] = 923,
+	["Decoration.PortableRTBaseInterfaceDecoration"] = 924,
+	["Decoration.PortableRTIntersectionStageDecoration"] = 925,
+	["Decoration.PortableRTStageAdapterDecoration"] = 926
 }
