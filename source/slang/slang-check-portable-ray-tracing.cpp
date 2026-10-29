@@ -339,6 +339,57 @@ FunctionDeclBase* getStageInvokeRequirement(InterfaceDecl* interfaceDecl)
     return nullptr;
 }
 
+Type* getStageInputContextType(Type* inputType)
+{
+    auto declRef = isDeclRefTypeOf<AggTypeDecl>(unwrapModifiedType(inputType));
+    if (!declRef || getStageInputKind(declRef.getDecl()) == Stage::Unknown)
+        return nullptr;
+    auto generic = as<GenericDecl>(declRef.getDecl()->parentDecl);
+    SLANG_RELEASE_ASSERT(generic);
+    auto application = SubstitutionSet(declRef).findGenericAppDeclRef(generic);
+    SLANG_RELEASE_ASSERT(application);
+    Type* result = nullptr;
+    for (auto argument : application->getArgs())
+    {
+        if (auto type = as<Type>(argument->resolve()))
+        {
+            SLANG_RELEASE_ASSERT(!result);
+            result = type;
+        }
+    }
+    SLANG_RELEASE_ASSERT(result);
+    return result;
+}
+
+// Consider ClosestHitInput<C>: Payload is declared by IPayloadContext, not IHitContext.
+// The inheritance facet already contains the exact witness to that declaring interface.
+// Preserve its canonical lookup, rather than rebuilding a substitution or assuming an order
+// for interface requirements. Binding reflection and AST-to-IR lowering use the same result.
+Type* getAssociatedType(
+    Linkage* linkage,
+    ASTBuilder* astBuilder,
+    Type* owner,
+    KnownBuiltinDeclName role)
+{
+    auto sharedSemantics = linkage->getSemanticsForReflection();
+    SemanticsVisitor visitor{SemanticsContext(sharedSemantics)};
+    for (auto facet : visitor.getShared()->getInheritanceInfo(owner).facets)
+    {
+        auto interfaceDecl = facet->origin.declRef.as<InterfaceDecl>();
+        if (!interfaceDecl)
+            continue;
+        for (auto requirement :
+             interfaceDecl.getDecl()->getDirectMemberDeclsOfType<AssocTypeDecl>())
+        {
+            if (_getBuiltin(requirement) == role)
+                return DeclRefType::create(
+                    astBuilder,
+                    astBuilder->getLookupDeclRef(facet->subtypeWitness, requirement));
+        }
+    }
+    SLANG_UNEXPECTED("portable ray-tracing contract is missing its associated-type role");
+}
+
 // Returns the checked entry types used by the duplicate-entry diagnostic. The list's conformance
 // witnesses are handled by ordinary conformance checking and are not needed to compare types.
 static ConcreteTypePack* _getEntryTypes(ASTBuilder* astBuilder, Type* entryListType)

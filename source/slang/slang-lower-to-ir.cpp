@@ -7,6 +7,7 @@
 #include "core/slang-performance-profiler.h"
 #include "core/slang-random-generator.h"
 #include "slang-check-impl.h"
+#include "slang-check-portable-ray-tracing.h"
 #include "slang-check.h"
 #include "slang-ir-autodiff.h"
 #include "slang-ir-bit-field-accessors.h"
@@ -1854,7 +1855,170 @@ IRInst* getInterfaceRequirementKey(IRGenContext* context, Decl* requirementDecl)
     addLinkageDecoration(context, requirementKey, requirementDecl, sb.getUnownedSlice());
     addNameHint(context, requirementKey, requirementDecl);
 
+    // addLinkageDecoration preserves KnownBuiltin on this declaration's ordinary key. Separate
+    // stage contracts may use the same semantic role, but retain their distinct mangled keys.
+    // Connect an associated-type bound to that exact type key, not to the role alone.
+    if (auto constraint = as<GenericTypeConstraintDecl>(requirementDecl);
+        constraint && !constraint->isEqualityConstraint)
+    {
+        // Associated types and their conformance requirements have distinct ordinary keys.
+        // Link the two by semantic role, so a schema reader can select Context : IHitContext
+        // without assuming that its witness follows the Context type in the entry array.
+        auto associatedType = isDeclRefTypeOf<AssocTypeDecl>(constraint->sub.type);
+        if (associatedType && associatedType.getDecl()->findModifier<KnownBuiltinAttribute>())
+        {
+            IRInst* operands[] = {getInterfaceRequirementKey(context, associatedType.getDecl())};
+            builder->addDecoration(
+                requirementKey,
+                kIROp_PortableRTAssociatedTypeWitnessDecoration,
+                operands,
+                SLANG_COUNT_OF(operands));
+        }
+    }
+
     return requirementKey;
+}
+
+// Reads the checked role without matching a public source name or registering a module globally.
+static KnownBuiltinDeclName _getPortableRTBuiltinRole(Decl* decl)
+{
+    auto attribute = decl->findModifier<KnownBuiltinAttribute>();
+    auto value = attribute ? as<ConstantIntVal>(attribute->name) : nullptr;
+    return value ? KnownBuiltinDeclName(value->getValue()) : KnownBuiltinDeclName::COUNT;
+}
+
+// Shares checked associated-type lookup with binding reflection. Its result is still ordinary
+// semantic data, so generic and extern contexts follow the normal lowering/specialization path.
+static Type* _getPortableRTAssociatedType(
+    IRGenContext* context,
+    Type* owner,
+    KnownBuiltinDeclName role)
+{
+    return PortableRT::getAssociatedType(context->getLinkage(), context->astBuilder, owner, role);
+}
+
+// Keeps the input's checked context information in its own generic environment. The source
+// struct remains an ordinary, empty value type; this decoration supplies the facts needed to
+// synthesize native parameters after specialization. Copying an input therefore does not create
+// payload storage, and an extern context need not have a concrete ABI during module compilation.
+static void _addPortableRTStageInputMetadata(
+    IRGenContext* context,
+    AggTypeDecl* decl,
+    IRType* irType)
+{
+    auto stage = PortableRT::getStageInputKind(decl);
+    if (stage == Stage::Unknown)
+        return;
+
+    auto generic = as<GenericDecl>(decl->parentDecl);
+    SLANG_RELEASE_ASSERT(generic);
+    GenericTypeParamDecl* contextParameter = nullptr;
+    GenericTypeConstraintDecl* contextConstraint = nullptr;
+    for (auto member : generic->getDirectMemberDecls())
+    {
+        if (auto parameter = as<GenericTypeParamDecl>(member))
+        {
+            SLANG_RELEASE_ASSERT(!contextParameter);
+            contextParameter = parameter;
+        }
+        else if (auto constraint = as<GenericTypeConstraintDecl>(member))
+        {
+            if (!constraint->isEqualityConstraint)
+            {
+                SLANG_RELEASE_ASSERT(!contextConstraint);
+                contextConstraint = constraint;
+            }
+        }
+    }
+    SLANG_RELEASE_ASSERT(contextParameter && contextConstraint);
+    auto contextType = DeclRefType::create(
+        context->astBuilder,
+        context->astBuilder->getDirectDeclRef(contextParameter));
+    auto payloadRole = stage == Stage::Callable
+                           ? KnownBuiltinDeclName::RayTracingContextCallableData
+                           : KnownBuiltinDeclName::RayTracingContextPayload;
+    auto payloadType = _getPortableRTAssociatedType(context, contextType, payloadRole);
+    auto recordType = _getPortableRTAssociatedType(
+        context,
+        contextType,
+        KnownBuiltinDeclName::RayTracingContextRecord);
+    auto builder = context->irBuilder;
+    IRType* primitiveType = builder->getVoidType();
+    IRType* attributesType = builder->getVoidType();
+    if (stage == Stage::ClosestHit || stage == Stage::AnyHit || stage == Stage::Intersection)
+    {
+        auto primitive = _getPortableRTAssociatedType(
+            context,
+            contextType,
+            KnownBuiltinDeclName::RayTracingContextPrimitive);
+        primitiveType = lowerType(context, primitive);
+        attributesType = lowerType(
+            context,
+            _getPortableRTAssociatedType(
+                context,
+                primitive,
+                KnownBuiltinDeclName::RayTracingPrimitiveAttributes));
+    }
+    IRInst* operands[] = {
+        builder->getIntValue(builder->getIntType(), IRIntegerValue(stage)),
+        lowerType(context, contextType),
+        getSimpleVal(context, ensureDecl(context, contextConstraint)),
+        lowerType(context, payloadType),
+        lowerType(context, recordType),
+        primitiveType,
+        attributesType,
+    };
+    builder->addDecoration(
+        irType,
+        kIROp_PortableRTStageInputDecoration,
+        operands,
+        SLANG_COUNT_OF(operands));
+}
+
+// Retains the canonical generic packs before an empty list struct is specialized. The host's
+// physical record count is unrelated to this list: its entries define the available programs.
+// Their witness pack is also an executable dependency, preserving the selected invoke methods.
+static void _addPortableRTShaderListMetadata(
+    IRGenContext* context,
+    AggTypeDecl* decl,
+    IRType* irType)
+{
+    auto role = _getPortableRTBuiltinRole(decl);
+    if (role != KnownBuiltinDeclName::RayTracingHitGroupList &&
+        role != KnownBuiltinDeclName::RayTracingMissShaderList &&
+        role != KnownBuiltinDeclName::RayTracingCallableShaderList)
+        return;
+
+    auto generic = as<GenericDecl>(decl->parentDecl);
+    SLANG_RELEASE_ASSERT(generic);
+    GenericTypePackParamDecl* typePack = nullptr;
+    GenericTypeConstraintDecl* witnessPack = nullptr;
+    for (auto member : generic->getDirectMemberDecls())
+    {
+        if (auto parameter = as<GenericTypePackParamDecl>(member))
+        {
+            SLANG_RELEASE_ASSERT(!typePack);
+            typePack = parameter;
+        }
+        else if (auto constraint = as<GenericTypeConstraintDecl>(member))
+        {
+            if (!constraint->isEqualityConstraint)
+            {
+                SLANG_RELEASE_ASSERT(!witnessPack);
+                witnessPack = constraint;
+            }
+        }
+    }
+    SLANG_RELEASE_ASSERT(typePack && witnessPack);
+    IRInst* operands[] = {
+        getSimpleVal(context, ensureDecl(context, typePack)),
+        getSimpleVal(context, ensureDecl(context, witnessPack)),
+    };
+    context->irBuilder->addDecoration(
+        irType,
+        kIROp_PortableRTShaderListDecoration,
+        operands,
+        SLANG_COUNT_OF(operands));
 }
 
 void getGenericTypeConformances(
@@ -10921,6 +11085,37 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
 
             subBuilder->createWitnessTableEntry(irWitnessTable, irRequirementKey, irSatisfyingVal);
         }
+
+        // IHitGroup.Intersection accepts the hardware placeholder through IIntersectionStage.
+        // A real procedural stage additionally conforms to IIntersectionShader. That derived
+        // conformance cannot be recovered by walking the marker witness upward after linking.
+        // Retain the exact checked facet here, where its concrete implementation is known.
+        auto baseInterface = isDeclRefTypeOf<InterfaceDecl>(astWitnessTable->baseType);
+        if (baseInterface && _getPortableRTBuiltinRole(baseInterface.getDecl()) ==
+                                 KnownBuiltinDeclName::RayTracingIntersectionStage)
+        {
+            auto stageDecl = isDeclRefTypeOf<AggTypeDecl>(astWitnessTable->witnessedType);
+            if (stageDecl && _getPortableRTBuiltinRole(stageDecl.getDecl()) ==
+                                 KnownBuiltinDeclName::RayTracingNoIntersection)
+                return;
+            auto sharedSemantics = subContext->getLinkage()->getSemanticsForReflection();
+            SemanticsVisitor visitor{SemanticsContext(sharedSemantics)};
+            for (auto facet :
+                 visitor.getShared()->getInheritanceInfo(astWitnessTable->witnessedType).facets)
+            {
+                auto interfaceDecl = facet->origin.declRef.as<InterfaceDecl>();
+                if (!interfaceDecl ||
+                    PortableRT::getStageKind(interfaceDecl.getDecl()) != Stage::Intersection)
+                    continue;
+                IRInst* operands[] = {lowerSimpleVal(subContext, facet->subtypeWitness)};
+                subBuilder->addDecoration(
+                    irWitnessTable,
+                    kIROp_PortableRTIntersectionStageDecoration,
+                    operands,
+                    SLANG_COUNT_OF(operands));
+                break;
+            }
+        }
     }
 
     /// Lower a list of Val operands to their corresponding IR instructions.
@@ -12427,6 +12622,44 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
 
         addTargetIntrinsicDecorations(subContext, irInterface, decl);
 
+        // Backends reflect these ordinary interfaces instead of requiring executable source
+        // lookups for every member. Keep their reached witness tables complete at link time.
+        // This marker does not root an interface or any implementing type on its own.
+        bool isReflected = false;
+        for (auto requirement : decl->getDirectMemberDeclsOfType<AssocTypeDecl>())
+        {
+            auto role = _getPortableRTBuiltinRole(requirement);
+            if (role >= KnownBuiltinDeclName::RayTracingProgramHitGroups &&
+                role <= KnownBuiltinDeclName::RayTracingStageContext)
+                isReflected = true;
+        }
+        auto stage = PortableRT::getStageKind(decl);
+        if (stage != Stage::Unknown)
+        {
+            auto invokeRequirement = PortableRT::getStageInvokeRequirement(decl);
+            SLANG_RELEASE_ASSERT(invokeRequirement);
+            IRInst* operands[] = {
+                subBuilder->getIntValue(subBuilder->getIntType(), IRIntegerValue(stage)),
+                Slang::getInterfaceRequirementKey(subContext, invokeRequirement),
+            };
+            subBuilder->addDecoration(
+                irInterface,
+                kIROp_PortableRTStageContractDecoration,
+                operands,
+                SLANG_COUNT_OF(operands));
+            isReflected = true;
+        }
+        if (isReflected)
+        {
+            subBuilder->addDecoration(irInterface, kIROp_PortableRTReflectedInterfaceDecoration);
+            for (auto inheritance : decl->getDirectMemberDeclsOfType<InheritanceDecl>())
+            {
+                auto key = Slang::getInterfaceRequirementKey(subContext, inheritance);
+                if (!key->findDecoration<IRPortableRTBaseInterfaceDecoration>())
+                    subBuilder->addDecoration(key, kIROp_PortableRTBaseInterfaceDecoration);
+            }
+        }
+
         return LoweredValInfo::simple(finalVal);
     }
 
@@ -12733,6 +12966,15 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
         }
 
         addTargetRequirementDecorations(irAggType, decl);
+
+        // Build metadata beside the nominal type, inside the same generic environment. Its
+        // operands are ordinary checked lookups and generic arguments, not reconstructed syntax.
+        IRBuilder metadataBuilder = *subBuilder;
+        metadataBuilder.setInsertBefore(irAggType);
+        IRGenContext metadataContext = *subContext;
+        metadataContext.irBuilder = &metadataBuilder;
+        _addPortableRTStageInputMetadata(&metadataContext, decl, irAggType);
+        _addPortableRTShaderListMetadata(&metadataContext, decl, irAggType);
 
         return LoweredValInfo::simple(finalFinishedVal);
     }
@@ -16388,7 +16630,26 @@ IREntryPointLayout* lowerEntryPointLayout(
     IRLayoutGenContext* context,
     EntryPointLayout* entryPointLayout)
 {
-    auto irParamsLayout = lowerVarLayout(context, entryPointLayout->parametersLayout);
+    IRVarLayout* irParamsLayout = nullptr;
+    if (entryPointLayout->portableRTRecordLayout)
+    {
+        // A portable stage's reflected record is an anonymous compiler-provided parameter.
+        // It is not a source field or a tuple element, so generate its entry-local key here,
+        // where that identity is owned. Adapter synthesis consumes this exact resource layout
+        // before replacing the logical signature with native payload/attribute parameters.
+        IRStructTypeLayout::Builder parameters(context->irBuilder);
+        parameters.addField(
+            context->irBuilder->createStructKey(),
+            lowerVarLayout(context, entryPointLayout->portableRTRecordLayout));
+        auto typeLayout = _lowerTypeLayoutCommon(
+            &parameters,
+            entryPointLayout->parametersLayout->getTypeLayout());
+        irParamsLayout = lowerVarLayout(context, entryPointLayout->parametersLayout, typeLayout);
+    }
+    else
+    {
+        irParamsLayout = lowerVarLayout(context, entryPointLayout->parametersLayout);
+    }
     auto irResultLayout = lowerEntryPointResultLayout(context, entryPointLayout->resultLayout);
 
     return context->irBuilder->getEntryPointLayout(irParamsLayout, irResultLayout);
