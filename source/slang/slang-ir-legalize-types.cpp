@@ -122,6 +122,7 @@ static void registerLegalizedValue(
 struct IRGlobalParamInfo
 {
     IRFunc* originatingEntryPoint = nullptr;
+    IRInst* metalRTResourceLayoutIndex = nullptr;
 };
 
 static LegalVal declareVars(
@@ -2859,6 +2860,8 @@ static void cloneDecorationToVar(IRInst* srcInst, IRInst* varInst)
         case kIROp_UserTypeNameDecoration:
         case kIROp_SemanticDecoration:
         case kIROp_MemoryQualifierSetDecoration:
+        case kIROp_MetalRTCandidateDescriptorDecoration:
+        case kIROp_MetalRTGlobalResourceContextDecoration:
             cloneDecoration(decoration, varInst);
             break;
 
@@ -2919,6 +2922,17 @@ static LegalVal declareSimpleVar(
                 builder->addEntryPointParamDecoration(
                     globalParam,
                     globalParamInfo->originatingEntryPoint);
+            }
+
+            // Splitting an aggregate changes its physical bindings, not its membership in
+            // the linked component's resource contract used by separate Metal RT shaders.
+            if (globalParamInfo->metalRTResourceLayoutIndex)
+            {
+                builder->addDecoration(
+                    globalParam,
+                    kIROp_MetalRTGlobalResourceDecoration,
+                    globalParamInfo->metalRTResourceLayoutIndex);
+                builder->addKeepAliveDecoration(globalParam);
             }
 
             irVar = globalParam;
@@ -3678,6 +3692,8 @@ static LegalVal legalizeGlobalParam(
             LegalVarChainLink varChain(LegalVarChain(), varLayout);
 
             IRGlobalParamInfo globalParamInfo;
+            if (auto resource = irGlobalParam->findDecoration<IRMetalRTGlobalResourceDecoration>())
+                globalParamInfo.metalRTResourceLayoutIndex = resource->getOperand(0);
             if (auto entryPointParamDecoration =
                     irGlobalParam->findDecoration<IREntryPointParamDecoration>())
             {

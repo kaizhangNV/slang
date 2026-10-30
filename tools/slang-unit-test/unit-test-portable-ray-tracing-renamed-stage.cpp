@@ -7,8 +7,8 @@
 using namespace Slang;
 
 // Renaming a selected export must not rename the source implementation that a schema references.
-// On Metal the selected stage is an ordinary helper, while the schema owns a separate visible
-// adapter. Both still call the same implementation with their respective invocation state.
+// On Metal the selected stage owns the visible adapter and its export name. Ray generation
+// uses the schema's fixed table contract without emitting a second stage implementation.
 SLANG_UNIT_TEST(portableRayTracingRenamedStageAndSchema)
 {
     const char* path = "tests/ray-tracing-2/target/portable/metal-standalone-shared-stage.slang";
@@ -79,8 +79,8 @@ SLANG_UNIT_TEST(portableRayTracingRenamedStageAndSchema)
         auto stage = schema->getHitGroup(0)->getClosestHit();
         SLANG_CHECK_ABORT(stage);
         // Source schema reflection reports the default native name, not a selection-specific
-        // override. Metal has no source-stage export name: its generated table adapters belong
-        // to compiled artifact metadata. The selected component owns its separate export name.
+        // override. Metal schema reflection has no selected export name: the selected component
+        // and its compiled artifact metadata own that name.
         const bool isMetal = targets[targetIndex].format == SLANG_METAL;
         if (isMetal)
         {
@@ -104,9 +104,10 @@ SLANG_UNIT_TEST(portableRayTracingRenamedStageAndSchema)
         SLANG_CHECK(emitted.indexOf(UnownedStringSlice("renamedPortableHit")) >= 0);
         if (targets[targetIndex].format == SLANG_METAL)
         {
-            SLANG_CHECK(emitted.indexOf(UnownedStringSlice("void renamedPortableHit(")) >= 0);
             SLANG_CHECK(
-                emitted.indexOf(UnownedStringSlice("__slang_portable_rt_0_closesthit_0")) >= 0);
+                emitted.indexOf(UnownedStringSlice("[[visible]] void renamedPortableHit(")) >= 0);
+            SLANG_CHECK(
+                emitted.indexOf(UnownedStringSlice("__slang_portable_rt_0_closesthit_0")) < 0);
             SLANG_CHECK(emitted.indexOf(UnownedStringSlice("addInstanceID")) >= 0);
         }
         else if (targets[targetIndex].format == SLANG_SPIRV_ASM)

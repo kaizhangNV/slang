@@ -1739,6 +1739,10 @@ local insts = {
 				{ "hitRecordStride", "IRIntLit" },
 				{ "missRecordStride", "IRIntLit" },
 				{ "callableRecordStride", "IRIntLit" },
+				{ "hitGroupCount", "IRIntLit" },
+				{ "missShaderCount", "IRIntLit" },
+				{ "callableShaderCount", "IRIntLit" },
+				{ "candidateFunctionTableSize", "IRIntLit" },
 			},
 		},
 	},
@@ -1781,6 +1785,12 @@ local insts = {
 				-- both interpret a multi-level instance path through the records-buffer trie
 				-- identically. It is meaningful only when the tag mask contains instancing.
 				{ "instanceHitGroupContributionLookup" },
+                { "payload" },
+                { "attributesLookup" },
+                { "customHitKindAddress" },
+                { "dispatchRaysIndex" },
+                { "dispatchRaysDimensions" },
+                { "closestHitPresenceLookup" },
 			},
 		},
 	},
@@ -1806,6 +1816,8 @@ local insts = {
 		},
 	},
 	-- These accessors bind an ordinary logical input value to the current invocation.
+	{ metalRTCandidateDispatch = { min_operands = 4 } },
+	{ metalRTGetGlobalResourceContext = {} },
 	-- Payload/callable-data return a reference to shared mutable invocation storage;
 	-- the others return read-only record/attribute views or builtin scalar values.
 	-- Copies of the input token must not introduce copies of that underlying state.
@@ -2319,6 +2331,18 @@ local insts = {
 				-- Identifies the context pointer introduced by explicit-global-context lowering.
 				-- Physical indirect calls consume this role, never a debug name.
 				ExplicitGlobalContextDecoration = {},
+			},
+			{
+				-- Marks a component parameter that belongs to the shared resource layout.
+				MetalRTGlobalResourceDecoration = { operands = { { "layoutIndex", "IRIntLit" } } },
+			},
+			{
+				-- The fixed table ABI passes resources, never a caller's private globals.
+				MetalRTGlobalResourceContextDecoration = {},
+			},
+			{
+				-- The owning IFT instance supplies its descriptor through a reflected binding.
+				MetalRTCandidateDescriptorDecoration = {},
 			},
 			{
 				-- An explicitly selected logical Metal stage remains an ordinary exported

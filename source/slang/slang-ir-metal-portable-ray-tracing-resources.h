@@ -18,7 +18,7 @@ struct MetalRTDescriptorResources
     IRStructField* getField(MetalRTDescriptorResource role) const { return fields[UInt(role)]; }
 };
 
-/// Creates the physical IFT, three VFTs, and records pointer without changing the source type.
+/// Creates the physical IFT, five VFTs, and records pointer without changing the source type.
 /// Signatures are the already-computed table-wide native signatures, including unused tables.
 MetalRTDescriptorResources createMetalRTDescriptorResources(
     IRModule* module,
@@ -27,7 +27,9 @@ MetalRTDescriptorResources createMetalRTDescriptorResources(
     IRIntegerValue maxLevels,
     IRFuncType* missSignature,
     IRFuncType* closestHitSignature,
-    IRFuncType* callableSignature);
+    IRFuncType* callableSignature,
+    IRFuncType* anyHitSignature,
+    IRFuncType* intersectionSignature);
 
 /// Replaces the listed opaque descriptor types and their existing storage layouts in one walk.
 /// Concrete type/layout pairs distinguish shared field keys in different generic specializations.

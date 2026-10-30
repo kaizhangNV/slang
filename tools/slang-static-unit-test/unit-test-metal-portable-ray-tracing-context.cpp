@@ -19,6 +19,10 @@ static IRGlobalParam* createContextTestBuffer(IRBuilder& builder, UInt index)
     IRVarLayout::Builder layout(&builder, typeLayout.build());
     layout.findOrAddResourceInfo(LayoutResourceKind::MetalBuffer)->offset = LayoutOffset(index);
     builder.addLayoutDecoration(parameter, layout.build());
+    builder.addDecoration(
+        parameter,
+        kIROp_MetalRTGlobalResourceDecoration,
+        builder.getIntValue(builder.getIntType(), index));
     return parameter;
 }
 
@@ -43,9 +47,9 @@ static IRParam* getContextTestParameter(IRFunc* function)
     return nullptr;
 }
 
-// Models ray generation -> ordinary helper -> callable table, where only one callable reads
-// a global. The helper needs the caller's context despite having no global read of its own.
-// A second table member must acquire the same erased signature even though it needs no context.
+// Models ray generation -> ordinary helper -> callable table. The table signature contains
+// its resource pointer before body analysis, and the indirect dispatch carries shared bindings
+// through the helper even when that helper never directly reads a global.
 SLANG_UNIT_TEST(metalPortableIndirectGlobalContext)
 {
     StaticUnitTestEnv env(unitTestContext);
@@ -55,8 +59,8 @@ SLANG_UNIT_TEST(metalPortableIndirectGlobalContext)
     builder.setInsertInto(module);
     auto buffer = createContextTestBuffer(builder, 3);
     auto erasedPointer = builder.getPtrType(builder.getUInt8Type(), AddressSpace::ThreadLocal);
-    IRType* parameters[] = {erasedPointer};
-    auto signature = builder.getFuncType(1, parameters, builder.getVoidType());
+    IRType* parameters[] = {erasedPointer, erasedPointer};
+    auto signature = builder.getFuncType(2, parameters, builder.getVoidType());
     auto stage = builder.getIntValue(builder.getIntType(), IRIntegerValue(Stage::Callable));
     IRInst* tableOperands[] = {signature, stage};
     auto table = cast<IRMetalVisibleFunctionTable>(
@@ -67,10 +71,14 @@ SLANG_UNIT_TEST(metalPortableIndirectGlobalContext)
     auto reader = startContextTestFunction(builder, module, signature);
     IRInst* visibleOperands[] = {stage, table};
     builder.addDecoration(reader, kIROp_MetalVisibleFunctionDecoration, visibleOperands, 2);
+    auto readerResources = reader->getLastParam();
+    builder.addDecoration(readerResources, kIROp_MetalRTGlobalResourceContextDecoration);
     builder.emitLoad(buffer);
     builder.emitReturn();
     auto empty = startContextTestFunction(builder, module, signature);
     builder.addDecoration(empty, kIROp_MetalVisibleFunctionDecoration, visibleOperands, 2);
+    auto emptyResources = empty->getLastParam();
+    builder.addDecoration(emptyResources, kIROp_MetalRTGlobalResourceContextDecoration);
     builder.emitReturn();
 
     auto voidSignature = builder.getFuncType(0, nullptr, builder.getVoidType());
@@ -112,28 +120,90 @@ SLANG_UNIT_TEST(metalPortableIndirectGlobalContext)
     builder.emitCallInst(builder.getVoidType(), helper, 0, nullptr);
     builder.emitReturn();
 
-    introduceExplicitGlobalContext(module, CodeGenTarget::Metal);
+    DiagnosticSink sink;
+    introduceExplicitGlobalContext(module, CodeGenTarget::Metal, &sink);
     auto helperContext = getContextTestParameter(helper);
     SLANG_CHECK_ABORT(helperContext != nullptr);
-    SLANG_CHECK(dispatch->getGlobalContext() == helperContext);
+    SLANG_CHECK(dispatch->getGlobalContext() != helperContext);
+    SLANG_CHECK(dispatch->getGlobalContext()->getDataType() == erasedPointer);
     SLANG_CHECK(getContextTestParameter(entry) == nullptr);
-    SLANG_CHECK(getContextTestParameter(reader) != nullptr);
+    SLANG_CHECK(getContextTestParameter(reader) == nullptr);
     SLANG_CHECK(getContextTestParameter(empty) == nullptr);
 
-    DiagnosticSink sink;
     finalizeMetalPortableRayTracingGlobalContext(module, &sink);
     SLANG_CHECK(sink.getErrorCount() == 0);
     SLANG_CHECK(cast<IRBoolLit>(dispatch->getHasGlobalContext())->getValue());
-    SLANG_CHECK(getContextTestParameter(reader)->getDataType() == erasedPointer);
-    SLANG_CHECK(getContextTestParameter(empty)->getDataType() == erasedPointer);
+    SLANG_CHECK(readerResources->getDataType() == erasedPointer);
+    SLANG_CHECK(emptyResources->getDataType() == erasedPointer);
     auto physicalTable = cast<IRMetalVisibleFunctionTable>(callableField->getFieldType());
     SLANG_CHECK(reader->getDataType() == physicalTable->getFunctionType());
     SLANG_CHECK(empty->getDataType() == physicalTable->getFunctionType());
 }
 
-// The native IFT callback must receive the reached buffer at its existing binding, not every
-// resource in the ray-generation program. It builds its own resource context rather than taking
-// a caller context parameter, because traversal invokes it independently through the IFT.
+// Reversing linker discovery and changing the selected shader's private globals must not
+// change the shared resource layout. Only the ProgramLayout declaration coordinates order it.
+SLANG_UNIT_TEST(metalPortableSharedResourceLayoutOrder)
+{
+    StaticUnitTestEnv env(unitTestContext);
+    for (int reverse = 0; reverse < 2; ++reverse)
+    {
+        IRFixtureBuilder fixture(env.getSessionImpl());
+        auto module = fixture.getModule();
+        IRBuilder builder(module);
+        builder.setInsertInto(module);
+        IRGlobalParam* parameters[2];
+        for (int i = 0; i < 2; ++i)
+        {
+            int layoutIndex = reverse ? 1 - i : i;
+            parameters[layoutIndex] = createContextTestBuffer(builder, UInt(layoutIndex + 3));
+            parameters[layoutIndex]
+                ->findDecoration<IRMetalRTGlobalResourceDecoration>()
+                ->setOperand(0, builder.getIntValue(builder.getIntType(), layoutIndex));
+        }
+        parameters[1]->setFullType(
+            builder.getPtrType(builder.getFloatType(), AddressSpace::Global));
+        IRType* privateType = reverse ? (IRType*)builder.getFloatType() : builder.getUIntType();
+        auto privateVariable = builder.createGlobalVar(privateType);
+        auto erasedPointer = builder.getPtrType(builder.getUInt8Type(), AddressSpace::ThreadLocal);
+        IRType* parameterTypes[] = {erasedPointer};
+        auto signature = builder.getFuncType(1, parameterTypes, builder.getVoidType());
+        auto stage = builder.getIntValue(builder.getIntType(), IRIntegerValue(Stage::Miss));
+        IRInst* tableOperands[] = {signature, stage};
+        auto table = builder.getType(kIROp_MetalVisibleFunctionTable, 2, tableOperands);
+        auto provider = startContextTestFunction(builder, module, signature);
+        auto resourceParameter = provider->getFirstParam();
+        builder.addDecoration(resourceParameter, kIROp_MetalRTGlobalResourceContextDecoration);
+        IRInst* providerOperands[] = {stage, table};
+        builder.addDecoration(provider, kIROp_MetalVisibleFunctionDecoration, providerOperands, 2);
+        builder.emitLoad(parameters[reverse]);
+        builder.emitLoad(privateVariable);
+        builder.emitReturn();
+
+        DiagnosticSink sink;
+        introduceExplicitGlobalContext(module, CodeGenTarget::Metal, &sink);
+        IRStructType* sharedType = nullptr;
+        for (auto inst : provider->getFirstBlock()->getChildren())
+            if (auto cast = as<IRBitCast>(inst))
+                if (cast->getOperand(0) == resourceParameter)
+                    sharedType =
+                        as<IRStructType>(as<IRPtrType>(cast->getDataType())->getValueType());
+        SLANG_CHECK_ABORT(sharedType != nullptr);
+        UInt fieldIndex = 0;
+        for (auto field : sharedType->getFields())
+        {
+            SLANG_CHECK_ABORT(fieldIndex < 2);
+            SLANG_CHECK(field->getFieldType() == parameters[fieldIndex]->getFullType());
+            ++fieldIndex;
+        }
+        SLANG_CHECK(fieldIndex == 2);
+        SLANG_CHECK(cast<IRFuncType>(provider->getDataType())->getParamCount() == 1);
+        SLANG_CHECK(sink.getErrorCount() == 0);
+    }
+}
+
+// Body-free IFT glue binds the complete component buffer set before calling an independently
+// compiled provider. Its descriptor receives the next free buffer binding, even though the
+// selected body does not directly reference the last declared component buffer.
 SLANG_UNIT_TEST(metalPortableIntersectionGlobalBuffers)
 {
     StaticUnitTestEnv env(unitTestContext);
@@ -147,7 +217,17 @@ SLANG_UNIT_TEST(metalPortableIntersectionGlobalBuffers)
     auto helper = startContextTestFunction(builder, module, signature);
     builder.emitLoad(usedBuffer);
     builder.emitReturn();
-    auto callback = startContextTestFunction(builder, module, signature);
+    auto descriptorType = builder.getPtrType(builder.getUIntType(), AddressSpace::Uniform);
+    IRType* callbackParameters[] = {descriptorType};
+    auto callbackSignature = builder.getFuncType(1, callbackParameters, builder.getVoidType());
+    auto callback = startContextTestFunction(builder, module, callbackSignature);
+    auto descriptor = callback->getFirstParam();
+    builder.addDecoration(descriptor, kIROp_MetalRTCandidateDescriptorDecoration);
+    builder.emitIntrinsicInst(
+        builder.getPtrType(builder.getUInt8Type(), AddressSpace::ThreadLocal),
+        kIROp_MetalRTGetGlobalResourceContext,
+        0,
+        nullptr);
     IRInst* callbackOperands[] = {
         builder.getIntValue(builder.getIntType(), IRIntegerValue(MetalRTGeometryKind::Triangle)),
         builder.getIntValue(builder.getIntType(), UInt(MetalRTTag::Instancing)),
@@ -156,21 +236,21 @@ SLANG_UNIT_TEST(metalPortableIntersectionGlobalBuffers)
     builder.emitCallInst(builder.getVoidType(), helper, 0, nullptr);
     builder.emitReturn();
 
-    introduceExplicitGlobalContext(module, CodeGenTarget::Metal);
+    DiagnosticSink sink;
+    introduceExplicitGlobalContext(module, CodeGenTarget::Metal, &sink);
     SLANG_CHECK(getContextTestParameter(callback) == nullptr);
     SLANG_CHECK(getContextTestParameter(helper) != nullptr);
-    SLANG_CHECK(cast<IRFuncType>(callback->getDataType())->getParamCount() == 1);
-    auto layout = findVarLayout(callback->getFirstParam());
+    SLANG_CHECK(cast<IRFuncType>(callback->getDataType())->getParamCount() == 3);
+    auto layout = findVarLayout(descriptor);
     SLANG_CHECK_ABORT(layout != nullptr);
-    SLANG_CHECK(layout->findOffsetAttr(LayoutResourceKind::MetalBuffer)->getOffset() == 3);
-    DiagnosticSink sink;
+    SLANG_CHECK(layout->findOffsetAttr(LayoutResourceKind::MetalBuffer)->getOffset() == 8);
     finalizeMetalPortableRayTracingGlobalContext(module, &sink);
     SLANG_CHECK(sink.getErrorCount() == 0);
 }
 
-// Mutable thread globals are not bindable IFT resources. Allocating a fresh callback-local value
-// would silently change their semantics, so retain the context dependency and diagnose it.
-SLANG_UNIT_TEST(metalPortableIntersectionMutableGlobalDiagnostic)
+// Mutable shader globals have invocation-local storage. A native callback receives no caller
+// KernelContext pointer, and its private variable does not become a driver-bound resource.
+SLANG_UNIT_TEST(metalPortableIntersectionPrivateGlobal)
 {
     StaticUnitTestEnv env(unitTestContext);
     IRFixtureBuilder fixture(env.getSessionImpl());
@@ -187,11 +267,13 @@ SLANG_UNIT_TEST(metalPortableIntersectionMutableGlobalDiagnostic)
     builder.addDecoration(callback, kIROp_MetalIntersectionFunctionDecoration, operands, 3);
     builder.emitLoad(variable);
     builder.emitReturn();
-    introduceExplicitGlobalContext(module, CodeGenTarget::Metal);
-    SLANG_CHECK(getContextTestParameter(callback) != nullptr);
     DiagnosticSink sink;
+    introduceExplicitGlobalContext(module, CodeGenTarget::Metal, &sink);
+    SLANG_CHECK(getContextTestParameter(callback) == nullptr);
+    SLANG_CHECK(cast<IRFuncType>(callback->getDataType())->getParamCount() == 0);
+    SLANG_CHECK(as<IRVar>(callback->getFirstBlock()->getFirstOrdinaryInst()) != nullptr);
     finalizeMetalPortableRayTracingGlobalContext(module, &sink);
-    SLANG_CHECK(sink.getErrorCount() == 1);
+    SLANG_CHECK(sink.getErrorCount() == 0);
 }
 
 // Table functions have no source entry-point decoration. Nevertheless their device buffer

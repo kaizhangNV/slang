@@ -1,4 +1,7 @@
 //TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry RayGeneration -stage raygeneration -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=HIT): -experimental-feature -entry ClosestHit -stage closesthit -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=MISS): -experimental-feature -entry Miss -stage miss -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=CALLABLE): -experimental-feature -entry Callable -stage callable -target metal -profile metallib_2_4 -validate-ir
 
 import slang.raytracing.portable;
 
@@ -115,8 +118,9 @@ struct OuterSchema : rt::ITraceProgramSchema
 rt::TraceProgramDescriptor<OuterSchema> outerProgram;
 RWStructuredBuffer<uint> output;
 
-// Only the innermost callable reads launch builtins. Requirements must cross the actual
-// outer-trace -> ClosestHit -> inner-trace -> Miss -> callable chain before any ABI is frozen.
+// Only the innermost callable reads launch builtins. Each independently compiled stage uses
+// the fixed contract to forward those values through the outer trace, inner trace, and callable
+// dispatch, including through ordinary helpers that have no direct builtin reads.
 [shader("raygeneration")]
 void RayGeneration()
 {
@@ -131,11 +135,27 @@ void RayGeneration()
     output[0] = payload;
 }
 
-// METAL-DAG: uint3 dispatchIndex
-// METAL-DAG: uint3 dispatchDimensions
+// METAL-NOT: visible]]
 // METAL-DAG: thread_position_in_grid
 // METAL-DAG: threads_per_grid
-// METAL-DAG: traceHelper
-// METAL-DAG: callHelper
-// METAL-DAG: _slang_callable_function_index
-// METAL-NOT: metalRTGetDispatchRays
+// METAL-DAG: [_slang_hit_function_index]({{.*}}dispatchIndex{{.*}}dispatchDimensions
+// METAL-NOT: visible]]
+// METAL-NOT: traceHelper
+// METAL-NOT: callHelper
+
+// HIT: void traceHelper{{.*}}(uint thread*{{.*}}, uint3{{.*}}, uint3
+// HIT: [_slang_miss_function_index]({{.*}}invocationValue{{.*}}invocationValue
+// HIT: visible]] void ClosestHit_closesthit(
+// HIT: ClosestHit_invoke{{.*}}dispatchRaysIndex{{.*}}dispatchRaysDimensions
+// HIT-NOT: metalRTGetDispatchRays
+
+// MISS: void callHelper{{.*}}(uint thread*{{.*}}, uint3{{.*}}, uint3
+// MISS: [_slang_callable_function_index]({{.*}}invocationValue{{.*}}invocationValue
+// MISS: visible]] void Miss_miss(
+// MISS: Miss_invoke{{.*}}dispatchRaysIndex{{.*}}dispatchRaysDimensions
+// MISS-NOT: metalRTGetDispatchRays
+
+// CALLABLE: rt_CallableInput_dispatchRaysIndex_get{{.*}}rt_CallableInput_dispatchRaysDimensions_get
+// CALLABLE: visible]] void Callable_callable(
+// CALLABLE: Callable_invoke{{.*}}dispatchRaysIndex{{.*}}dispatchRaysDimensions
+// CALLABLE-NOT: metalRTGetDispatchRays

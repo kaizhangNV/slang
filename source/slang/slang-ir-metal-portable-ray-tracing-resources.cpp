@@ -13,7 +13,9 @@ MetalRTDescriptorResources createMetalRTDescriptorResources(
     IRIntegerValue maxLevels,
     IRFuncType* missSignature,
     IRFuncType* closestHitSignature,
-    IRFuncType* callableSignature)
+    IRFuncType* callableSignature,
+    IRFuncType* anyHitSignature,
+    IRFuncType* intersectionSignature)
 {
     SLANG_RELEASE_ASSERT(sourceType && missSignature && closestHitSignature && callableSignature);
     IRBuilder builder(module);
@@ -62,6 +64,16 @@ MetalRTDescriptorResources createMetalRTDescriptorResources(
         MetalRTDescriptorResource::Records,
         builder.getPtrType(builder.getUIntType(), AddressSpace::Global),
         "records");
+    addVisibleTable(
+        MetalRTDescriptorResource::AnyHitVisibleFunctionTable,
+        anyHitSignature,
+        Stage::AnyHit,
+        "anyHitFunctions");
+    addVisibleTable(
+        MetalRTDescriptorResource::IntersectionVisibleFunctionTable,
+        intersectionSignature,
+        Stage::Intersection,
+        "intersectionShaders");
     IRInst* parameterBlockOperands[] = {result.resourcesStruct};
     result.physicalParameterBlockType = cast<IRUniformParameterGroupType>(
         builder.getType(kIROp_ParameterBlockType, 1, parameterBlockOperands));
@@ -87,7 +99,7 @@ IRVarLayout* cloneVarLayout(IRBuilder& builder, IRVarLayout* source, IRTypeLayou
 }
 
 // Adds the private argument-buffer IDs without changing the source binding footprint. Source
-// reflection already allocated one parameter-block handle; this creates its five internal fields.
+// reflection already allocated one parameter-block handle; this creates its seven internal fields.
 IRTypeLayout* createPhysicalLayout(
     IRBuilder& builder,
     const MetalRTDescriptorResources& resources,

@@ -1,6 +1,7 @@
 #include "compiler-core/slang-artifact-associated-impl.h"
 #include "slang/slang-ir-metal-portable-ray-tracing-metadata.h"
 #include "slang/slang-ir-metal-portable-ray-tracing-target.h"
+#include "slang/slang-ir-util.h"
 #include "slang/slang-profile.h"
 #include "static-unit-test-env.h"
 #include "unit-test/slang-unit-test.h"
@@ -21,7 +22,18 @@ SLANG_UNIT_TEST(metalPortableRayTracingMetadataCollection)
         resources,
         kIROp_PortableRTSchemaNameDecoration,
         builder.getStringValue(UnownedStringSlice("SourceSchemaMangle")));
-    addMetalRTProgramMetadata(module, resources, UInt(MetalRTTag::Instancing), 0, 48, 32, 16);
+    addMetalRTProgramMetadata(
+        module,
+        resources,
+        UInt(MetalRTTag::Instancing),
+        0,
+        48,
+        32,
+        16,
+        6,
+        8,
+        2,
+        3);
 
     auto functionType = builder.getFuncType(0, nullptr, builder.getVoidType());
     auto visible = builder.createFunc();
@@ -55,6 +67,46 @@ SLANG_UNIT_TEST(metalPortableRayTracingMetadataCollection)
         UInt(MetalRTCandidateKind::Curve),
         UInt(MetalRTStageRequirement::CurveParameter));
 
+    builder.setInsertInto(candidate);
+    builder.emitBlock();
+    auto descriptor =
+        builder.emitParam(builder.getPtrType(builder.getUIntType(), AddressSpace::Uniform));
+    builder.addDecoration(descriptor, kIROp_MetalRTCandidateDescriptorDecoration);
+    IRTypeLayout::Builder descriptorTypeLayout(&builder);
+    descriptorTypeLayout.addResourceUsage(LayoutResourceKind::MetalBuffer, 1);
+    IRVarLayout::Builder descriptorLayout(&builder, descriptorTypeLayout.build());
+    descriptorLayout.findOrAddResourceInfo(LayoutResourceKind::MetalBuffer)->offset = 9;
+    builder.addLayoutDecoration(descriptor, descriptorLayout.build());
+    builder.emitReturn();
+    fixUpFuncType(candidate);
+
+    for (auto providerStage : {Stage::AnyHit, Stage::Intersection})
+    {
+        builder.setInsertInto(module);
+        auto provider = builder.createFunc();
+        auto pointerType = builder.getPtrType(builder.getUInt8Type(), AddressSpace::ThreadLocal);
+        IRType* parameterTypes[] = {pointerType};
+        auto providerType = builder.getFuncType(1, parameterTypes, builder.getVoidType());
+        provider->setFullType(providerType);
+        builder.addExternCppDecoration(
+            provider,
+            providerStage == Stage::AnyHit ? toSlice("physical_anyhit")
+                                           : toSlice("physical_intersection"));
+        auto providerStageValue = builder.getIntValue(builder.getUIntType(), UInt(providerStage));
+        IRInst* providerTableOperands[] = {providerType, providerStageValue};
+        auto providerTable =
+            builder.getType(kIROp_MetalVisibleFunctionTable, 2, providerTableOperands);
+        IRInst* providerOperands[] = {providerStageValue, providerTable};
+        builder.addDecoration(provider, kIROp_MetalVisibleFunctionDecoration, providerOperands, 2);
+        addMetalRTFunctionMetadata(module, provider, resources, 5, 0);
+        builder.setInsertInto(provider);
+        builder.emitBlock();
+        auto context = builder.emitParam(pointerType);
+        builder.addDecoration(context, kIROp_MetalRTGlobalResourceContextDecoration);
+        builder.emitReturn();
+    }
+    builder.setInsertInto(module);
+
     // Resource legalization moves descriptor type decorations to its ordinary-data part, which
     // may then disappear. Artifact program identity must not depend on that temporary struct.
     auto ordinaryPart = builder.createStructType();
@@ -71,7 +123,8 @@ SLANG_UNIT_TEST(metalPortableRayTracingMetadataCollection)
     SLANG_CHECK_ABORT(metadata->getProgramCount() == 1);
     slang::MetalRayTracingProgramInfo program;
     SLANG_CHECK_ABORT(SLANG_SUCCEEDED(metadata->getProgramInfo(0, &program)));
-    SLANG_CHECK(program.resourceCount == 5 && program.functionCount == 2);
+    SLANG_CHECK(program.resourceCount == 7 && program.functionCount == 4);
+    SLANG_CHECK(program.candidateDescriptorBufferIndex == 9);
     SLANG_CHECK(program.hitRecordStride == 48 && program.missRecordStride == 32);
     SLANG_CHECK(program.callableRecordStride == 16);
     SLANG_CHECK(program.recordHeaderSize == 16 && program.recordAlignment == 16);
@@ -81,7 +134,18 @@ SLANG_UNIT_TEST(metalPortableRayTracingMetadataCollection)
     SLANG_CHECK(ift.functionTableSize == 3 && ift.argumentBufferID == 0);
     slang::MetalRayTracingResourceInfo miss;
     SLANG_CHECK_ABORT(SLANG_SUCCEEDED(metadata->getProgramResourceInfo(0, 1, &miss)));
-    SLANG_CHECK(miss.functionTableSize == 4 && miss.argumentBufferID == 1);
+    SLANG_CHECK(miss.functionTableSize == 8 && miss.argumentBufferID == 1);
+    for (UInt role = 5; role <= 6; ++role)
+    {
+        slang::MetalRayTracingResourceInfo providerTable;
+        SLANG_CHECK_ABORT(
+            SLANG_SUCCEEDED(metadata->getProgramResourceInfo(0, role, &providerTable)));
+        SLANG_CHECK(providerTable.argumentBufferID == role && providerTable.functionTableSize == 6);
+        SLANG_CHECK(
+            providerTable.kind ==
+            (role == 5 ? slang::MetalRayTracingResourceKind::AnyHitVisibleFunctionTable
+                       : slang::MetalRayTracingResourceKind::IntersectionVisibleFunctionTable));
+    }
     bool sawMiss = false;
     bool sawCurve = false;
     for (uint32_t i = 0; i < program.functionCount; ++i)
@@ -96,7 +160,8 @@ SLANG_UNIT_TEST(metalPortableRayTracingMetadataCollection)
             SLANG_CHECK(function.functionIndex == 3);
             SLANG_CHECK(function.requirements == uint32_t(MetalRTStageRequirement::Record));
         }
-        else
+        else if (
+            function.tableKind == slang::MetalRayTracingResourceKind::IntersectionFunctionTable)
         {
             sawCurve = true;
             SLANG_CHECK(function.primitive == slang::MetalRayTracingPrimitive::Curve);
@@ -105,12 +170,22 @@ SLANG_UNIT_TEST(metalPortableRayTracingMetadataCollection)
                 UnownedStringSlice(function.entryPointName) ==
                 UnownedStringSlice("physical_curve"));
         }
+        else
+        {
+            SLANG_CHECK(function.functionIndex == 5);
+            SLANG_CHECK(function.usesGlobalContext);
+            SLANG_CHECK(
+                function.tableKind ==
+                    slang::MetalRayTracingResourceKind::AnyHitVisibleFunctionTable ||
+                function.tableKind ==
+                    slang::MetalRayTracingResourceKind::IntersectionVisibleFunctionTable);
+        }
     }
     SLANG_CHECK(sawMiss && sawCurve);
     uint32_t index = 9;
     SLANG_CHECK(SLANG_SUCCEEDED(
         metadata->findProgramBySchemaTypeMangledName("SourceSchemaMangle", &index)));
     SLANG_CHECK(index == 0);
-    SLANG_CHECK(metadata->getProgramResourceInfo(0, 5, &ift) == SLANG_E_INVALID_ARG);
-    SLANG_CHECK(metadata->getProgramFunctionInfo(0, 2, nullptr) == SLANG_E_INVALID_ARG);
+    SLANG_CHECK(metadata->getProgramResourceInfo(0, 7, &ift) == SLANG_E_INVALID_ARG);
+    SLANG_CHECK(metadata->getProgramFunctionInfo(0, 4, nullptr) == SLANG_E_INVALID_ARG);
 }

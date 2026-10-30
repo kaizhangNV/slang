@@ -1,4 +1,6 @@
 //TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry RayGeneration -stage raygeneration -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=RADIANCE): -experimental-feature -entry RadianceClosestHit -stage closesthit -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=SHADOW): -experimental-feature -entry ShadowClosestHit -stage closesthit -target metal -profile metallib_2_4 -validate-ir
 
 import slang.raytracing.portable;
 
@@ -126,11 +128,25 @@ void RayGeneration()
     output[1] = float4(shadow.visible);
 }
 
+// METAL-NOT: visible]]
 // METAL-DAG: RadiancePayload{{.*}} payload_
 // METAL-DAG: ShadowPayload{{.*}} payload_
 // METAL-DAG: RadianceAttributes{{.*}} customAttributes_
 // METAL-DAG: ShadowAttributes{{.*}} customAttributes_
-// METAL-DAG: __slang_portable_rt_0_closesthit_0
-// METAL-DAG: __slang_portable_rt_0_closesthit_1
 // METAL-DAG: intersection(bounding_box,
+// METAL-NOT: visible]]
 // METAL-NOT: metalTraceRay
+
+// RADIANCE: ->color{{.*}} = {{.*}}->color{{.*}} + {{.*}}->normal
+// RADIANCE: ->count{{.*}}rt_ClosestHitInput_hitKind_get
+// RADIANCE: visible]] void RadianceClosestHit_closesthit(void thread* payload{{.*}}, void thread* attributes
+// RADIANCE: (RadiancePayload{{.*}} thread*){{.*}}payload
+// RADIANCE: (RadianceAttributes{{.*}} thread*){{.*}}attributes
+// RADIANCE: RadianceClosestHit_invoke{{.*}}hitKind
+// RADIANCE-NOT: PortableRTRayData
+
+// SHADOW: ->visible{{.*}} = {{.*}}->flags
+// SHADOW: visible]] void ShadowClosestHit_closesthit(void thread* payload{{.*}}, void thread* attributes
+// SHADOW: (ShadowPayload{{.*}} thread*){{.*}}payload
+// SHADOW: (ShadowAttributes{{.*}} thread*){{.*}}attributes
+// SHADOW-NOT: PortableRTRayData

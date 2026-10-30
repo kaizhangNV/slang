@@ -16,9 +16,9 @@ struct Context<RecordType> : rt::IPayloadContext
     typealias Record = RecordType;
 }
 
-// These exported helpers have no caller to infer a parameter address space from. The wrapper
-// must choose a concrete read-only borrow even before tuple/matrix legalization turns the
-// source record into the struct/array representation that normal constref lowering sees.
+// Independently selected adapters receive record bytes through the fixed device pointer.
+// Restoring the concrete tuple or matrix layout must produce the read-only local reference
+// expected by the ordinary helper after aggregate legalization.
 [noinline]
 void readTuple(rt::MissInput<Context<Tuple<uint, uint>>> input)
 {
@@ -44,8 +44,10 @@ struct MatrixMiss : rt::IMissShader
 }
 
 // TUPLE: readTuple
-// TUPLE: void TupleMiss_miss(
-// TUPLE-NOT: kernel void
+// TUPLE: visible]] void TupleMiss_miss(
+// TUPLE-SAME: uchar device* recordData
+// TUPLE-NOT: kernel]]
 // MATRIX: readMatrix
-// MATRIX: void MatrixMiss_miss(
-// MATRIX-NOT: kernel void
+// MATRIX: visible]] void MatrixMiss_miss(
+// MATRIX-SAME: uchar device* recordData
+// MATRIX-NOT: kernel]]

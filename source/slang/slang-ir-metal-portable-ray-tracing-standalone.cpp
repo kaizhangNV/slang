@@ -1,44 +1,17 @@
 #include "slang-ir-metal-portable-ray-tracing-standalone.h"
 
-#include "slang-ir-legalize-matrix-types.h"
+#include "slang-ir-metal-portable-ray-tracing-candidates.h"
 #include "slang-ir-util.h"
-#include "slang-rich-diagnostics.h"
 
 namespace Slang
 {
 using namespace PortableRT::Metal;
 
-namespace
-{
-
-/// Gives an ordinary standalone helper an input for a used query. Reference getters retain
-/// thread-local pointer identity, while immutable values can be passed normally. Indexed instance
-/// queries use the trace context's topology, just like schema adapters. A shared source method
-/// must receive the same representation whether selected independently or through a schema.
-IRType* getStandaloneParameterType(
-    IRBuilder& builder,
-    IRInst* operation,
-    IRPortableRTStageInputDecoration* input)
-{
-    if (operation->getOp() == kIROp_MetalRTGetInstanceIndex ||
-        operation->getOp() == kIROp_MetalRTGetInstanceID)
-    {
-        auto acceleration = PortableRT::getStageAccelerationStructure(input);
-        bool isMultiLevel =
-            acceleration->getOperandCount() && getIntVal(acceleration->getOperand(0)) != 0;
-        return isMultiLevel ? builder.getType(kIROp_MetalRTInstancePath) : builder.getUIntType();
-    }
-    if (auto pointer = as<IRPtrTypeBase>(operation->getDataType()))
-        return builder.getPtrType(pointer->getValueType(), AddressSpace::ThreadLocal);
-    return operation->getDataType();
-}
-
-} // namespace
-
 List<VisibleAdapter> prepareMetalStandaloneStages(
     IRModule* module,
-    TargetProgram* targetProgram,
+    TargetProgram*,
     List<IRFunc*>& entryPoints,
+    bool& requiresResultTypeLowering,
     DiagnosticSink* sink)
 {
     List<VisibleAdapter> result;
@@ -54,81 +27,80 @@ List<VisibleAdapter> prepareMetalStandaloneStages(
         }
         auto entry = wrapper->findDecoration<IREntryPointDecoration>();
         SLANG_RELEASE_ASSERT(entry);
-        auto stage = entry->getProfile().getStage();
-        if (stage != Stage::ClosestHit && stage != Stage::Miss && stage != Stage::Callable)
+        auto input = getResolvedInstForDecorations(adapter->getInputType())
+                         ->findDecoration<IRPortableRTStageInputDecoration>();
+        SLANG_RELEASE_ASSERT(input);
+
+        // Selecting Miss supplies a checked invoke and Context without selecting a program
+        // schema. The same source contract fixes the VFT signature in the caller's compilation;
+        // only this adapter needs the implementation and its logical input metadata.
+        PortableRT::SchemaStage stage;
+        stage.stage = entry->getProfile().getStage();
+        stage.isPresent = true;
+        stage.invoke = cast<IRFunc>(adapter->getInvoke());
+        stage.input = input;
+        stage.contextType = input->getContextType();
+        stage.contextWitness = cast<IRWitnessTable>(input->getContextWitness());
+        stage.payloadType = input->getPayloadType();
+        stage.recordType = input->getRecordType();
+        if (stage.stage == Stage::ClosestHit || stage.stage == Stage::AnyHit ||
+            stage.stage == Stage::Intersection)
         {
-            // A standalone candidate has no owning hit group, so neither its AnyHit callback nor
-            // its mutable candidate-state ABI is known. Do not silently replace ReportHit or an
-            // early-termination operation with a helper that cannot honor those semantics.
-            sink->diagnose(
-                Diagnostics::MetalRayTracingStandaloneCandidate{.location = wrapper->sourceLoc});
-            continue;
+            stage.primitiveType = input->getPrimitiveType();
+            stage.attributesType = input->getAttributesType();
         }
 
+        auto symbolName = entry->getName()->getStringSlice();
         VisibleAdapter root;
-        root.function = wrapper;
-        auto input = adapter->getInputType()->findDecoration<IRPortableRTStageInputDecoration>();
-        SLANG_RELEASE_ASSERT(input);
-        List<IRInst*> operations;
-        collectStageInputOperations(wrapper, operations);
-        HashSet<KeyValuePair<IROp, IRType*>> seen;
-        auto firstInstruction = wrapper->getFirstBlock()->getFirstOrdinaryInst();
-        for (auto operation : operations)
+        if (stage.stage == Stage::AnyHit || stage.stage == Stage::Intersection)
         {
-            auto type = operation->getDataType();
-            if (!seen.add({operation->getOp(), type}))
-                continue;
-            builder.setInsertBefore(firstInstruction);
-            IRInst* value;
-            if (operation->getOp() == kIROp_PortableRTGetHitAttributes &&
-                isBuiltinHitAttributeView(operation))
+            root = createSelectedCandidateAdapter(
+                module,
+                stage,
+                symbolName,
+                requiresResultTypeLowering,
+                sink);
+        }
+        else
+        {
+            auto acceleration = PortableRT::getStageAccelerationStructure(input);
+            bool multiLevel =
+                acceleration->getOperandCount() && getIntVal(acceleration->getOperand(0)) != 0;
+            auto requirements = getStageContractRequirements(stage.stage, multiLevel);
+            auto descriptorPointer =
+                builder.getPtrType(builder.getUIntType(), AddressSpace::Uniform);
+            if (stage.stage == Stage::Callable)
             {
-                // Triangle/curve attribute containers are zero-storage views. Their individual
-                // getters, not the aggregate token, contribute actual invocation parameters.
-                value = builder.emitDefaultConstruct(type);
-            }
-            else if (as<IRVoidType>(type) || isEmptyType(type))
-            {
-                value = as<IRVoidType>(type) ? builder.getVoidValue()
-                                             : builder.emitDefaultConstruct(type);
+                root = createCallableAdapter(
+                    module,
+                    stage,
+                    requirements,
+                    symbolName,
+                    descriptorPointer);
             }
             else
             {
-                auto parameterType = getStandaloneParameterType(builder, operation, input);
-                // An exported helper has no caller from which address-space specialization can
-                // infer an aggregate parameter's borrow. Choose its concrete read-only ABI here;
-                // helpers inside the implementation still receive ordinary logical values.
-                // Tuple and integer-matrix records become structs/arrays in later ordinary
-                // legalization. Their exported parameter needs the same concrete borrow now;
-                // waiting for constref transformation would leave its address space generic.
-                auto matrix = as<IRMatrixType>(parameterType);
-                bool borrow = isCompositeType(parameterType) || as<IRTupleType>(parameterType) ||
-                              (matrix && isMatrixTypeLegalizedToVectorArray(targetProgram, matrix));
-                auto parameter = builder.createParam(
-                    borrow ? builder.getBorrowInParamType(parameterType, AddressSpace::ThreadLocal)
-                           : parameterType);
-                parameter->insertBefore(wrapper->getFirstBlock()->getFirstOrdinaryInst());
-                builder.addNameHintDecoration(
-                    parameter,
-                    UnownedStringSlice(getIROpInfo(operation->getOp()).name));
-                value = borrow ? builder.emitLoad(parameter) : parameter;
+                SLANG_RELEASE_ASSERT(
+                    stage.stage == Stage::ClosestHit || stage.stage == Stage::Miss);
+                root = createVisibleAdapter(
+                    module,
+                    stage,
+                    requirements,
+                    symbolName,
+                    descriptorPointer);
             }
-            root.bindings.add({operation->getOp(), type, value});
         }
+        result.add(_Move(root));
 
-        // Consider a selected SharedMiss which CallingMiss also invokes directly. Only this
-        // wrapper acquires the export name and helper ABI; SharedMiss.invoke remains an ordinary
-        // implementation and participates in the same invocation-value threading as every caller.
-        auto exportName = entry->getName()->getStringSlice();
-        builder.addExportDecoration(wrapper, exportName);
-        builder.addExternCppDecoration(wrapper, exportName);
-        builder.addDecoration(wrapper, kIROp_MetalRTStandaloneStageDecoration);
+        // The selected export name now belongs to its physical VFT adapter. Drop the temporary
+        // native wrapper's roots so ordinary DCE removes it, while the source invoke remains
+        // callable by both this adapter and ordinary source helpers.
         entry->removeAndDeallocate();
         adapter->removeAndDeallocate();
+        if (auto keepAlive = wrapper->findDecoration<IRKeepAliveDecoration>())
+            keepAlive->removeAndDeallocate();
         if (auto layout = wrapper->findDecoration<IRLayoutDecoration>())
             layout->removeAndDeallocate();
-        fixUpFuncType(wrapper);
-        result.add(_Move(root));
     }
     entryPoints = _Move(nativeEntries);
     return result;

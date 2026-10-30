@@ -14,12 +14,24 @@ struct SchemaStage
 {
     Stage stage = Stage::Unknown;
     IRType* type = nullptr;
+    IRWitnessTable* witness = nullptr;
+    IRType* contextType = nullptr;
+    IRWitnessTable* contextWitness = nullptr;
+    // Callable stages use callable data in place of a ray payload. Primitive and attribute
+    // types are null for miss and callable stages, whose contracts have no such requirements.
+    IRType* payloadType = nullptr;
+    IRType* recordType = nullptr;
+    IRType* primitiveType = nullptr;
+    IRType* attributesType = nullptr;
+    bool isPresent = false;
+
+    // Only explicit stage selection populates executable information. Schema reading requires no
+    // invoke witness entry or input type instantiated by an implementation's signature.
     IRFunc* invoke = nullptr;
     IRPortableRTStageInputDecoration* input = nullptr;
-    bool isPresent = false;
 };
 
-/// A schema entry describes code, not a physical SBT record. Its array position is the dense
+/// A schema entry fixes stage types, not a physical SBT record. Its array position is the dense
 /// function index; the host may put that function index in arbitrarily many runtime records.
 struct SchemaHitGroup
 {
@@ -55,9 +67,10 @@ KnownBuiltinDeclName getBuiltinRole(IRInst* value);
 IRRaytracingAccelerationStructureType* getStageAccelerationStructure(
     IRPortableRTStageInputDecoration* input);
 
-/// Reads a fully specialized descriptor schema. Returns false only while its witness is still
-/// unresolved; a malformed concrete contract is an IR invariant failure, not an empty schema.
-bool readSchema(IRTraceProgramDescriptorType* descriptorType, Schema& outSchema);
+/// Reads a specialized descriptor's type contract without resolving stage implementations.
+/// Returns false only while its schema witness is unresolved; missing concrete associated-type
+/// requirements are IR invariant failures. Invoke entries may be absent or unresolved.
+bool readSchemaContract(IRTraceProgramDescriptorType* descriptorType, Schema& outSchema);
 
 } // namespace PortableRT
 } // namespace Slang

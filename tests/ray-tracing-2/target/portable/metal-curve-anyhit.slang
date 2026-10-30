@@ -1,4 +1,5 @@
 //TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry RayGeneration -stage raygeneration -target metal -capability metallib_3_1 -validate-ir
+//TEST:SIMPLE(filecheck=PROVIDER): -experimental-feature -entry AnyHit -stage anyhit -target metal -capability metallib_3_1 -validate-ir
 
 import slang.raytracing.portable;
 
@@ -78,10 +79,12 @@ void RayGeneration()
     output[0] = payload;
 }
 
-// METAL-DAG: intersection(curve, metal::raytracing::instancing, metal::raytracing::curve_data)
+// METAL-DAG: intersection(curve, metal::raytracing::instancing, metal::raytracing::curve_data{{[^)]*}})
 // METAL-DAG: curve_parameter
 // METAL-DAG: accept_intersection
 // METAL-DAG: continue_search
-// METAL-DAG: visible]]
-// METAL-DAG: readCurveParameter
+// METAL-DAG: anyHitFunctions
+// METAL-NOT: readCurveParameter
+// PROVIDER-DAG: visible]]
+// PROVIDER-DAG: readCurveParameter
 // METAL-NOT: metalRTIgnoreHit

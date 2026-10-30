@@ -667,7 +667,8 @@ struct MoveGlobalVarInitializationToEntryPointsPass
     {
         // Shader and CUDA launches both begin a new invocation. Ordinary calls use the clones
         // created by `fixEntryPointCallsites`, so they do not repeat global initialization.
-        return isShaderOrCudaKernelEntryPoint(function);
+        return isShaderOrCudaKernelEntryPoint(function) ||
+               function->findDecoration<IRMetalVisibleFunctionDecoration>();
     }
 
     /// Insert the extracted initializers into every selected module-scope entry-point definition.

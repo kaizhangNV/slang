@@ -15,9 +15,9 @@ struct HitContext : rt::IHitContext
     typealias Primitive = rt::TrianglePrimitive;
 }
 
-// This ordinary helper is reached both from the schema's visible adapter and from the explicitly
-// selected standalone stage. Ordinary instancing uses a scalar ID in both ABIs, not an instance
-// path in one and a scalar in the other. Both callers must update their own payload reference.
+// Selecting a stage alongside ray generation emits one visible adapter with its selected name.
+// The ray-generation table contract uses the same scalar instance-ID ABI without synthesizing
+// a second implementation from the schema. The ordinary helper updates the supplied payload.
 [noinline]
 void addInstanceID(rt::ClosestHitInput<HitContext> input)
 {
@@ -60,7 +60,9 @@ void RayGeneration()
     output[0] = payload;
 }
 
+// METAL-NOT: __slang_portable_rt_0_closesthit_0
 // METAL-DAG: addInstanceID
-// METAL-DAG: void SharedHit_closesthit(
-// METAL-DAG: __slang_portable_rt_0_closesthit_0
+// METAL-DAG: visible]] void SharedHit_closesthit(void thread* payload
+// METAL-DAG: [_slang_hit_function_index](
+// METAL-NOT: __slang_portable_rt_0_closesthit_0
 // METAL-NOT: metalRTGetInstanceID

@@ -52,6 +52,7 @@ void RayGeneration()
 }
 
 // The physical offset expression must retain the exact unsigned 32-bit stride.
-// VALID-DAG: __slang_portable_rt_0_miss_0
-// VALID-DAG: _slang_miss_record = {{.*}}missIndex{{.*}} * 4294967280U;
+// VALID-NOT: visible]]
+// VALID: _slang_miss_record = {{.*}}missIndex{{.*}} * 4294967280U;
+// VALID-NOT: visible]]
 // OVERFLOW: Metal ray-tracing Record requires a fixed-size inline storage layout supported by the descriptor ABI

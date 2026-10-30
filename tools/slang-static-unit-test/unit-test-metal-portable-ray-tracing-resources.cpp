@@ -89,12 +89,16 @@ SLANG_UNIT_TEST(metalPortableDescriptorNestedLayouts)
         0,
         signature,
         signature,
+        signature,
+        signature,
         signature));
     resources.add(createMetalRTDescriptorResources(
         module,
         second,
         UInt(MetalRTTag::Instancing),
         0,
+        signature,
+        signature,
         signature,
         signature,
         signature));
@@ -221,6 +225,8 @@ SLANG_UNIT_TEST(metalPortableDescriptorGlobalLayoutOnlyKeys)
         descriptorType,
         UInt(MetalRTTag::Instancing),
         0,
+        signature,
+        signature,
         signature,
         signature,
         signature));

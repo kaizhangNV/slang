@@ -1,6 +1,5 @@
 #include "slang-ir-metal-portable-ray-tracing-stages.h"
 
-#include "slang-ir-metal-portable-ray-tracing-instance-path.h"
 #include "slang-ir-portable-ray-tracing-util.h"
 #include "slang-ir-util.h"
 
@@ -26,6 +25,29 @@ IRType* getRayPayloadStorageType(IRBuilder& builder, IRType* payloadType)
     return isEmptyType(payloadType) ? builder.getVoidType() : payloadType;
 }
 
+IRInst* getStageDataReference(IRBuilder& builder, IRInst* erasedAddress, IRType* dataType)
+{
+    if (as<IRVoidType>(dataType))
+    {
+        // A retained helper may still take a nominal void reference. It has no storage, so use
+        // a typed null pointer instead of constructing an invalid void local or store.
+        return builder.getNullPtrValue(builder.getPtrType(dataType, AddressSpace::ThreadLocal));
+    }
+    if (isEmptyType(dataType))
+    {
+        // Consider Payload = ApplicationEmpty. Its nominal reference is still meaningful to
+        // ordinary source calls even though transport has no bytes. Empty-type legalization
+        // removes this local token without dereferencing the erased ABI pointer.
+        auto value = builder.emitVar(dataType);
+        builder.emitStore(value, builder.emitDefaultConstruct(dataType));
+        return value;
+    }
+    SLANG_RELEASE_ASSERT(erasedAddress);
+    return builder.emitBitCast(
+        builder.getPtrType(dataType, AddressSpace::ThreadLocal),
+        erasedAddress);
+}
+
 IRInst* getRayPayloadReference(
     IRBuilder& builder,
     const RayData& carrier,
@@ -35,21 +57,8 @@ IRInst* getRayPayloadReference(
     if (carrier.payloadKey)
         return builder.emitFieldAddress(rayData, carrier.payloadKey);
 
-    // Consider a payload-less trace that reaches a stage with `Payload = ApplicationEmpty`.
-    // Both transport zero bytes, but ordinary helper calls still use ApplicationEmpty values.
-    // Keep that nominal reference until normal empty-type legalization removes it; casting the
-    // carrier to a different source empty type would incorrectly imply physical payload storage.
     SLANG_RELEASE_ASSERT(isEmptyType(payloadType));
-    if (as<IRVoidType>(payloadType))
-    {
-        // Unlike a pointer to an empty struct, void* is an opaque pointer and remains legal
-        // after empty-type legalization. It carries no payload address: allocating/storing a
-        // void local would create invalid IR that the emitter cannot turn into native storage.
-        return builder.getNullPtrValue(builder.getPtrType(payloadType, AddressSpace::ThreadLocal));
-    }
-    auto value = builder.emitVar(payloadType);
-    builder.emitStore(value, builder.emitDefaultConstruct(payloadType));
-    return value;
+    return getStageDataReference(builder, nullptr, payloadType);
 }
 
 namespace
@@ -92,7 +101,8 @@ bool isBuiltinAttributeView(IRInst* operation)
 
 enum class ParameterKind
 {
-    RayData,
+    Data,
+    HitAttributes,
     Distance,
     HitKind,
     Barycentrics,
@@ -114,8 +124,12 @@ enum class ParameterKind
     Record,
     Descriptor,
     Records,
+    MinDistance,
+    RayTime,
+    RayFlags,
     DispatchIndex,
     DispatchDimensions,
+    GlobalResources,
 };
 
 struct ParameterInfo
@@ -131,8 +145,7 @@ struct ParameterInfo
 List<ParameterInfo> getVisibleParameters(
     IRBuilder& builder,
     const StageRequirements& requirements,
-    IRType* descriptorPointerType,
-    IRType* instancePathParamType)
+    IRType* descriptorPointerType)
 {
     List<ParameterInfo> result;
     auto floatType = builder.getFloatType();
@@ -144,9 +157,14 @@ List<ParameterInfo> getVisibleParameters(
         builder.getIntValue(builder.getIntType(), 3),
         builder.getIntValue(builder.getIntType(), kMatrixLayoutMode_RowMajor));
     result.add(
-        {ParameterKind::RayData,
+        {ParameterKind::Data,
          builder.getPtrType(builder.getVoidType(), AddressSpace::ThreadLocal),
-         "rayData"});
+         "payload"});
+    if (requirements.has(MetalRTStageRequirement::HitAttributes))
+        result.add(
+            {ParameterKind::HitAttributes,
+             builder.getPtrType(builder.getVoidType(), AddressSpace::ThreadLocal),
+             "attributes"});
     if (requirements.has(MetalRTStageRequirement::Distance) ||
         requirements.has(MetalRTStageRequirement::ObjectSpaceRay))
         result.add(
@@ -212,13 +230,13 @@ List<ParameterInfo> getVisibleParameters(
     if (requirements.has(MetalRTStageRequirement::InstanceIndexAtLevel))
         result.add(
             {ParameterKind::InstanceIndices,
-             instancePathParamType,
+             builder.getPtrType(uintType, AddressSpace::ThreadLocal),
              "instanceIndices",
              kIROp_MetalRTGetInstanceIndex});
     if (requirements.has(MetalRTStageRequirement::InstanceIDAtLevel))
         result.add(
             {ParameterKind::InstanceIDs,
-             instancePathParamType,
+             builder.getPtrType(uintType, AddressSpace::ThreadLocal),
              "instanceIDs",
              kIROp_MetalRTGetInstanceID});
     if (requirements.has(MetalRTStageRequirement::ObjectSpaceRay))
@@ -245,6 +263,26 @@ List<ParameterInfo> getVisibleParameters(
              "recordData"});
     if (requirements.has(MetalRTStageRequirement::CallableDispatch))
         result.add({ParameterKind::Descriptor, descriptorPointerType, "descriptorResources"});
+    result.add({ParameterKind::MinDistance, floatType, "minDistance", kIROp_MetalRTGetMinDistance});
+    result.add({ParameterKind::RayTime, floatType, "rayTime", kIROp_MetalRTGetRayTime});
+    result.add({ParameterKind::RayFlags, uintType, "rayFlags", kIROp_MetalRTGetRayFlags});
+    auto uint3 = builder.getVectorType(uintType, 3);
+    result.add(
+        {ParameterKind::DispatchIndex,
+         uint3,
+         "dispatchRaysIndex",
+         kIROp_MetalRTGetDispatchRaysIndex});
+    result.add(
+        {ParameterKind::DispatchDimensions,
+         uint3,
+         "dispatchRaysDimensions",
+         kIROp_MetalRTGetDispatchRaysDimensions});
+    result.add(
+        {ParameterKind::Records, builder.getPtrType(uintType, AddressSpace::Global), "records"});
+    result.add(
+        {ParameterKind::GlobalResources,
+         builder.getPtrType(builder.getUInt8Type(), AddressSpace::ThreadLocal),
+         "globalResources"});
     return result;
 }
 
@@ -256,34 +294,39 @@ List<ParameterInfo> getCallableParameters(
     const StageRequirements& requirements,
     IRType* descriptorPointerType)
 {
+    SLANG_RELEASE_ASSERT(
+        requirements.dispatchRaysIndex && requirements.dispatchRaysDimensions &&
+        requirements.has(MetalRTStageRequirement::Record) &&
+        requirements.has(MetalRTStageRequirement::CallableDispatch));
     List<ParameterInfo> result;
     result.add(
-        {ParameterKind::RayData,
+        {ParameterKind::Data,
          builder.getPtrType(builder.getVoidType(), AddressSpace::ThreadLocal),
          "data"});
     auto uint3 = builder.getVectorType(builder.getUIntType(), 3);
-    if (requirements.dispatchRaysIndex)
-        result.add(
-            {ParameterKind::DispatchIndex,
-             uint3,
-             "dispatchRaysIndex",
-             kIROp_MetalRTGetDispatchRaysIndex});
-    if (requirements.dispatchRaysDimensions)
-        result.add(
-            {ParameterKind::DispatchDimensions,
-             uint3,
-             "dispatchRaysDimensions",
-             kIROp_MetalRTGetDispatchRaysDimensions});
-    if (requirements.has(MetalRTStageRequirement::Record))
-        result.add(
-            {ParameterKind::Record,
-             builder.getPtrType(builder.getUInt8Type(), AddressSpace::Global),
-             "recordData"});
+    result.add(
+        {ParameterKind::DispatchIndex,
+         uint3,
+         "dispatchRaysIndex",
+         kIROp_MetalRTGetDispatchRaysIndex});
+    result.add(
+        {ParameterKind::DispatchDimensions,
+         uint3,
+         "dispatchRaysDimensions",
+         kIROp_MetalRTGetDispatchRaysDimensions});
+    result.add(
+        {ParameterKind::Record,
+         builder.getPtrType(builder.getUInt8Type(), AddressSpace::Global),
+         "recordData"});
     result.add({ParameterKind::Descriptor, descriptorPointerType, "descriptorResources"});
     result.add(
         {ParameterKind::Records,
          builder.getPtrType(builder.getUIntType(), AddressSpace::Global),
          "records"});
+    result.add(
+        {ParameterKind::GlobalResources,
+         builder.getPtrType(builder.getUInt8Type(), AddressSpace::ThreadLocal),
+         "globalResources"});
     return result;
 }
 
@@ -302,18 +345,6 @@ void emitInvoke(IRBuilder& builder, IRFunc* invoke)
     else
         input = builder.emitDefaultConstruct(type);
     builder.emitCallInst(invoke->getResultType(), invoke, 1, &input);
-}
-
-/// Loads a field whose presence was decided when the descriptor created its canonical carrier.
-void bindCarrierField(
-    IRBuilder& builder,
-    Dictionary<IROp, IRInst*>& values,
-    IRInst* carrier,
-    IRStructKey* key,
-    IROp operation)
-{
-    if (key)
-        values.add(operation, builder.emitLoad(builder.emitFieldAddress(carrier, key)));
 }
 
 } // namespace
@@ -367,97 +398,47 @@ void collectStageInputOperations(IRFunc* invoke, List<IRInst*>& operations)
             operations.add(operation);
 }
 
-StageRequirements collectStageRequirements(IRFunc* invoke, bool multiLevel)
+StageRequirements getStageContractRequirements(Stage stage, bool multiLevel)
 {
     StageRequirements result;
-    if (!invoke)
+    result.add(MetalRTStageRequirement::Record);
+    result.add(MetalRTStageRequirement::CallableDispatch);
+    result.dispatchRaysIndex = true;
+    result.dispatchRaysDimensions = true;
+    if (stage == Stage::Callable)
         return result;
-    HashSet<IRFunc*> visited;
-    List<IRInst*> operations;
-    collectOperations(invoke, visited, operations);
-    for (auto operation : operations)
+
+    result.minDistance = true;
+    result.rayTime = true;
+    result.rayFlags = true;
+    result.add(MetalRTStageRequirement::Distance);
+    result.add(MetalRTStageRequirement::WorldSpaceOrigin);
+    result.add(MetalRTStageRequirement::WorldSpaceDirection);
+    if (stage == Stage::Miss)
+        return result;
+
+    SLANG_RELEASE_ASSERT(
+        stage == Stage::ClosestHit || stage == Stage::AnyHit || stage == Stage::Intersection);
+    result.add(MetalRTStageRequirement::HitAttributes);
+    result.add(MetalRTStageRequirement::TriangleBarycentricCoord);
+    result.add(MetalRTStageRequirement::TriangleFrontFacing);
+    result.add(MetalRTStageRequirement::CurveParameter);
+    result.add(MetalRTStageRequirement::HitKind);
+    result.add(MetalRTStageRequirement::PrimitiveIndex);
+    result.add(MetalRTStageRequirement::GeometryIndex);
+    result.add(MetalRTStageRequirement::ObjectSpaceRay);
+    result.add(MetalRTStageRequirement::ObjectToWorld);
+    result.add(MetalRTStageRequirement::WorldToObject);
+    if (multiLevel)
     {
-        switch (operation->getOp())
-        {
-        case kIROp_PortableRTGetRecord:
-            if (!isEmptyType(operation->getDataType()))
-                result.add(MetalRTStageRequirement::Record);
-            break;
-        case kIROp_PortableRTGetHitAttributes:
-            if (!isBuiltinAttributeView(operation))
-                result.add(MetalRTStageRequirement::HitAttributes);
-            break;
-        case kIROp_PortableRTGetTriangleBarycentricCoord:
-            result.add(MetalRTStageRequirement::TriangleBarycentricCoord);
-            break;
-        case kIROp_PortableRTGetCurveParameter:
-            result.add(MetalRTStageRequirement::CurveParameter);
-            break;
-        case kIROp_MetalRTGetTriangleFrontFacing:
-            result.add(MetalRTStageRequirement::TriangleFrontFacing);
-            break;
-        case kIROp_MetalRTGetMinDistance:
-            result.minDistance = true;
-            break;
-        case kIROp_MetalRTGetRayTime:
-            result.rayTime = true;
-            break;
-        case kIROp_MetalRTGetRayFlags:
-            result.rayFlags = true;
-            break;
-        case kIROp_MetalRTGetDispatchRaysIndex:
-            result.dispatchRaysIndex = true;
-            break;
-        case kIROp_MetalRTGetDispatchRaysDimensions:
-            result.dispatchRaysDimensions = true;
-            break;
-        case kIROp_MetalRTGetCurrentDistance:
-            result.add(MetalRTStageRequirement::Distance);
-            break;
-        case kIROp_MetalRTGetHitKind:
-            result.add(MetalRTStageRequirement::HitKind);
-            break;
-        case kIROp_MetalRTGetWorldSpaceOrigin:
-            result.add(MetalRTStageRequirement::WorldSpaceOrigin);
-            break;
-        case kIROp_MetalRTGetWorldSpaceDirection:
-            result.add(MetalRTStageRequirement::WorldSpaceDirection);
-            break;
-        case kIROp_MetalRTGetPrimitiveIndex:
-            result.add(MetalRTStageRequirement::PrimitiveIndex);
-            break;
-        case kIROp_MetalRTGetGeometryIndex:
-            result.add(MetalRTStageRequirement::GeometryIndex);
-            break;
-        case kIROp_MetalRTGetInstanceCount:
-            result.add(MetalRTStageRequirement::InstanceCount);
-            break;
-        case kIROp_MetalRTGetInstanceIndex:
-            result.add(
-                multiLevel ? MetalRTStageRequirement::InstanceIndexAtLevel
-                           : MetalRTStageRequirement::InstanceIndex);
-            break;
-        case kIROp_MetalRTGetInstanceID:
-            result.add(
-                multiLevel ? MetalRTStageRequirement::InstanceIDAtLevel
-                           : MetalRTStageRequirement::InstanceID);
-            break;
-        case kIROp_MetalRTGetObjectSpaceRay:
-            result.add(MetalRTStageRequirement::ObjectSpaceRay);
-            result.minDistance = true;
-            break;
-        case kIROp_MetalRTGetObjectToWorld:
-            result.add(MetalRTStageRequirement::ObjectToWorld);
-            break;
-        case kIROp_MetalRTGetWorldToObject:
-            result.add(MetalRTStageRequirement::WorldToObject);
-            break;
-        case kIROp_MetalRTCallShader:
-            result.add(MetalRTStageRequirement::CallableDispatch);
-            break;
-        default:
-            break;
-        }
+        result.add(MetalRTStageRequirement::InstanceCount);
+        result.add(MetalRTStageRequirement::InstanceIndexAtLevel);
+        result.add(MetalRTStageRequirement::InstanceIDAtLevel);
+    }
+    else
+    {
+        result.add(MetalRTStageRequirement::InstanceIndex);
+        result.add(MetalRTStageRequirement::InstanceID);
     }
     return result;
 }
@@ -465,12 +446,10 @@ StageRequirements collectStageRequirements(IRFunc* invoke, bool multiLevel)
 IRFuncType* getVisibleFunctionSignature(
     IRBuilder& builder,
     const StageRequirements& requirements,
-    IRType* descriptorPointerType,
-    IRType* instancePathParamType)
+    IRType* descriptorPointerType)
 {
     List<IRType*> types;
-    for (auto parameter :
-         getVisibleParameters(builder, requirements, descriptorPointerType, instancePathParamType))
+    for (auto parameter : getVisibleParameters(builder, requirements, descriptorPointerType))
         types.add(parameter.type);
     return builder.getFuncType(types, builder.getVoidType());
 }
@@ -490,21 +469,16 @@ VisibleAdapter createVisibleAdapter(
     IRModule* module,
     const SchemaStage& stage,
     const StageRequirements& tableRequirements,
-    const RayData& carrier,
     UnownedStringSlice symbolName,
-    IRType* descriptorPointerType,
-    IRType* instancePathParamType)
+    IRType* descriptorPointerType)
 {
     SLANG_RELEASE_ASSERT(stage.stage == Stage::ClosestHit || stage.stage == Stage::Miss);
     IRBuilder builder(module);
     builder.setInsertInto(module->getModuleInst());
     VisibleAdapter result;
     result.function = builder.createFunc();
-    auto functionType = getVisibleFunctionSignature(
-        builder,
-        tableRequirements,
-        descriptorPointerType,
-        instancePathParamType);
+    auto functionType =
+        getVisibleFunctionSignature(builder, tableRequirements, descriptorPointerType);
     result.function->setFullType(functionType);
     builder.addNameHintDecoration(result.function, symbolName);
     builder.addExportDecoration(result.function, symbolName);
@@ -524,14 +498,12 @@ VisibleAdapter createVisibleAdapter(
     builder.emitBlock();
     Dictionary<ParameterKind, IRInst*> parameters;
     Dictionary<IROp, IRInst*> values;
-    for (auto parameter : getVisibleParameters(
-             builder,
-             tableRequirements,
-             descriptorPointerType,
-             instancePathParamType))
+    for (auto parameter : getVisibleParameters(builder, tableRequirements, descriptorPointerType))
     {
         auto value = builder.emitParam(parameter.type);
         builder.addNameHintDecoration(value, UnownedTerminatedStringSlice(parameter.name));
+        if (parameter.kind == ParameterKind::GlobalResources)
+            builder.addDecoration(value, kIROp_MetalRTGlobalResourceContextDecoration);
         parameters.add(parameter.kind, value);
         if (parameter.operation != kIROp_Invalid)
             values.add(parameter.operation, value);
@@ -543,32 +515,9 @@ VisibleAdapter createVisibleAdapter(
         return result;
     }
     SLANG_RELEASE_ASSERT(stage.invoke && stage.input);
-    auto rayData = builder.emitBitCast(
-        builder.getPtrType(carrier.type, AddressSpace::ThreadLocal),
-        parameters.getValue(ParameterKind::RayData));
-    bindCarrierField(builder, values, rayData, carrier.minDistanceKey, kIROp_MetalRTGetMinDistance);
-    bindCarrierField(builder, values, rayData, carrier.rayTimeKey, kIROp_MetalRTGetRayTime);
-    bindCarrierField(builder, values, rayData, carrier.rayFlagsKey, kIROp_MetalRTGetRayFlags);
-    bindCarrierField(
-        builder,
-        values,
-        rayData,
-        carrier.dispatchRaysIndexKey,
-        kIROp_MetalRTGetDispatchRaysIndex);
-    bindCarrierField(
-        builder,
-        values,
-        rayData,
-        carrier.dispatchRaysDimensionsKey,
-        kIROp_MetalRTGetDispatchRaysDimensions);
     if (auto descriptor = parameters.tryGetValue(ParameterKind::Descriptor))
         result.descriptorResources = *descriptor;
-    if (carrier.header && carrier.headerKey && carrier.header->recordsKey)
-    {
-        auto header = builder.emitFieldAddress(rayData, carrier.headerKey);
-        result.records =
-            builder.emitLoad(builder.emitFieldAddress(header, carrier.header->recordsKey));
-    }
+    result.records = parameters.getValue(ParameterKind::Records);
 
     HashSet<IRFunc*> visited;
     List<IRInst*> operations;
@@ -580,10 +529,9 @@ VisibleAdapter createVisibleAdapter(
         auto type = operation->getDataType();
         IRInst* value = nullptr;
         if (op == kIROp_PortableRTGetPayload)
-            value = getRayPayloadReference(
+            value = getStageDataReference(
                 builder,
-                carrier,
-                rayData,
+                parameters.getValue(ParameterKind::Data),
                 cast<IRPtrTypeBase>(type)->getValueType());
         else if (auto bound = values.tryGetValue(op))
             value = *bound;
@@ -609,8 +557,10 @@ VisibleAdapter createVisibleAdapter(
                 value = builder.emitDefaultConstruct(type);
             else
             {
-                auto key = carrier.customAttributeKeys.getValue(type);
-                value = builder.emitLoad(builder.emitFieldAddress(rayData, key));
+                value = builder.emitLoad(getStageDataReference(
+                    builder,
+                    parameters.getValue(ParameterKind::HitAttributes),
+                    type));
             }
         }
         else if (op == kIROp_MetalRTGetObjectSpaceRay)
@@ -624,16 +574,6 @@ VisibleAdapter createVisibleAdapter(
         }
         if (value && seen.add({op, type}))
             result.bindings.add({op, type, value});
-    }
-    if (getBuiltinRole(stage.input->getPrimitiveType()) ==
-            KnownBuiltinDeclName::RayTracingBoundingBoxPrimitive &&
-        carrier.customHitKindKey)
-    {
-        auto hitKind =
-            builder.emitLoad(builder.emitFieldAddress(rayData, carrier.customHitKindKey));
-        for (auto& binding : result.bindings)
-            if (binding.op == kIROp_MetalRTGetHitKind)
-                binding.value = hitKind;
     }
     emitInvoke(builder, stage.invoke);
     builder.emitReturn();
@@ -677,31 +617,18 @@ VisibleAdapter createCallableAdapter(
     {
         auto value = builder.emitParam(parameter.type);
         builder.addNameHintDecoration(value, UnownedTerminatedStringSlice(parameter.name));
+        if (parameter.kind == ParameterKind::GlobalResources)
+            builder.addDecoration(value, kIROp_MetalRTGlobalResourceContextDecoration);
         parameters.add(parameter.kind, value);
         if (parameter.operation != kIROp_Invalid)
             values.add(parameter.operation, value);
     }
     result.descriptorResources = parameters.getValue(ParameterKind::Descriptor);
     result.records = parameters.getValue(ParameterKind::Records);
-    auto dataType = stage.input->getPayloadType();
-    IRInst* data;
-    if (as<IRVoidType>(dataType))
-    {
-        // A kept generic helper may still take the nominal void reference. It has no storage,
-        // so use a typed null pointer rather than producing an invalid void local/store.
-        data = builder.getNullPtrValue(builder.getPtrType(dataType, AddressSpace::ThreadLocal));
-    }
-    else if (isEmptyType(dataType))
-    {
-        // The source view has no bits. Preserve its nominal reference for ordinary helper calls;
-        // empty-type legalization removes that reference without dereferencing the erased ABI.
-        data = builder.emitVar(dataType);
-        builder.emitStore(data, builder.emitDefaultConstruct(dataType));
-    }
-    else
-        data = builder.emitBitCast(
-            builder.getPtrType(dataType, AddressSpace::ThreadLocal),
-            parameters.getValue(ParameterKind::RayData));
+    auto data = getStageDataReference(
+        builder,
+        parameters.getValue(ParameterKind::Data),
+        stage.input->getPayloadType());
     values.add(kIROp_PortableRTGetCallableData, data);
     HashSet<IRFunc*> visited;
     List<IRInst*> operations;
@@ -768,7 +695,6 @@ void lowerVisibleStageInputs(IRModule* module, const List<VisibleAdapter>& adapt
             if (operation->getOp() == key.key.key && operation->getDataType() == key.key.value)
                 queries.add(operation);
         }
-        IRFunc* pathElement = nullptr;
         for (auto operation : queries)
         {
             if (operation->getOp() != kIROp_MetalRTGetInstanceIndex &&
@@ -786,18 +712,14 @@ void lowerVisibleStageInputs(IRModule* module, const List<VisibleAdapter>& adapt
             }
             else
             {
+                // MultiLevelAccelerationStructure<1> has an empty path and works on targets
+                // predating Metal's array_ref type. All multilevel VFTs therefore pass plain
+                // thread pointers plus a count, while native traversal owns their storage.
                 IRBuilder builder(module);
-                if (!pathElement)
-                {
-                    SLANG_RELEASE_ASSERT(
-                        value->getDataType()->getOp() == kIROp_MetalRTInstancePath);
-                    pathElement =
-                        createInstancePathOperation(module, InstancePathOperation::Element);
-                }
+                SLANG_RELEASE_ASSERT(as<IRPtrType>(value->getDataType()));
                 builder.setInsertBefore(operation);
-                IRInst* arguments[] = {value, operation->getOperand(0)};
                 operation->replaceUsesWith(
-                    builder.emitCallInst(operation->getDataType(), pathElement, 2, arguments));
+                    builder.emitLoad(builder.emitGetOffsetPtr(value, operation->getOperand(0))));
             }
             operation->removeAndDeallocate();
         }

@@ -10,9 +10,8 @@ namespace Slang
 /// are not Apple's MTLIntersectionFunctionSignature values; reflection must translate explicitly.
 using MetalRTTag = slang::MetalRayTracingTag;
 
-/// Records the union of inputs used by functions sharing a visible-function table signature.
-/// For example, if one closest-hit reads barycentrics, every function in that table accepts the
-/// barycentric parameter, but functions that do not read it need not consume its value.
+/// Identifies the inputs in each stage's fixed visible-function signature. Every provider accepts
+/// the contract's inputs, including values its implementation does not read.
 using MetalRTStageRequirement = slang::MetalRayTracingStageRequirement;
 
 /// Selects the native geometry annotation or an intersector geometry assumption. Unknown means
@@ -28,6 +27,8 @@ enum class MetalRTDescriptorResource : UInt
     ClosestHitVisibleFunctionTable = 2,
     CallableVisibleFunctionTable = 3,
     Records = 4,
+    AnyHitVisibleFunctionTable = 5,
+    IntersectionVisibleFunctionTable = 6,
     Count,
 };
 
