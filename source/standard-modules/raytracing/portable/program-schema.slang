@@ -14,18 +14,21 @@ public interface IHitGroup
     /// @par Constraints
     /// Must conform to `IHitContext`. Each of `ClosestHit.Context`, `AnyHit.Context`, and
     /// `Intersection.Context` must equal this type.
+    [KnownBuiltin("RayTracingHitGroupContext")]
     associatedtype Context : IHitContext;
 
     /// Selects the closest-hit implementation, or `NoClosestHit<Context>` to omit that stage.
     ///
     /// @par Constraints
     /// Must conform to `IClosestHitShader`, with `ClosestHit.Context == Context`.
+    [KnownBuiltin("RayTracingHitGroupClosestHit")]
     associatedtype ClosestHit : IClosestHitShader;
 
     /// Selects the any-hit implementation, or `NoAnyHit<Context>` to omit that stage.
     ///
     /// @par Constraints
     /// Must conform to `IAnyHitShader`, with `AnyHit.Context == Context`.
+    [KnownBuiltin("RayTracingHitGroupAnyHit")]
     associatedtype AnyHit : IAnyHitShader;
 
     /// Selects a procedural intersection implementation or the hardware-intersection placeholder.
@@ -34,6 +37,7 @@ public interface IHitGroup
     /// Must conform to `IIntersectionStage`, with `Intersection.Context == Context`. Procedural
     /// implementations conform to `IIntersectionShader`; hardware-intersected primitives use
     /// `NoIntersection<Context>`.
+    [KnownBuiltin("RayTracingHitGroupIntersection")]
     associatedtype Intersection : IIntersectionStage;
     __constraint ClosestHit.Context == Context;
     __constraint AnyHit.Context == Context;
@@ -100,6 +104,7 @@ public interface ICallableShaderList
 ///
 /// @par Constraints
 /// Every type in `Group` must conform to `IHitGroup`. This list conforms to `IHitGroupList`.
+[KnownBuiltin("RayTracingHitGroupList")]
 public struct HitGroupList<each Group> : IHitGroupList
     where expand each Group : IHitGroup
 {
@@ -119,6 +124,7 @@ public struct HitGroupList<each Group> : IHitGroupList
 ///
 /// @par Constraints
 /// Every type in `Shader` must conform to `IMissShader`. This list conforms to `IMissShaderList`.
+[KnownBuiltin("RayTracingMissShaderList")]
 public struct MissShaderList<each Shader> : IMissShaderList
     where expand each Shader : IMissShader
 {
@@ -137,6 +143,7 @@ public struct MissShaderList<each Shader> : IMissShaderList
 /// @par Constraints
 /// Every type in `Shader` must conform to `ICallableShader`. This list conforms to
 /// `ICallableShaderList`.
+[KnownBuiltin("RayTracingCallableShaderList")]
 public struct CallableShaderList<each Shader> : ICallableShaderList
     where expand each Shader : ICallableShader
 {
@@ -176,6 +183,7 @@ public interface ITraceProgramSchema
     ///
     /// @par Constraints
     /// Must conform to `ITraceContext`.
+    [KnownBuiltin("RayTracingProgramTraceContext")]
     associatedtype TraceContext : ITraceContext;
 
     /// Selects the finite list of hit groups available to this program.

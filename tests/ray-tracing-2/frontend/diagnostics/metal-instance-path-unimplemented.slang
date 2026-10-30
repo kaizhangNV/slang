@@ -17,34 +17,29 @@ struct HitContext : rt::IHitContext
     typealias Record = void;
 }
 
-// Exported helpers reach the pending getters during ordinary library code generation, without
-// selecting a structural entry point whose separate unimplemented-adapter diagnostic would hide
-// these assertions. All three public operations must fail instead of producing placeholder IDs.
-// The packaged library reports errors and call notes without source locations; keep each
-// message check beside the corresponding call.
+// These exported helpers have no selected stage/schema to supply an instance path. Keep source
+// and module compilation legal, but diagnose native emission instead of inventing placeholder
+// IDs or letting an unbound logical getter reach the emitter.
 [require(metal, portable_raytracing_closesthit)]
 export uint readInstanceCount(rt::ClosestHitInput<HitContext> input)
 {
     return input.instanceCount;
-//CHECK: error E41400
-//CHECK: Metal structural ray-tracing instanceCount requires compiler synthesis
-//CHECK: see call to 'rt.ClosestHitInput.instanceCount.get'
+//CHECK: operation 'metalRTGetInstanceCount' in an exported helper has no invocation state provider
+//CHECK: Metal ray-tracing operation has no stage invocation ABI
 }
 
 [require(metal, portable_raytracing_anyhit)]
 export uint readInstanceIndex(rt::AnyHitInput<HitContext> input, uint level)
 {
     return input.getInstanceIndex(level);
-//CHECK: error E41400
-//CHECK: Metal structural ray-tracing getInstanceIndex requires compiler synthesis
-//CHECK: see call to 'rt.AnyHitInput.getInstanceIndex'
+//CHECK: operation 'metalRTGetInstanceIndex' in an exported helper has no invocation state provider
+//CHECK: Metal ray-tracing operation has no stage invocation ABI
 }
 
 [require(metal, portable_raytracing_intersection)]
 export uint readInstanceID(rt::IntersectionInput<HitContext> input, uint level)
 {
     return input.getInstanceID(level);
-//CHECK: error E41400
-//CHECK: Metal structural ray-tracing getInstanceID requires compiler synthesis
-//CHECK: see call to 'rt.IntersectionInput.getInstanceID'
+//CHECK: operation 'metalRTGetInstanceID' in an exported helper has no invocation state provider
+//CHECK: Metal ray-tracing operation has no stage invocation ABI
 }

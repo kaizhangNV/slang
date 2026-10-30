@@ -4,6 +4,7 @@
 #include "core/slang-basic.h"
 #include "slang-compiler.h"
 #include "slang-profile.h"
+#include "slang-reflection-portable-ray-tracing.h"
 #include "slang-syntax.h"
 #include "slang.h"
 
@@ -1181,6 +1182,14 @@ public:
     // Layout for any results of the entry point
     RefPtr<VarLayout> resultLayout;
 
+    /// The compiler-provided ConstantBuffer<Record> binding for a selected portable RT stage.
+    ///
+    /// The same layout appears as an anonymous entry-point parameter for ordinary reflection.
+    /// It has no source variable: input.record is a property, not a user-declared parameter.
+    /// Keeping this layout also lets adapter synthesis consume the binding allocated before
+    /// code generation instead of inventing another register or another application-data layout.
+    RefPtr<VarLayout> portableRTRecordLayout;
+
     enum Flag : unsigned
     {
         usesAnySampleRateInput = 0x1,
@@ -1258,6 +1267,9 @@ public:
     // and any entry-point-specific parameter data
     // will (eventually) belong there...
     List<RefPtr<EntryPointLayout>> entryPoints;
+
+    /// Checked source schemas are immutable views, independent of target-code generation.
+    PortableRT::SchemaReflectionCache portableRTSchemas;
 
     /// Reflection information on (unspecialized) specialization parameters.
     List<RefPtr<SpecializationParamLayout>> specializationParams;

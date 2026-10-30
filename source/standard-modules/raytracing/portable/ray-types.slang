@@ -30,6 +30,7 @@ public interface IEnabledRayMotion : IRayMotion {}
 /// @par Constraints
 /// Conforms to `IRayMotion`, but not `IEnabledRayMotion`, so hit and miss inputs do not expose
 /// `time` for this motion model.
+[KnownBuiltin("RayTracingNoMotion")]
 public struct NoMotion : IRayMotion {}
 
 /// Selects Metal primitive motion without moving acceleration-structure instances.
@@ -37,6 +38,7 @@ public struct NoMotion : IRayMotion {}
 /// @par Constraints
 /// Conforms to `IEnabledRayMotion` and requires Metal library version 2.4 or later.
 [require(metallib_2_4)]
+[KnownBuiltin("RayTracingPrimitiveMotion")]
 public struct PrimitiveMotion : IEnabledRayMotion {}
 
 /// Selects instance motion and passes `RayTraversalDesc.time` to native traversal.
@@ -48,6 +50,7 @@ public struct PrimitiveMotion : IEnabledRayMotion {}
 /// @par Constraints
 /// Conforms to `IEnabledRayMotion` and requires `portable_raytracing_instance_motion`.
 [require(portable_raytracing_instance_motion)]
+[KnownBuiltin("RayTracingInstanceMotion")]
 public struct InstanceMotion : IEnabledRayMotion {}
 
 /// Selects Metal traversal with both primitive and instance motion enabled.
@@ -55,6 +58,7 @@ public struct InstanceMotion : IEnabledRayMotion {}
 /// @par Constraints
 /// Conforms to `IEnabledRayMotion` and requires Metal library version 2.4 or later.
 [require(metallib_2_4)]
+[KnownBuiltin("RayTracingPrimitiveAndInstanceMotion")]
 public struct PrimitiveAndInstanceMotion : IEnabledRayMotion {}
 
 /// Describes a ray origin, interval, and direction.
@@ -238,6 +242,7 @@ internal interface IMultiLevelAccelerationStructure : IAccelerationStructure
 /// language-level range constraint; the caller must select a depth supported by Metal.
 [require(metal)]
 __intrinsic_type(RaytracingAccelerationStructure)
+[KnownBuiltin("RayTracingMultiLevelAccelerationStructure")]
 public struct MultiLevelAccelerationStructure<let maxLevelCount : int>
     : IMultiLevelAccelerationStructure
 {
@@ -249,6 +254,11 @@ public struct MultiLevelAccelerationStructure<let maxLevelCount : int>
     /// does not describe the actual path length of a particular hit.
     public static const uint levelCount = maxLevelCount;
 }
+
+/// Reads candidate or committed triangle orientation from the current Metal invocation.
+[require(metal, portable_raytracing_anyhit_closesthit)]
+__intrinsic_op(metalRTGetTriangleFrontFacing)
+internal bool __metalRTGetTriangleFrontFacing();
 
 /// Exposes the built-in attributes of a triangle hit as a zero-storage property view.
 ///
@@ -263,10 +273,12 @@ public struct TriangleData
     /// any-hit and closest-hit stages. The coordinates describe built-in triangle intersection
     /// state, rather than application-defined procedural attributes.
     ///
-    /// @todo A following PR must connect this getter to native hit attributes or Metal stage state.
+    /// Native adapters read this value from their triangle hit attributes. Metal adapters obtain
+    /// it from candidate or committed-hit state.
     [require(portable_raytracing_anyhit_closesthit)]
     public property float2 barycentricCoord
     {
+        __intrinsic_op(portableRTGetTriangleBarycentricCoord)
         get;
     }
 
@@ -276,7 +288,7 @@ public struct TriangleData
     /// Requires `portable_raytracing_anyhit_closesthit`, so access is available only in supported
     /// any-hit and closest-hit stages. Reads built-in triangle state for the current hit.
     ///
-    /// @todo A following PR must synthesize Metal's candidate or committed-hit facing value.
+    /// Metal adapters supply candidate or committed-hit facing state independently of barycentrics.
     [require(portable_raytracing_anyhit_closesthit)]
     public property bool frontFacing
     {
@@ -290,12 +302,7 @@ public struct TriangleData
             case cuda:
                 return HitKind() == HIT_KIND_TRIANGLE_FRONT_FACE;
             case metal:
-                // TODO: A following PR must synthesize the candidate's [[front_facing]] input or
-                // the committed intersection result's triangle_front_facing value.
-                static_assert(
-                    false,
-                    "Metal structural ray-tracing frontFacing requires compiler synthesis");
-                return false; // Unreachable; required by return checking.
+                return __metalRTGetTriangleFrontFacing();
             }
         }
     }
@@ -315,10 +322,10 @@ public struct CurveData
     /// Uses a `float` and inherits `CurveData`'s Metal library version 3.1 requirement. The getter
     /// has no additional declared stage or numeric-range constraint.
     ///
-    /// @todo A following PR must synthesize this getter from Metal's candidate or committed curve
-    /// data.
+    /// Metal adapters supply this value from candidate or committed curve data.
     public property float parameter
     {
+        __intrinsic_op(portableRTGetCurveParameter)
         get;
     }
 }
@@ -336,6 +343,7 @@ public interface IIntersectionPrimitive
     /// This associated type has no conformance constraint. Built-in primitives select their
     /// zero-storage `TriangleData` or `CurveData` view; procedural primitives select the value
     /// type reported by their intersection shader.
+    [KnownBuiltin("RayTracingPrimitiveAttributes")]
     associatedtype Attributes;
 }
 
@@ -369,6 +377,7 @@ public interface ICustomIntersectionPrimitive : IIntersectionPrimitive {}
 ///
 /// @par Constraints
 /// Conforms to `IBuiltinIntersectionPrimitive`, so a matching hit group uses `NoIntersection`.
+[KnownBuiltin("RayTracingTrianglePrimitive")]
 public struct TrianglePrimitive : IBuiltinIntersectionPrimitive
 {
     /// Selects the built-in triangle attribute view for matching hit-stage inputs.
@@ -385,6 +394,7 @@ public struct TrianglePrimitive : IBuiltinIntersectionPrimitive
 /// Conforms to `IBuiltinIntersectionPrimitive`, so a matching hit group uses `NoIntersection`.
 /// Requires Metal library version 3.1 or later.
 [require(metallib_3_1)]
+[KnownBuiltin("RayTracingCurvePrimitive")]
 public struct CurvePrimitive : IBuiltinIntersectionPrimitive
 {
     /// Selects the built-in curve attribute view for matching hit-stage inputs.
@@ -406,6 +416,7 @@ public struct CurvePrimitive : IBuiltinIntersectionPrimitive
 /// @par Constraints
 /// Conforms to `ICustomIntersectionPrimitive`. A matching hit group must supply an intersection
 /// shader; `NoIntersection` requires a built-in primitive and cannot be selected for this type.
+[KnownBuiltin("RayTracingBoundingBoxPrimitive")]
 public struct BoundingBoxPrimitive<CustomAttributes> : ICustomIntersectionPrimitive
 {
     /// Selects the application-defined attributes reported by the intersection shader.

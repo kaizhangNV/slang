@@ -8,8 +8,8 @@ namespace rt
 /// The wrapper passes this value to the ordinary payload overload. For example,
 /// `tracer.trace(desc, scene, program)` forwards an `EmptyTracePayload` as its fourth argument.
 /// Application shaders can keep their own empty payload types; they do not name this internal type.
-/// TODO: Post-link lowering must normalize empty payload representations across trace calls and
-/// their reached stages before generating native code.
+/// Post-link lowering normalizes empty payload representations across trace calls and their
+/// reached stages before generating native code.
 internal struct EmptyTracePayload
 {}
 
@@ -35,7 +35,6 @@ internal struct EmptyTracePayload
 /// @param[in,out] payload Payload storage read and updated by the selected shaders.
 /// @par Constraints
 /// Requires a Metal trace stage and `Schema.TraceContext.Motion == NoMotion`.
-/// @todo Lower this operation to Metal intersector dispatch in the backend adapter slice.
 [require(metal, portable_raytracing_trace)]
 __intrinsic_op(metalTraceRay)
 internal void __metalTraceRay<Schema, Payload>(
@@ -77,7 +76,6 @@ internal void __metalTraceRay<Schema, Payload>(
 /// @par Constraints
 /// Requires Metal 2.4 and a trace stage. `Schema.TraceContext.Motion : IEnabledRayMotion`
 /// admits primitive motion, instance motion, and their combination.
-/// @todo Lower this operation to Metal intersector dispatch in the backend adapter slice.
 [require(metallib_2_4, portable_raytracing_trace)]
 __intrinsic_op(metalTraceRay)
 internal void __metalTraceRayMotion<Schema, Payload>(
@@ -96,6 +94,21 @@ internal void __metalTraceRayMotion<Schema, Payload>(
     float time)
     where Schema : ITraceProgramSchema
     where Schema.TraceContext.Motion : IEnabledRayMotion;
+
+/// Emits a Metal callable dispatch while preserving the descriptor schema and mutable data type.
+///
+/// @tparam Schema Trace-program schema; must conform to `ITraceProgramSchema`.
+/// @tparam Data Callable data passed by reference to the selected callable stage.
+/// @param[in] descriptor Program and shader-record descriptor for the schema.
+/// @param[in] callableIndex Index of the runtime callable record to invoke.
+/// @param[in,out] data Storage shared with the selected callable invocation.
+[require(metal, portable_raytracing_call_shader)]
+__intrinsic_op(metalRTCallShader)
+internal void __metalRTCallShader<Schema, Data>(
+    TraceProgramDescriptor<Schema> descriptor,
+    uint callableIndex,
+    inout Data data)
+    where Schema : ITraceProgramSchema;
 
 /// Provides schema-typed structural trace and callable dispatch operations.
 ///
@@ -321,10 +334,7 @@ public extension<Schema> RayTracer<Schema>
         __target_switch
         {
         case metal:
-            // TODO: Lower this structural dispatch to a Metal visible-function-table call.
-            static_assert(
-                false,
-                "Metal structural ray-tracing callable dispatch requires compiler synthesis");
+            __metalRTCallShader(descriptor, callableIndex, data);
             break;
         default:
             CallShader(callableIndex, data);

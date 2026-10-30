@@ -611,4 +611,12 @@ if(
             $<TARGET_PROPERTY:slang-capability-defs,INTERFACE_INCLUDE_DIRECTORIES>
             $<TARGET_PROPERTY:slang-fiddle-output,INTERFACE_INCLUDE_DIRECTORIES>
     )
+    # A statically linked test has no compiler shared-library location from which to discover
+    # standard modules. Tests that import one use this build's packaged module root explicitly.
+    target_compile_definitions(
+        slang-static-unit-test
+        PRIVATE
+            SLANG_TEST_STANDARD_MODULE_PATH="${slang_BINARY_DIR}/$<CONFIG>/${SLANG_STANDARD_MODULE_INSTALL_DIR}"
+    )
+    add_dependencies(slang-static-unit-test slang-portable-raytracing-module)
 endif()

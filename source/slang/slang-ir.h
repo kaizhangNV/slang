@@ -2249,8 +2249,10 @@ public:
     // The structural ray-tracing stage and descriptor AST classes shift the sequential
     // `ASTNodeType` values, so version-37 modules would decode later nodes as different classes.
     // Version 38 also adds the trace-program descriptor and Metal trace IR instructions.
-    const static UInt k_minSupportedModuleVersion = 38;
-    const static UInt k_maxSupportedModuleVersion = 38;
+    // Version 39 preserves the ordinary RT requirement keys and schema/input metadata used by
+    // target adapter synthesis. Older modules do not carry these compiler-consumed contracts.
+    const static UInt k_minSupportedModuleVersion = 39;
+    const static UInt k_maxSupportedModuleVersion = 39;
     static_assert(k_minSupportedModuleVersion <= k_maxSupportedModuleVersion);
 
     /// Returns whether `version` is in the inclusive range this compiler can load.

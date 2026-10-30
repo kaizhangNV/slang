@@ -2,6 +2,7 @@
 
 #include "slang-ast-support-types.h"
 #include "slang-compiler-fwd.h"
+#include "slang-known-builtin-decl-name.h"
 #include "slang-profile.h"
 
 namespace Slang
@@ -71,6 +72,21 @@ bool isExecutableStageInterface(InterfaceDecl* interfaceDecl);
 
 /// Returns the stage named by the input struct's KnownBuiltin annotation, or Stage::Unknown.
 Stage getStageInputKind(AggTypeDecl* typeDecl);
+
+/// Returns the checked Context argument of a recognized stage-input type, or null otherwise.
+Type* getStageInputContextType(Type* inputType);
+
+/// Looks up a compiler-consumed associated-type role through canonical checked inheritance.
+/// The result may remain dependent on a generic or extern context until ordinary linking.
+Type* getAssociatedType(
+    Linkage* linkage,
+    ASTBuilder* astBuilder,
+    Type* owner,
+    KnownBuiltinDeclName role);
+
+/// Returns the concrete type pack of a checked shader list, or null for an unresolved list.
+/// A non-null pack with no elements represents an actual empty list.
+ConcreteTypePack* getConcreteEntryTypes(Type* entryListType);
 
 /// Returns this executable interface's `invoke` requirement, or null for other interfaces.
 FunctionDeclBase* getStageInvokeRequirement(InterfaceDecl* interfaceDecl);

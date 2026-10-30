@@ -71,6 +71,10 @@ struct RequiredLoweringPassSet
 
     /// Whether linked IR contains a SPIR-V ray-location operand that requires object resolution.
     bool rayTracingLocationOperand = false;
+    /// Whether portable invocation metadata requires target entry-point adapters.
+    bool portableRayTracing;
+    /// Whether target lowering must replace an opaque program descriptor representation.
+    bool traceProgramDescriptor;
     bool glslSSBO;
     bool byteAddressBuffer;
     bool dynamicResource;

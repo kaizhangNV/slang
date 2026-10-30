@@ -18,6 +18,7 @@ public interface ITraceContext
     /// Must conform to the sealed `IAccelerationStructure` interface. Select the portable
     /// `rt::AccelerationStructure` handle or a supported `MultiLevelAccelerationStructure<N>`.
     /// The selected type's target requirements also apply to this context.
+    [KnownBuiltin("RayTracingTraceAccelerationStructure")]
     associatedtype AccelerationStructure : IAccelerationStructure;
 
     /// Selects whether traversal uses a ray time and which geometry can move.
@@ -27,6 +28,7 @@ public interface ITraceContext
     /// `InstanceMotion`, or `PrimitiveAndInstanceMotion`; the selected type's target and version
     /// requirements apply to this context. Stage-input `time` additionally requires conformance
     /// to `IEnabledRayMotion`.
+    [KnownBuiltin("RayTracingTraceMotion")]
     associatedtype Motion : IRayMotion;
 }
 
@@ -48,6 +50,7 @@ public interface IStageContext
     /// Must conform to `ITraceContext`. When a stage belongs to a program schema, its trace
     /// context must equal the schema's `TraceContext`; conformance to this interface alone does
     /// not enforce that cross-stage equality.
+    [KnownBuiltin("RayTracingContextTraceContext")]
     associatedtype TraceContext : ITraceContext;
 
     /// Describes the host-supplied record bytes that this stage reads through `input.record`.
@@ -56,6 +59,7 @@ public interface IStageContext
     /// This associated type has no conformance constraint. Use `void` when the stage has no
     /// record data. For a non-void type, the application must supply matching record data using
     /// the target's record layout; this declaration does not validate the host allocation.
+    [KnownBuiltin("RayTracingContextRecord")]
     associatedtype Record;
 }
 
@@ -77,6 +81,7 @@ public interface IPayloadContext : IStageContext
     /// empty payload types. Intersection-stage access additionally requires
     /// `portable_raytracing_intersection_payload` (Metal or CUDA/OptiX). Empty structs are valid
     /// payload types; the target ABI determines their physical storage.
+    [KnownBuiltin("RayTracingContextPayload")]
     associatedtype Payload;
 }
 
@@ -94,6 +99,7 @@ public interface IHitContext : IPayloadContext
     /// additionally requires `ICustomIntersectionPrimitive`; `NoIntersection` instead requires
     /// `IBuiltinIntersectionPrimitive`. Those stage constraints restrict this selection when a
     /// hit group is assembled.
+    [KnownBuiltin("RayTracingContextPrimitive")]
     associatedtype Primitive : IIntersectionPrimitive;
 }
 
@@ -110,6 +116,7 @@ public interface ICallableContext : IStageContext
     /// @par Constraints
     /// This associated type has no conformance constraint. The argument passed to `callShader`
     /// and the receiving callable stage must use the same callable-data type.
+    [KnownBuiltin("RayTracingContextCallableData")]
     associatedtype CallableData;
 }
 

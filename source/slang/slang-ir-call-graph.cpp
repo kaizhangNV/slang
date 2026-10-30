@@ -8,7 +8,7 @@ namespace Slang
 
 void buildEntryPointReferenceGraph(
     Dictionary<IRInst*, HashSet<IRFunc*>>& referencingEntryPoints,
-    IRModule* module)
+    ArrayView<IRFunc*> roots)
 {
     struct WorkItem
     {
@@ -99,17 +99,27 @@ void buildEntryPointReferenceGraph(
         }
     };
 
+    for (auto root : roots)
+        visit(root, root);
+    for (Index i = 0; i < workList.getCount(); i++)
+        visit(workList[i].entryPoint, workList[i].inst);
+}
+
+void buildEntryPointReferenceGraph(
+    Dictionary<IRInst*, HashSet<IRFunc*>>& referencingEntryPoints,
+    IRModule* module)
+{
+    List<IRFunc*> roots;
     for (auto globalInst : module->getGlobalInsts())
     {
         if (globalInst->getOp() == kIROp_Func &&
             (globalInst->findDecoration<IREntryPointDecoration>() ||
              globalInst->findDecoration<IRCudaKernelDecoration>()))
         {
-            visit(as<IRFunc>(globalInst), globalInst);
+            roots.add(as<IRFunc>(globalInst));
         }
     }
-    for (Index i = 0; i < workList.getCount(); i++)
-        visit(workList[i].entryPoint, workList[i].inst);
+    buildEntryPointReferenceGraph(referencingEntryPoints, roots.getArrayView());
 }
 
 HashSet<IRFunc*>* getReferencingEntryPoints(

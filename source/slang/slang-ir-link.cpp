@@ -780,6 +780,12 @@ bool shouldDeepCloneWitnessTable(IRSpecContextBase* context, IRWitnessTable* tab
         {
         case kIROp_ComInterfaceDecoration:
             return true;
+        case kIROp_PortableRTReflectedInterfaceDecoration:
+            // A reached schema/context/stage witness is consumed by target synthesis, even when
+            // source code never calls invoke or reads its associated types. Its ordinary entries
+            // are therefore live reflective dependencies. Unreferenced witnesses are still never
+            // cloned, so an unrelated schema does not retain its stages merely by being imported.
+            return true;
         case kIROp_KnownBuiltinDecoration:
             {
                 // Witness tables for the differentiable builtin interfaces carry
