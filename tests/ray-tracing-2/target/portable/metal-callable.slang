@@ -1,4 +1,5 @@
 //TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry RayGeneration -stage raygeneration -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=CALLABLE): -experimental-feature -entry Callable -stage callable -target metal -profile metallib_2_4 -validate-ir
 
 import slang.raytracing.portable;
 
@@ -59,9 +60,21 @@ void RayGeneration()
     output[0] = data;
 }
 
-// METAL-DAG: visible_function_table<void(void thread*, uint3, uint3, uchar device*, uint constant*, uint device*
+// METAL-NOT: visible]]
+// METAL-DAG: visible_function_table<void(void thread*, uint3, uint3, uchar device*, uint constant*, uint device*, uchar thread*)>
 // METAL-DAG: _slang_callable_record
 // METAL-DAG: _slang_callable_function_index
-// METAL-DAG: visible]]
-// METAL-DAG: update
+// METAL-NOT: visible]]
 // METAL-NOT: metalRTCallShader
+
+// CALLABLE: void update{{.*}}(uint thread*
+// CALLABLE: ->addend{{.*}}rt_CallableInput_dispatchRaysIndex_get{{.*}}rt_CallableInput_dispatchRaysDimensions_get
+// CALLABLE: visible]] void Callable_callable(void thread* data
+// CALLABLE-SAME: uint3 dispatchRaysIndex
+// CALLABLE-SAME: uint3 dispatchRaysDimensions
+// CALLABLE-SAME: uchar device* recordData
+// CALLABLE-SAME: uint constant* descriptorResources
+// CALLABLE-SAME: uint device* records
+// CALLABLE-SAME: uchar thread* globalResources
+// CALLABLE: Record{{.*}} device*{{.*}}recordData
+// CALLABLE: Callable_invoke{{.*}}dispatchRaysIndex{{.*}}dispatchRaysDimensions

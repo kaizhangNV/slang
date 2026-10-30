@@ -545,6 +545,24 @@ void MetalSourceEmitter::emitMetalRTTraceDispatch(IRMetalRTTraceDispatch* trace)
     const auto hasRequirement = [](IRIntegerValue mask, MetalRTStageRequirement requirement)
     { return (mask & IRIntegerValue(requirement)) != 0; };
 
+    const auto emitInvocationArguments = [&]()
+    {
+        IRInst* arguments[] = {
+            trace->getMinDistance(),
+            trace->getTime(),
+            trace->getRayFlags(),
+            trace->getDispatchRaysIndex(),
+            trace->getDispatchRaysDimensions(),
+            trace->getRecords()};
+        for (auto argument : arguments)
+        {
+            m_writer->emit(", ");
+            emitOperand(argument, getInfo(EmitOp::General));
+        }
+        m_writer->emit(", (thread uchar*)");
+        emitOperand(trace->getGlobalContext(), getInfo(EmitOp::General));
+    };
+
     m_writer->emit("{\n");
     m_writer->indent();
     m_writer->emit("metal::raytracing::intersector<");
@@ -660,7 +678,7 @@ void MetalSourceEmitter::emitMetalRTTraceDispatch(IRMetalRTTraceDispatch* trace)
         m_writer->indent();
         emitOperand(trace->getMissFunctions(), getInfo(EmitOp::Postfix));
         m_writer->emit("[_slang_miss_function_index](");
-        emitOperand(trace->getRayData(), getInfo(EmitOp::General));
+        emitOperand(trace->getPayload(), getInfo(EmitOp::General));
         if (hasRequirement(missRequirements, MetalRTStageRequirement::Distance))
         {
             m_writer->emit(", ");
@@ -688,11 +706,7 @@ void MetalSourceEmitter::emitMetalRTTraceDispatch(IRMetalRTTraceDispatch* trace)
             emitOperand(trace->getDescriptorResources(), getInfo(EmitOp::General));
             m_writer->emit(")");
         }
-        if (cast<IRBoolLit>(trace->getMissHasGlobalContext())->getValue())
-        {
-            m_writer->emit(", (thread uchar*)");
-            emitOperand(trace->getGlobalContext(), getInfo(EmitOp::General));
-        }
+        emitInvocationArguments();
         m_writer->emit(");\n");
         m_writer->dedent();
         m_writer->emit("}\n");
@@ -749,11 +763,21 @@ void MetalSourceEmitter::emitMetalRTTraceDispatch(IRMetalRTTraceDispatch* trace)
         emitOperand(trace->getHitRecordStride(), getInfo(EmitOp::General));
         m_writer->emit(";\nuint _slang_hit_function_index = *((device uint*)"
                        "_slang_hit_record);\n");
-        m_writer->emit("if (_slang_hit_function_index != 0xffffffffU)\n{\n");
+        m_writer->emit("if (_slang_hit_function_index != 0xffffffffU && ");
+        emitOperand(trace->getClosestHitPresenceLookup(), getInfo(EmitOp::General));
+        m_writer->emit("(_slang_hit_function_index))\n{\n");
         m_writer->indent();
         emitOperand(trace->getClosestHitFunctions(), getInfo(EmitOp::Postfix));
         m_writer->emit("[_slang_hit_function_index](");
-        emitOperand(trace->getRayData(), getInfo(EmitOp::General));
+        emitOperand(trace->getPayload(), getInfo(EmitOp::General));
+        if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::HitAttributes))
+        {
+            m_writer->emit(", ");
+            emitOperand(trace->getAttributesLookup(), getInfo(EmitOp::General));
+            m_writer->emit("(");
+            emitOperand(trace->getRayData(), getInfo(EmitOp::General));
+            m_writer->emit(", _slang_hit_function_index)");
+        }
         if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::Distance) ||
             hasRequirement(closestHitRequirements, MetalRTStageRequirement::ObjectSpaceRay))
         {
@@ -762,29 +786,44 @@ void MetalSourceEmitter::emitMetalRTTraceDispatch(IRMetalRTTraceDispatch* trace)
         if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::HitKind))
         {
             m_writer->emit(", ");
-            if ((tagMask & IRIntegerValue(MetalRTTag::TriangleData)) != 0)
-            {
+            bool triangle = (tagMask & IRIntegerValue(MetalRTTag::TriangleData)) != 0;
+            if (triangle)
                 m_writer->emit(
                     "(_slang_result.type == metal::raytracing::intersection_type::triangle "
-                    "? (_slang_result.triangle_front_facing ? 254U : 255U) : 0U)");
-            }
-            else
+                    "? (_slang_result.triangle_front_facing ? 254U : 255U) : ");
+            if (as<IRPtrLit>(trace->getCustomHitKindAddress()))
                 m_writer->emit("0U");
+            else
+            {
+                m_writer->emit(
+                    "(_slang_result.type == metal::raytracing::intersection_type::bounding_box ? "
+                    "(*(");
+                emitOperand(trace->getCustomHitKindAddress(), getInfo(EmitOp::General));
+                m_writer->emit(")) : 0U)");
+            }
+            if (triangle)
+                m_writer->emit(")");
         }
         if (hasRequirement(
                 closestHitRequirements,
                 MetalRTStageRequirement::TriangleBarycentricCoord))
-        {
-            m_writer->emit(", _slang_result.triangle_barycentric_coord");
-        }
+            m_writer->emit(
+                (tagMask & IRIntegerValue(MetalRTTag::TriangleData))
+                    ? ", (_slang_result.type == metal::raytracing::intersection_type::triangle "
+                      "? _slang_result.triangle_barycentric_coord : float2(0.0f))"
+                    : ", float2(0.0f)");
         if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::TriangleFrontFacing))
-        {
-            m_writer->emit(", _slang_result.triangle_front_facing");
-        }
+            m_writer->emit(
+                (tagMask & IRIntegerValue(MetalRTTag::TriangleData))
+                    ? ", (_slang_result.type == metal::raytracing::intersection_type::triangle "
+                      "? _slang_result.triangle_front_facing : false)"
+                    : ", false");
         if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::CurveParameter))
-        {
-            m_writer->emit(", _slang_result.curve_parameter");
-        }
+            m_writer->emit(
+                (tagMask & IRIntegerValue(MetalRTTag::CurveData))
+                    ? ", (_slang_result.type == metal::raytracing::intersection_type::curve "
+                      "? _slang_result.curve_parameter : 0.0f)"
+                    : ", 0.0f");
         if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::WorldSpaceOrigin))
         {
             m_writer->emit(", ");
@@ -805,13 +844,13 @@ void MetalSourceEmitter::emitMetalRTTraceDispatch(IRMetalRTTraceDispatch* trace)
         }
         if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::InstanceIndex))
         {
-            m_writer->emit(", _slang_result.instance_id");
+            m_writer->emit(hasInstancing ? ", _slang_result.instance_id" : ", 0U");
             if (maxLevels > 0)
                 m_writer->emit("[_slang_result.instance_count - 1]");
         }
         if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::InstanceID))
         {
-            m_writer->emit(", _slang_result.user_instance_id");
+            m_writer->emit(hasInstancing ? ", _slang_result.user_instance_id" : ", 0U");
             if (maxLevels > 0)
                 m_writer->emit("[_slang_result.instance_count - 1]");
         }
@@ -822,16 +861,14 @@ void MetalSourceEmitter::emitMetalRTTraceDispatch(IRMetalRTTraceDispatch* trace)
         if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::InstanceIndexAtLevel))
         {
             m_writer->emit(
-                hasInstancing ? ", metal::array_ref<uint>(_slang_result.instance_id, "
-                                "_slang_result.instance_count)"
-                              : ", metal::array_ref<uint>()");
+                hasInstancing ? ", (thread uint*)_slang_result.instance_id"
+                              : ", (thread uint*)nullptr");
         }
         if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::InstanceIDAtLevel))
         {
             m_writer->emit(
-                hasInstancing ? ", metal::array_ref<uint>(_slang_result.user_instance_id, "
-                                "_slang_result.instance_count)"
-                              : ", metal::array_ref<uint>()");
+                hasInstancing ? ", (thread uint*)_slang_result.user_instance_id"
+                              : ", (thread uint*)nullptr");
         }
         if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::ObjectSpaceRay))
         {
@@ -876,11 +913,7 @@ void MetalSourceEmitter::emitMetalRTTraceDispatch(IRMetalRTTraceDispatch* trace)
             emitOperand(trace->getDescriptorResources(), getInfo(EmitOp::General));
             m_writer->emit(")");
         }
-        if (cast<IRBoolLit>(trace->getClosestHitHasGlobalContext())->getValue())
-        {
-            m_writer->emit(", (thread uchar*)");
-            emitOperand(trace->getGlobalContext(), getInfo(EmitOp::General));
-        }
+        emitInvocationArguments();
         m_writer->emit(");\n");
         m_writer->dedent();
         m_writer->emit("}\n");
@@ -1245,6 +1278,22 @@ void MetalSourceEmitter::emitOperandImpl(IRInst* inst, EmitOpInfo const& outerPr
 
 bool MetalSourceEmitter::tryEmitInstExprImpl(IRInst* inst, const EmitOpInfo& inOuterPrec)
 {
+    if (inst->getOp() == kIROp_MetalRTCandidateDispatch)
+    {
+        SLANG_RELEASE_ASSERT(inst->getOperandCount() == 4 || inst->getOperandCount() == 6);
+        emitOperand(inst->getOperand(0), getInfo(EmitOp::Postfix));
+        m_writer->emit("[");
+        emitOperand(inst->getOperand(1), getInfo(EmitOp::General));
+        m_writer->emit("](");
+        for (UInt i = 2; i < inst->getOperandCount(); ++i)
+        {
+            if (i != 2)
+                m_writer->emit(", ");
+            emitOperand(inst->getOperand(i), getInfo(EmitOp::General));
+        }
+        m_writer->emit(")");
+        return true;
+    }
     switch (inst->getOp())
     {
     case kIROp_MakeArray:

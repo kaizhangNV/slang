@@ -3,6 +3,7 @@
 #include "compiler-core/slang-artifact-associated-impl.h"
 #include "slang-ir-insts.h"
 #include "slang-ir-metal-portable-ray-tracing-target.h"
+#include "slang-ir-util.h"
 #include "slang-profile.h"
 
 namespace Slang
@@ -15,7 +16,11 @@ void addMetalRTProgramMetadata(
     IRIntegerValue maxLevels,
     IRIntegerValue hitStride,
     IRIntegerValue missStride,
-    IRIntegerValue callableStride)
+    IRIntegerValue callableStride,
+    UInt hitGroupCount,
+    UInt missShaderCount,
+    UInt callableShaderCount,
+    UInt candidateFunctionTableSize)
 {
     SLANG_RELEASE_ASSERT(!resources->findDecoration<IRMetalRTProgramMetadataDecoration>());
     IRBuilder builder(module);
@@ -33,9 +38,16 @@ void addMetalRTProgramMetadata(
         builder.getIntValue(uintType, maxLevels),
         builder.getIntValue(uintType, hitStride),
         builder.getIntValue(uintType, missStride),
-        builder.getIntValue(uintType, callableStride)};
-    auto program =
-        builder.emitIntrinsicInst(builder.getVoidType(), kIROp_MetalRTProgramMetadata, 6, operands);
+        builder.getIntValue(uintType, callableStride),
+        builder.getIntValue(uintType, hitGroupCount),
+        builder.getIntValue(uintType, missShaderCount),
+        builder.getIntValue(uintType, callableShaderCount),
+        builder.getIntValue(uintType, candidateFunctionTableSize)};
+    auto program = builder.emitIntrinsicInst(
+        builder.getVoidType(),
+        kIROp_MetalRTProgramMetadata,
+        SLANG_COUNT_OF(operands),
+        operands);
     builder.addDecoration(resources, kIROp_MetalRTProgramMetadataDecoration, program);
 }
 
@@ -75,6 +87,10 @@ slang::MetalRayTracingResourceKind getPublicResourceKind(MetalRTDescriptorResour
         return Kind::CallableVisibleFunctionTable;
     case MetalRTDescriptorResource::Records:
         return Kind::Records;
+    case MetalRTDescriptorResource::AnyHitVisibleFunctionTable:
+        return Kind::AnyHitVisibleFunctionTable;
+    case MetalRTDescriptorResource::IntersectionVisibleFunctionTable:
+        return Kind::IntersectionVisibleFunctionTable;
     default:
         SLANG_UNEXPECTED("Invalid Metal descriptor resource role");
     }
@@ -96,8 +112,35 @@ MetalRTDescriptorResource getFunctionResource(IRFunc* function)
         return MetalRTDescriptorResource::ClosestHitVisibleFunctionTable;
     case Stage::Callable:
         return MetalRTDescriptorResource::CallableVisibleFunctionTable;
+    case Stage::AnyHit:
+        return MetalRTDescriptorResource::AnyHitVisibleFunctionTable;
+    case Stage::Intersection:
+        return MetalRTDescriptorResource::IntersectionVisibleFunctionTable;
     default:
         SLANG_UNEXPECTED("Invalid Metal visible-function stage");
+    }
+}
+
+// Capacity is a schema property. A ray-generation artifact can require a full table while
+// exporting none of its providers, and a separately compiled provider can occupy a later slot.
+UInt getFunctionTableSize(IRMetalRTProgramMetadata* program, MetalRTDescriptorResource resource)
+{
+    switch (resource)
+    {
+    case MetalRTDescriptorResource::IntersectionFunctionTable:
+        return UInt(program->getCandidateFunctionTableSize()->getValue());
+    case MetalRTDescriptorResource::MissVisibleFunctionTable:
+        return UInt(program->getMissShaderCount()->getValue());
+    case MetalRTDescriptorResource::ClosestHitVisibleFunctionTable:
+    case MetalRTDescriptorResource::AnyHitVisibleFunctionTable:
+    case MetalRTDescriptorResource::IntersectionVisibleFunctionTable:
+        return UInt(program->getHitGroupCount()->getValue());
+    case MetalRTDescriptorResource::CallableVisibleFunctionTable:
+        return UInt(program->getCallableShaderCount()->getValue());
+    case MetalRTDescriptorResource::Records:
+        return 0;
+    default:
+        SLANG_UNEXPECTED("Invalid Metal descriptor resource role");
     }
 }
 
@@ -129,6 +172,8 @@ void collectMetalRTMetadata(const IRModule* module, ArtifactPostEmitMetadata& me
             slang::MetalRayTracingResourceInfo resource;
             resource.kind = getPublicResourceKind(MetalRTDescriptorResource(i));
             resource.argumentBufferID = uint32_t(i);
+            resource.functionTableSize =
+                uint32_t(getFunctionTableSize(decoration, MetalRTDescriptorResource(i)));
             program.resources.add(resource);
         }
         programIndices.add(decoration, metadata.m_metalRayTracingPrograms.getCount());
@@ -157,10 +202,24 @@ void collectMetalRTMetadata(const IRModule* module, ArtifactPostEmitMetadata& me
         if (auto candidate = function->findDecoration<IRMetalIntersectionFunctionDecoration>())
             entry.info.primitive = MetalRTGeometryKind(candidate->getGeometryKind()->getValue());
         for (auto param : function->getParams())
+        {
             entry.info.usesGlobalContext |=
-                param->findDecoration<IRExplicitGlobalContextDecoration>() != nullptr;
+                param->findDecoration<IRMetalRTGlobalResourceContextDecoration>() != nullptr;
+            if (param->findDecoration<IRMetalRTCandidateDescriptorDecoration>())
+            {
+                auto layout = findVarLayout(param);
+                SLANG_RELEASE_ASSERT(layout);
+                auto offset = layout->findOffsetAttr(LayoutResourceKind::MetalBuffer);
+                SLANG_RELEASE_ASSERT(offset);
+                auto binding = uint32_t(offset->getOffset());
+                SLANG_RELEASE_ASSERT(
+                    program.info.candidateDescriptorBufferIndex == UINT32_MAX ||
+                    program.info.candidateDescriptorBufferIndex == binding);
+                program.info.candidateDescriptorBufferIndex = binding;
+            }
+        }
         auto& table = program.resources[UInt(resource)];
-        table.functionTableSize = Math::Max(table.functionTableSize, entry.info.functionIndex + 1);
+        SLANG_RELEASE_ASSERT(entry.info.functionIndex < table.functionTableSize);
         program.functions.add(_Move(entry));
     }
 }

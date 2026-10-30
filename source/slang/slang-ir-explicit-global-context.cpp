@@ -4,7 +4,9 @@
 #include "slang-ir-call-graph.h"
 #include "slang-ir-clone.h"
 #include "slang-ir-insts.h"
+#include "slang-ir-metal-portable-ray-tracing-context.h"
 #include "slang-ir-util.h"
+#include "slang-rich-diagnostics.h"
 #include "slang-target.h"
 
 namespace Slang
@@ -132,16 +134,23 @@ struct IntroduceExplicitGlobalContextPass
         CodeGenTarget target;
     };
 
-    IntroduceExplicitGlobalContextPass(IRModule* module, CodeGenTarget target)
-        : m_module(module), m_target(target), m_options(target)
+    IntroduceExplicitGlobalContextPass(IRModule* module, CodeGenTarget target, DiagnosticSink* sink)
+        : m_module(module), m_target(target), m_sink(sink), m_options(target)
     {
     }
 
     IRModule* m_module = nullptr;
     CodeGenTarget m_target = CodeGenTarget::Unknown;
+    DiagnosticSink* m_sink = nullptr;
 
     IRStructType* m_contextStructType = nullptr;
     IRPtrType* m_contextStructPtrType = nullptr;
+
+    // Only ProgramLayout-owned parameters cross independently compiled shader boundaries.
+    // Mutable globals remain fields of each shader invocation's private KernelContext.
+    IRStructType* m_resourceContextType = nullptr;
+    IRPtrType* m_resourceContextPtrType = nullptr;
+    IRStructKey* m_resourceContextKey = nullptr;
 
     struct GlobalParamInfo
     {
@@ -159,12 +168,14 @@ struct IntroduceExplicitGlobalContextPass
     List<IRGlobalVar*> m_globalVars;
     List<IRFunc*> m_entryPoints;
 
-    // Physical traversal callbacks receive resources from the driver, whereas visible functions
-    // inherit their caller's invocation context through an indirect table call.
+    // Physical traversal callbacks receive resources from the driver. Visible providers inherit
+    // only their caller's resource bindings and allocate their own private invocation storage.
     List<IRFunc*> m_metalIntersectionFunctions;
+    List<IRFunc*> m_metalVisibleFunctions;
+    List<GlobalParamInfo> m_sharedGlobalParams;
     Dictionary<IRInst*, HashSet<IRFunc*>> m_referencingMetalIntersectionFunctions;
-    Dictionary<IRFunc*, SourceLoc> m_metalIntersectionGlobalVarLocations;
-    Dictionary<IRMetalVisibleFunctionTable*, List<IRInst*>> m_metalTableDispatches;
+    List<IRInst*> m_metalTableDispatches;
+    List<IRInst*> m_resourceContextRequests;
 
     ExplicitContextPolicy m_options;
 
@@ -271,6 +282,8 @@ struct IntroduceExplicitGlobalContextPass
                     }
 
                     m_globalParams.add(globalParamInfo);
+                    if (globalParam->findDecoration<IRMetalRTGlobalResourceDecoration>())
+                        m_sharedGlobalParams.add(globalParamInfo);
                 }
                 break;
 
@@ -286,6 +299,8 @@ struct IntroduceExplicitGlobalContextPass
                     auto func = cast<IRFunc>(inst);
                     if (func->findDecoration<IRMetalIntersectionFunctionDecoration>())
                         m_metalIntersectionFunctions.add(func);
+                    if (func->findDecoration<IRMetalVisibleFunctionDecoration>())
+                        m_metalVisibleFunctions.add(func);
                     if (isMetalTarget(m_target))
                         collectMetalTableDispatches(func);
                     // Each shader or CUDA launch creates per-invocation global storage. Ordinary
@@ -304,6 +319,11 @@ struct IntroduceExplicitGlobalContextPass
                 m_referencingMetalIntersectionFunctions,
                 m_metalIntersectionFunctions.getArrayView());
 
+        orderSharedGlobalParameters();
+        assignCandidateDescriptorBindings();
+        diagnoseCandidateResourceAccesses();
+        diagnoseProviderGroupSharedAccesses();
+
         // If there are no global-scope entities that require processing,
         // then we can completely skip the work of this pass for CUDA/Metal.
         //
@@ -315,6 +335,7 @@ struct IntroduceExplicitGlobalContextPass
         {
             if (m_globalParams.getCount() == 0 && m_globalVars.getCount() == 0)
             {
+                replaceResourceContextRequestsWithNull();
                 return;
             }
         }
@@ -342,6 +363,27 @@ struct IntroduceExplicitGlobalContextPass
         m_contextStructPtrType = builder.getPtrType(m_contextStructType, getAddressSpaceOfLocal());
 
 
+        if (m_sharedGlobalParams.getCount())
+        {
+            m_resourceContextType = builder.createStructType();
+            builder.addNameHintDecoration(m_resourceContextType, toSlice("MetalRTGlobalResources"));
+            m_resourceContextPtrType =
+                builder.getPtrType(m_resourceContextType, AddressSpace::ThreadLocal);
+            m_resourceContextKey = builder.createStructKey();
+            builder.addNameHintDecoration(m_resourceContextKey, toSlice("globalResources"));
+            builder.createStructField(
+                m_contextStructType,
+                m_resourceContextKey,
+                m_resourceContextPtrType);
+
+            for (auto globalParam : m_sharedGlobalParams)
+                createContextStructField(
+                    globalParam.globalParam,
+                    GlobalObjectKind::GlobalParam,
+                    globalParam.globalParam->getFullType(),
+                    true);
+        }
+
         // The first step will be to create fields in the `KernelContext`
         // type to represent any global parameters or global variables.
         //
@@ -351,6 +393,8 @@ struct IntroduceExplicitGlobalContextPass
         //
         for (auto globalParam : m_globalParams)
         {
+            if (isSharedGlobalParameter(globalParam.globalParam))
+                continue;
             // For the parameter representing all the global uniform shader
             // parameters, we create a field that exactly matches its type.
             //
@@ -383,33 +427,16 @@ struct IntroduceExplicitGlobalContextPass
             createContextForEntryPoint(entryPoint);
         }
 
-        // Consider an AnyHit function reading a material buffer while ray generation also binds
-        // a scene acceleration structure. Metal calls AnyHit through an IFT callback: that callback
-        // needs a buffer parameter, but must not receive every unrelated ray-generation resource.
-        // The same reference graph used for source entries selects its actual dependencies.
-        for (auto function : m_metalIntersectionFunctions)
-        {
-            bool referencesBuffer = false;
-            for (auto parameter : m_globalParams)
-                referencesBuffer |=
-                    isReferencedByMetalIntersection(parameter.globalParam, function);
+        // A visible provider begins its own shader invocation. Its stable ABI parameter
+        // points only to shared bindings; a caller's private mutable variables never cross it.
+        for (auto function : m_metalVisibleFunctions)
+            createContextForVisibleFunction(function);
 
-            bool referencesMutableGlobal = false;
-            for (auto variable : m_globalVars)
-            {
-                if (isReferencedByMetalIntersection(variable, function))
-                {
-                    referencesMutableGlobal = true;
-                    m_metalIntersectionGlobalVarLocations.add(function, variable->sourceLoc);
-                    break;
-                }
-            }
-            // A fresh callback-local context must not silently reset mutable invocation state.
-            // Keep the ordinary context parameter in that case so the target finalizer reports
-            // the unsupported state at its source declaration.
-            if (referencesBuffer && !referencesMutableGlobal)
-                createContextForEntryPoint(function, true);
-        }
+        // Candidate glue is called by the driver and has no direct source-stage calls from
+        // which to infer resources. Fill every bindable field in the same component layout.
+        // An ordinary callback without indirect candidates still binds only what it reads.
+        for (auto function : m_metalIntersectionFunctions)
+            createContextForEntryPoint(function, true);
 
         // Now that we've prepared all the entry points, we can make another
         // pass over the global parameters/variables and start to replace
@@ -430,9 +457,26 @@ struct IntroduceExplicitGlobalContextPass
             replaceUsesOfGlobalVar(globalVar);
         }
 
-        for (auto location : m_metalIntersectionGlobalVarLocations)
-            if (auto context = m_mapFuncToContextPtr.tryGetValue(location.first))
-                (*context)->sourceLoc = location.second;
+        // The resource request is part of the physical dispatch operation, so ray generation
+        // retains bindings even when no selected provider body is present in this output.
+        for (auto dispatch : m_metalTableDispatches)
+        {
+            builder.setInsertBefore(dispatch);
+            auto resources = getResourceContextForInst(builder, dispatch);
+            setDispatchResourceContext(builder, dispatch, resources);
+        }
+        for (auto request : m_resourceContextRequests)
+        {
+            builder.setInsertBefore(request);
+            request->replaceUsesWith(getResourceContextForInst(builder, request));
+            request->removeAndDeallocate();
+        }
+
+        // These declarations have become entry arguments or fields; keeping the old globals
+        // alive now would emit duplicate, unbound resource declarations in Metal.
+        for (auto parameter : m_sharedGlobalParams)
+            if (auto keepAlive = parameter.globalParam->findDecoration<IRKeepAliveDecoration>())
+                keepAlive->removeAndDeallocate();
 
         // SPIRV requires a correct IR func-type to emit properly
         if (m_options.requiresFuncTypeCorrection())
@@ -458,6 +502,7 @@ struct IntroduceExplicitGlobalContextPass
         // Is this field a pointer to the actual value?
         // For groupshared variables, this will be true.
         bool needDereference = false;
+        bool isSharedResource = false;
     };
     Dictionary<IRInst*, ContextFieldInfo> m_mapInstToContextFieldInfo;
     Dictionary<IRFunc*, IRInst*> m_mapFuncToContextPtr;
@@ -468,39 +513,257 @@ struct IntroduceExplicitGlobalContextPass
         return roots && roots->contains(function);
     }
 
-    // Records the indirect edges that ordinary direct-call propagation cannot see. The physical
-    // table type is already the canonical ABI identity shared by its adapters and dispatch ops;
-    // no source-schema walk or shader-name matching is needed here.
+    // Records the physical operations that need bindings independently of selected provider
+    // bodies. Candidate glue uses an explicit request because its call is a separate IR op.
     void collectMetalTableDispatches(IRFunc* function)
     {
         for (auto block : function->getBlocks())
         {
             for (auto operation : block->getChildren())
             {
-                if (auto trace = as<IRMetalRTTraceDispatch>(operation))
-                {
-                    auto miss =
-                        cast<IRMetalVisibleFunctionTable>(trace->getMissFunctions()->getDataType());
-                    auto hit = cast<IRMetalVisibleFunctionTable>(
-                        trace->getClosestHitFunctions()->getDataType());
-                    m_metalTableDispatches.getOrAddValue(miss, List<IRInst*>()).add(trace);
-                    m_metalTableDispatches.getOrAddValue(hit, List<IRInst*>()).add(trace);
-                }
-                else if (auto call = as<IRMetalRTCallDispatch>(operation))
-                {
-                    auto resources =
-                        cast<IRUniformParameterGroupType>(call->getDescriptorResourcesType());
-                    auto field = findStructField(
-                        cast<IRStructType>(resources->getElementType()),
-                        call->getCallableFunctionsKey());
-                    auto table = cast<IRMetalVisibleFunctionTable>(field->getFieldType());
-                    m_metalTableDispatches.getOrAddValue(table, List<IRInst*>()).add(call);
-                }
+                if (as<IRMetalRTTraceDispatch>(operation) || as<IRMetalRTCallDispatch>(operation))
+                    m_metalTableDispatches.add(operation);
+                else if (operation->getOp() == kIROp_MetalRTGetGlobalResourceContext)
+                    m_resourceContextRequests.add(operation);
             }
         }
     }
 
-    void createContextStructField(IRInst* originalInst, GlobalObjectKind kind, IRType* type)
+    bool isSharedGlobalParameter(IRInst* parameter)
+    {
+        return parameter->findDecoration<IRMetalRTGlobalResourceDecoration>() != nullptr;
+    }
+
+    // ProgramLayout owns declaration order before any shader body is optimized. A preserved
+    // layout coordinate gives separate getEntryPointCode calls the same resource order even
+    // when the linker discovers declarations differently or explicit bindings overlap. Resource
+    // legalization splits an aggregate into independently bound leaves, ordered by binding.
+    struct ResourceBinding
+    {
+        LayoutResourceKind kind;
+        UInt space;
+        UInt index;
+    };
+
+    ResourceBinding getResourceBinding(IRGlobalParam* parameter)
+    {
+        auto layout = findVarLayout(parameter);
+        SLANG_RELEASE_ASSERT(layout);
+        for (auto offset : layout->getOffsetAttrs())
+        {
+            switch (offset->getResourceKind())
+            {
+            case LayoutResourceKind::MetalBuffer:
+            case LayoutResourceKind::MetalTexture:
+            case LayoutResourceKind::SamplerState:
+                return {offset->getResourceKind(), offset->getSpace(), offset->getOffset()};
+            default:
+                break;
+            }
+        }
+        SLANG_UNEXPECTED("a shared Metal resource must have its ProgramLayout binding");
+    }
+
+    void orderSharedGlobalParameters()
+    {
+        m_sharedGlobalParams.sort(
+            [&](const GlobalParamInfo& left, const GlobalParamInfo& right)
+            {
+                auto leftIndex =
+                    getIntVal(left.globalParam->findDecoration<IRMetalRTGlobalResourceDecoration>()
+                                  ->getOperand(0));
+                auto rightIndex =
+                    getIntVal(right.globalParam->findDecoration<IRMetalRTGlobalResourceDecoration>()
+                                  ->getOperand(0));
+                if (leftIndex != rightIndex)
+                    return leftIndex < rightIndex;
+                auto a = getResourceBinding(left.globalParam);
+                auto b = getResourceBinding(right.globalParam);
+                if (a.kind != b.kind)
+                    return UInt(a.kind) < UInt(b.kind);
+                if (a.space != b.space)
+                    return a.space < b.space;
+                return a.index < b.index;
+            });
+    }
+
+    // The descriptor belongs to an IFT object, not to a particular source global: a host may
+    // create several descriptors of the same schema. Its extra driver binding follows the
+    // complete component's buffer range, including declarations unused by this shader body.
+    void assignCandidateDescriptorBindings()
+    {
+        UInt descriptorIndex = 0;
+        for (auto parameter : m_sharedGlobalParams)
+        {
+            auto layout = findVarLayout(parameter.globalParam);
+            auto offset = layout->findOffsetAttr(LayoutResourceKind::MetalBuffer);
+            if (!offset)
+                continue;
+            auto size = layout->getTypeLayout()->findSizeAttr(LayoutResourceKind::MetalBuffer);
+            SLANG_RELEASE_ASSERT(size && size->getSize().isFinite());
+            descriptorIndex =
+                Math::Max(descriptorIndex, offset->getOffset() + size->getFiniteSize());
+        }
+        IRBuilder builder(m_module);
+        for (auto function : m_metalIntersectionFunctions)
+        {
+            for (auto parameter : function->getParams())
+            {
+                if (!parameter->findDecoration<IRMetalRTCandidateDescriptorDecoration>())
+                    continue;
+                IRTypeLayout::Builder typeLayout(&builder);
+                typeLayout.addResourceUsage(LayoutResourceKind::MetalBuffer, 1);
+                IRVarLayout::Builder varLayout(&builder, typeLayout.build());
+                varLayout.findOrAddResourceInfo(LayoutResourceKind::MetalBuffer)->offset =
+                    descriptorIndex;
+                builder.addLayoutDecoration(parameter, varLayout.build());
+            }
+        }
+    }
+
+    // AnyHit and Intersection providers execute under the intersection driver's resource
+    // restrictions. Checking their actual reads diagnoses an unsupported texture without
+    // rejecting an unrelated ray-generation texture declared in the same component.
+    void diagnoseCandidateResourceAccesses()
+    {
+        List<IRFunc*> providers;
+        for (auto function : m_metalVisibleFunctions)
+        {
+            auto visible = function->findDecoration<IRMetalVisibleFunctionDecoration>();
+            auto stage = Stage(visible->getStageKind()->getValue());
+            if (stage == Stage::AnyHit || stage == Stage::Intersection)
+                providers.add(function);
+        }
+        if (!providers.getCount())
+            return;
+        Dictionary<IRInst*, HashSet<IRFunc*>> references;
+        buildEntryPointReferenceGraph(references, providers.getArrayView());
+        for (auto parameter : m_sharedGlobalParams)
+        {
+            auto readers = references.tryGetValue(parameter.globalParam);
+            if (readers && readers->getCount() &&
+                !isMetalPortableRayTracingBindableResource(parameter.globalParam))
+            {
+                SLANG_RELEASE_ASSERT(m_sink);
+                m_sink->diagnose(Diagnostics::MetalRayTracingCandidateResourceKind{
+                    .location = parameter.globalParam->sourceLoc});
+            }
+        }
+    }
+
+    // A selected ray shader begins an invocation without a threadgroup launch. Consider a
+    // Miss provider calling a helper that writes a groupshared array: its private context
+    // cannot supply the threadgroup allocation that a compute entry creates. Diagnose the
+    // actual provider access here, before representing that global as a context pointer.
+    // Other compute entries in the component may still use the same declaration.
+    void diagnoseProviderGroupSharedAccesses()
+    {
+        if (!m_metalVisibleFunctions.getCount())
+            return;
+        Dictionary<IRInst*, HashSet<IRFunc*>> references;
+        buildEntryPointReferenceGraph(references, m_metalVisibleFunctions.getArrayView());
+        for (auto globalVar : m_globalVars)
+        {
+            if (!as<IRGroupSharedRate>(globalVar->getRate()))
+                continue;
+            auto readers = references.tryGetValue(globalVar);
+            if (!readers || !readers->getCount())
+                continue;
+            SLANG_RELEASE_ASSERT(m_sink);
+            m_sink->diagnose(Diagnostics::UnsupportedTargetIntrinsic{
+                .operation = "groupshared storage in a portable ray-tracing stage",
+                .location = globalVar->sourceLoc});
+        }
+    }
+
+    IRInst* getSharedResourceContextPtr(IRBuilder& builder, IRInst* privateContext)
+    {
+        auto pointer = builder.emitFieldAddress(
+            builder.getPtrType(m_resourceContextPtrType),
+            privateContext,
+            m_resourceContextKey);
+        return builder.emitLoad(m_resourceContextPtrType, pointer);
+    }
+
+    IRInst* getResourceContextForInst(IRBuilder& builder, IRInst* inst)
+    {
+        auto erasedType = builder.getPtrType(builder.getUInt8Type(), AddressSpace::ThreadLocal);
+        if (!m_resourceContextType)
+            return builder.emitDefaultConstruct(erasedType);
+        auto privateContext = findOrCreateContextPtrForInst(inst);
+        // Recursive direct-call propagation can change the builder's insertion neighborhood.
+        builder.setInsertBefore(inst);
+        auto resources = getSharedResourceContextPtr(builder, privateContext);
+        return builder.emitBitCast(erasedType, resources);
+    }
+
+    void setDispatchResourceContext(IRBuilder& builder, IRInst* dispatch, IRInst* resources)
+    {
+        if (auto trace = as<IRMetalRTTraceDispatch>(dispatch))
+        {
+            trace->setOperand(29, resources);
+            trace->setOperand(27, builder.getBoolValue(true));
+            trace->setOperand(28, builder.getBoolValue(true));
+        }
+        else
+        {
+            auto call = cast<IRMetalRTCallDispatch>(dispatch);
+            call->setOperand(13, resources);
+            call->setOperand(12, builder.getBoolValue(true));
+        }
+    }
+
+    void replaceResourceContextRequestsWithNull()
+    {
+        IRBuilder builder(m_module);
+        auto pointerType = builder.getPtrType(builder.getUInt8Type(), AddressSpace::ThreadLocal);
+        for (auto dispatch : m_metalTableDispatches)
+        {
+            builder.setInsertBefore(dispatch);
+            setDispatchResourceContext(
+                builder,
+                dispatch,
+                builder.emitDefaultConstruct(pointerType));
+        }
+        for (auto request : m_resourceContextRequests)
+        {
+            builder.setInsertBefore(request);
+            request->replaceUsesWith(builder.emitDefaultConstruct(request->getDataType()));
+            request->removeAndDeallocate();
+        }
+    }
+
+    // A VFT boundary inherits resource bindings, but begins new private mutable storage. The
+    // initializer pass has already placed the selected shader's initialization in this body.
+    void createContextForVisibleFunction(IRFunc* function)
+    {
+        IRParam* resourceParameter = nullptr;
+        for (auto parameter : function->getParams())
+            if (parameter->findDecoration<IRMetalRTGlobalResourceContextDecoration>())
+                resourceParameter = parameter;
+        SLANG_RELEASE_ASSERT(resourceParameter);
+
+        IRBuilder builder(m_module);
+        builder.setInsertBefore(function->getFirstBlock()->getFirstOrdinaryInst());
+        auto privateContext = builder.emitVar(m_contextStructType);
+        addKernelContextNameHint(privateContext);
+        m_mapFuncToContextPtr.add(function, privateContext);
+        if (m_resourceContextType)
+        {
+            auto resources = builder.emitBitCast(m_resourceContextPtrType, resourceParameter);
+            auto field = builder.emitFieldAddress(
+                builder.getPtrType(m_resourceContextPtrType),
+                privateContext,
+                m_resourceContextKey);
+            builder.emitStore(field, resources);
+        }
+    }
+
+    void createContextStructField(
+        IRInst* originalInst,
+        GlobalObjectKind kind,
+        IRType* type,
+        bool isSharedResource = false)
     {
         // Creating a field in the context struct to represent
         // `originalInst` is straightforward.
@@ -528,7 +791,10 @@ struct IntroduceExplicitGlobalContextPass
         // of the appropraite type.
         //
         auto key = builder.createStructKey();
-        builder.createStructField(m_contextStructType, key, fieldDataType);
+        builder.createStructField(
+            isSharedResource ? m_resourceContextType : m_contextStructType,
+            key,
+            fieldDataType);
 
         key->sourceLoc = originalInst->sourceLoc;
 
@@ -546,7 +812,9 @@ struct IntroduceExplicitGlobalContextPass
         // for the instruction, so that we can use the key
         // to access the field later.
         //
-        m_mapInstToContextFieldInfo.add(originalInst, ContextFieldInfo{key, needDereference});
+        m_mapInstToContextFieldInfo.add(
+            originalInst,
+            ContextFieldInfo{key, needDereference, isSharedResource});
     }
 
     void createContextForEntryPoint(IRFunc* entryPointFunc, bool isMetalIntersection = false)
@@ -578,7 +846,15 @@ struct IntroduceExplicitGlobalContextPass
             // explicitly originates from a different entry point.
             if (isMetalIntersection)
             {
-                if (!isReferencedByMetalIntersection(globalParam.globalParam, entryPointFunc))
+                bool requestedResources = false;
+                for (auto request : m_resourceContextRequests)
+                    requestedResources |= request->getParent()->getParent() == entryPointFunc;
+                if (requestedResources && isSharedGlobalParameter(globalParam.globalParam))
+                {
+                    if (!isMetalPortableRayTracingBindableResource(globalParam.globalParam))
+                        continue;
+                }
+                else if (!isReferencedByMetalIntersection(globalParam.globalParam, entryPointFunc))
                     continue;
             }
             else if (
@@ -623,6 +899,18 @@ struct IntroduceExplicitGlobalContextPass
         addKernelContextNameHint(contextVarPtr);
         m_mapFuncToContextPtr.add(entryPointFunc, contextVarPtr);
 
+        IRInst* resourceContext = nullptr;
+        if (m_resourceContextType)
+        {
+            resourceContext = builder.emitVar(m_resourceContextType);
+            builder.addNameHintDecoration(resourceContext, toSlice("globalResources"));
+            auto resourceField = builder.emitFieldAddress(
+                builder.getPtrType(m_resourceContextPtrType),
+                contextVarPtr,
+                m_resourceContextKey);
+            builder.emitStore(resourceField, resourceContext);
+        }
+
         // If there is a global-scope uniform parameter, then
         // we need to use our new explicit entry point parameter
         // to inialize the corresponding field of the `KernelContext`
@@ -637,7 +925,10 @@ struct IntroduceExplicitGlobalContextPass
             // We compute the addrress of the field and store the
             // value of the parameter into it.
             //
-            auto fieldPtr = builder.emitFieldAddress(fieldPtrType, contextVarPtr, fieldInfo.key);
+            auto fieldPtr = builder.emitFieldAddress(
+                fieldPtrType,
+                fieldInfo.isSharedResource ? resourceContext : contextVarPtr,
+                fieldInfo.key);
             builder.emitStore(fieldPtr, entryPointParam.entryPointParam);
         }
 
@@ -743,7 +1034,10 @@ struct IntroduceExplicitGlobalContextPass
             // taking the address of the corresponding field
             // in the context struct and loading from it.
             //
-            auto ptr = builder.emitFieldAddress(ptrType, contextParam, fieldInfo.key);
+            auto storage = fieldInfo.isSharedResource
+                               ? getSharedResourceContextPtr(builder, contextParam)
+                               : contextParam;
+            auto ptr = builder.emitFieldAddress(ptrType, storage, fieldInfo.key);
             auto val = builder.emitLoad(valType, ptr);
             use->set(val);
         }
@@ -940,31 +1234,11 @@ struct IntroduceExplicitGlobalContextPass
             call->removeAndDeallocate();
         }
 
-        // Consider ray generation -> helper -> trace -> visible Miss, where only Miss reads a
-        // global buffer. Giving Miss a context must also give helper a context even though helper
-        // contains no global read. Registering each function above before following these edges
-        // preserves the existing recursion guard for nested traces and callable dispatches.
-        if (auto visible = func->findDecoration<IRMetalVisibleFunctionDecoration>())
-        {
-            auto table = cast<IRMetalVisibleFunctionTable>(visible->getTableType());
-            if (auto dispatches = m_metalTableDispatches.tryGetValue(table))
-            {
-                for (auto dispatch : *dispatches)
-                {
-                    auto callerContext = findOrCreateContextPtrForInst(dispatch);
-                    if (auto trace = as<IRMetalRTTraceDispatch>(dispatch))
-                        trace->setOperand(29, callerContext);
-                    else
-                        cast<IRMetalRTCallDispatch>(dispatch)->setOperand(13, callerContext);
-                }
-            }
-        }
-
         return contextParam;
     }
 
-    // Mark the semantic role at its producer; names remain only a debugging aid. Physical Metal
-    // table finalization uses this marker to recognize and erase the explicit context parameter.
+    // Mark private invocation storage and direct-call context parameters at their producer.
+    // The shared resource pointer crossing a Metal VFT boundary has its own distinct marker.
     void addKernelContextNameHint(IRInst* inst)
     {
         IRBuilder builder(m_module);
@@ -974,9 +1248,9 @@ struct IntroduceExplicitGlobalContextPass
 };
 
 /// Collect global-scope variables/paramters to form an explicit context that gets threaded through
-void introduceExplicitGlobalContext(IRModule* module, CodeGenTarget target)
+void introduceExplicitGlobalContext(IRModule* module, CodeGenTarget target, DiagnosticSink* sink)
 {
-    IntroduceExplicitGlobalContextPass pass(module, target);
+    IntroduceExplicitGlobalContextPass pass(module, target, sink);
     pass.processModule();
 }
 

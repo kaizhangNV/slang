@@ -1,4 +1,6 @@
 //TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry RayGeneration -stage raygeneration -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=ANYHIT): -experimental-feature -entry AnyHit<EmptyPayloadA> -stage anyhit -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=INTERSECTION): -experimental-feature -entry Intersection<void> -stage intersection -target metal -profile metallib_2_4 -validate-ir
 
 import slang.raytracing.portable;
 
@@ -107,3 +109,8 @@ void RayGeneration()
 // METAL: struct PortableRTRayData_{{[0-9]+}}
 // METAL: Attributes{{.*}} customAttributes
 // METAL-NOT: struct PortableRTRayData_
+
+// ANYHIT: visible]]
+// ANYHIT-NOT: metalRTIgnoreHit
+// INTERSECTION: visible]]
+// INTERSECTION-NOT: metalRTReportHit

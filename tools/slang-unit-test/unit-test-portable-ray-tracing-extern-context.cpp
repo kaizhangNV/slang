@@ -7,9 +7,10 @@
 
 using namespace Slang;
 
-// An entry can be selected before its Context's associated types are known. Serialize that
-// module, then supply the Context definition from another module: native adapters must derive
-// their concrete payload/attribute ABI after linking, not while first lowering the declaration.
+// A stage declaration can refer to a Context whose associated types are not yet known.
+// Serialize that module, supply the Context from another module, and then select the entry.
+// Adapters must derive concrete payload/attribute views after linking. Metal exports the fixed
+// stage contract and restores those views locally without needing a schema or ray generation.
 SLANG_UNIT_TEST(portableRayTracingExternContextNativeLink)
 {
     const char* stageSource = R"(
@@ -57,13 +58,16 @@ SLANG_UNIT_TEST(portableRayTracingExternContextNativeLink)
         struct Attributes { uint value; }
         export struct ExternalContext : rt::IHitContext = ConcreteContext;
     )";
-    const SlangCompileTarget targets[] = {SLANG_HLSL, SLANG_SPIRV_ASM, SLANG_CUDA_SOURCE};
+    const SlangCompileTarget targets[] =
+        {SLANG_HLSL, SLANG_SPIRV_ASM, SLANG_CUDA_SOURCE, SLANG_METAL};
     for (auto target : targets)
     {
         slang::TargetDesc targetDesc = {};
         targetDesc.format = target;
         targetDesc.profile = unitTestContext->slangGlobalSession->findProfile(
-            target == SLANG_SPIRV_ASM ? "spirv_1_5" : "sm_6_6");
+            target == SLANG_METAL       ? "metallib_2_4"
+            : target == SLANG_SPIRV_ASM ? "spirv_1_5"
+                                        : "sm_6_6");
         slang::CompilerOptionEntry experimental = {};
         experimental.name = slang::CompilerOptionName::ExperimentalFeature;
         experimental.value.kind = slang::CompilerOptionValueKind::Int;
@@ -150,6 +154,20 @@ SLANG_UNIT_TEST(portableRayTracingExternContextNativeLink)
                 {
                     SLANG_CHECK(text.indexOf(toSlice("IncomingRayPayloadKHR")) >= 0);
                     SLANG_CHECK(text.indexOf(toSlice("HitAttributeKHR")) >= 0);
+                }
+            }
+            else if (target == SLANG_METAL)
+            {
+                SLANG_CHECK(text.indexOf(toSlice("[[visible]] void")) >= 0);
+                SLANG_CHECK(text.indexOf(toSlice("void thread* payload")) >= 0);
+                SLANG_CHECK(text.indexOf(toSlice("void thread* attributes")) >= 0);
+                SLANG_CHECK(text.indexOf(toSlice("float distance")) >= 0);
+                SLANG_CHECK(text.indexOf(toSlice("uchar thread* globalResources")) >= 0);
+                SLANG_CHECK(text.indexOf(toSlice("[[kernel]]")) < 0);
+                if (strcmp(selection, "ExternalHit") == 0)
+                {
+                    SLANG_CHECK(text.indexOf(toSlice("uint4 thread*")) >= 0);
+                    SLANG_CHECK(text.indexOf(toSlice("Attributes")) >= 0);
                 }
             }
             else

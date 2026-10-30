@@ -1,4 +1,5 @@
 //TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry RayGeneration -stage raygeneration -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=PROVIDER): -experimental-feature -entry AnyHit -stage anyhit -target metal -profile metallib_2_4 -validate-ir
 
 import slang.raytracing.portable;
 
@@ -82,6 +83,8 @@ void RayGeneration()
 // METAL-DAG: barycentric_coord
 // METAL-DAG: accept_intersection
 // METAL-DAG: continue_search
-// METAL-DAG: visible]]
-// METAL-DAG: readBarycentric
+// METAL-DAG: anyHitFunctions
+// METAL-NOT: readBarycentric
+// PROVIDER-DAG: visible]]
+// PROVIDER-DAG: readBarycentric
 // METAL-NOT: metalRTIgnoreHit

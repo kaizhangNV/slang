@@ -1,4 +1,6 @@
 //TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry RayGeneration -stage raygeneration -target metal -profile metallib_2_4
+//TEST:SIMPLE(filecheck=BUFFER): -experimental-feature -entry BufferMiss -stage miss -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=CONSTANT): -experimental-feature -entry ConstantMiss -stage miss -target metal -profile metallib_2_4 -validate-ir
 
 import slang.raytracing.portable;
 
@@ -83,8 +85,21 @@ void RayGeneration()
     output[0] = traceIndirect(desc, scene, descriptor);
 }
 
-// METAL-DAG: loadBackground
+// METAL-NOT: visible]]
+// METAL-DAG: uint device* background
 // METAL-DAG: traceIndirect
-// METAL-DAG: __slang_portable_rt_0_miss_0({{.*}}uchar thread*{{.*}})
-// METAL-DAG: __slang_portable_rt_0_miss_1({{.*}}uchar thread*{{.*}})
 // METAL-DAG: [_slang_miss_function_index]({{.*}}, (thread uchar*)
+// METAL-NOT: visible]]
+// METAL-NOT: loadBackground
+
+// BUFFER: uint loadBackground
+// BUFFER: ->globalResources{{.*}}->background
+// BUFFER: visible]] void BufferMiss_miss(void thread* payload
+// BUFFER-SAME: uchar thread* globalResources
+// BUFFER: = (MetalRTGlobalResources{{.*}} thread*){{.*}}globalResources
+// BUFFER: BufferMiss_invoke
+
+// CONSTANT: = 17U;
+// CONSTANT: visible]] void ConstantMiss_miss(void thread* payload
+// CONSTANT-SAME: uchar thread* globalResources
+// CONSTANT: ConstantMiss_invoke

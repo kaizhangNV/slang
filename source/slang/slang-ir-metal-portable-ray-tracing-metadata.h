@@ -14,7 +14,11 @@ void addMetalRTProgramMetadata(
     IRIntegerValue maxLevels,
     IRIntegerValue hitStride,
     IRIntegerValue missStride,
-    IRIntegerValue callableStride);
+    IRIntegerValue callableStride,
+    UInt hitGroupCount,
+    UInt missShaderCount,
+    UInt callableShaderCount,
+    UInt candidateFunctionTableSize);
 
 /// Associates an exported adapter with its owning descriptor and native table index.
 void addMetalRTFunctionMetadata(
@@ -24,6 +28,6 @@ void addMetalRTFunctionMetadata(
     UInt functionIndex,
     UInt requirements);
 
-/// Copies surviving physical layouts and actual exported symbols into artifact-owned metadata.
+/// Copies schema-defined table capacities and this artifact's actual exports into metadata.
 void collectMetalRTMetadata(const IRModule* module, ArtifactPostEmitMetadata& metadata);
 } // namespace Slang

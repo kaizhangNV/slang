@@ -112,11 +112,17 @@ SLANG_UNIT_TEST(metalPortableRayTracingArtifactMetadata)
     SLANG_CHECK_ABORT(module);
     ComPtr<slang::IEntryPoint> entry;
     SLANG_CHECK_ABORT(SLANG_SUCCEEDED(module->findEntryPointByName("main", entry.writeRef())));
-    slang::IComponentType* components[] = {module, entry};
+    ComPtr<slang::IEntryPoint> selectedMiss;
+    SLANG_CHECK_ABORT(SLANG_SUCCEEDED(module->findAndCheckEntryPoint(
+        "ConstantMiss",
+        SLANG_STAGE_MISS,
+        selectedMiss.writeRef(),
+        diagnostics.writeRef())));
+    slang::IComponentType* components[] = {module, entry, selectedMiss};
     ComPtr<slang::IComponentType> composite;
     SLANG_CHECK_ABORT(SLANG_SUCCEEDED(session->createCompositeComponentType(
         components,
-        2,
+        SLANG_COUNT_OF(components),
         composite.writeRef(),
         diagnostics.writeRef())));
     ComPtr<slang::IComponentType> linked;
@@ -162,8 +168,9 @@ SLANG_UNIT_TEST(metalPortableRayTracingArtifactMetadata)
     auto emitted = UnownedStringSlice(
         static_cast<const char*>(code->getBufferPointer()),
         code->getBufferSize());
-    SLANG_CHECK(emitted.indexOf(UnownedStringSlice("packed_float3")) >= 0);
-    SLANG_CHECK(emitted.indexOf(UnownedStringSlice("packed_float2")) >= 0);
+    // This artifact contains ray generation only. The schema still describes both Miss slots
+    // and their record stride; neither provider implementation is emitted here.
+    SLANG_CHECK(emitted.indexOf(UnownedStringSlice("readBackground")) < 0);
     uint32_t programIndices[2] = {};
     for (UInt schemaIndex = 0; schemaIndex < 2; ++schemaIndex)
     {
@@ -174,14 +181,14 @@ SLANG_UNIT_TEST(metalPortableRayTracingArtifactMetadata)
         SLANG_CHECK_ABORT(
             SLANG_SUCCEEDED(physical->getProgramInfo(programIndices[schemaIndex], &program)));
         SLANG_CHECK(UnownedStringSlice(program.schemaTypeMangledName) == UnownedStringSlice(name));
-        SLANG_CHECK(program.resourceCount == 5 && program.functionCount == 2);
+        SLANG_CHECK(program.resourceCount == 7 && program.functionCount == 0);
+        SLANG_CHECK(program.candidateDescriptorBufferIndex == UINT32_MAX);
         SLANG_CHECK(program.tagMask == uint32_t(slang::MetalRayTracingTag::Instancing));
         SLANG_CHECK(program.recordHeaderSize == 16 && program.recordAlignment == 16);
         SLANG_CHECK(program.missRecordStride == 128);
         SLANG_CHECK(
             program.missRecordStride ==
             ((program.recordHeaderSize + recordLayout->getSize() + 15) / 16) * 16);
-        bool seenMissIndices[2] = {};
         for (uint32_t i = 0; i < program.resourceCount; ++i)
         {
             slang::MetalRayTracingResourceInfo resource;
@@ -193,19 +200,6 @@ SLANG_UNIT_TEST(metalPortableRayTracingArtifactMetadata)
                 (resource.kind == slang::MetalRayTracingResourceKind::MissVisibleFunctionTable
                      ? 2u
                      : 0u));
-        }
-        for (uint32_t i = 0; i < program.functionCount; ++i)
-        {
-            slang::MetalRayTracingFunctionInfo function;
-            SLANG_CHECK_ABORT(SLANG_SUCCEEDED(
-                physical->getProgramFunctionInfo(programIndices[schemaIndex], i, &function)));
-            SLANG_CHECK(
-                function.tableKind == slang::MetalRayTracingResourceKind::MissVisibleFunctionTable);
-            SLANG_CHECK_ABORT(function.functionIndex < 2);
-            SLANG_CHECK(!seenMissIndices[function.functionIndex]);
-            seenMissIndices[function.functionIndex] = true;
-            SLANG_CHECK(function.usesGlobalContext);
-            SLANG_CHECK(emitted.indexOf(UnownedStringSlice(function.entryPointName)) >= 0);
         }
     }
     SLANG_CHECK(programIndices[0] != programIndices[1]);
@@ -219,4 +213,42 @@ SLANG_UNIT_TEST(metalPortableRayTracingArtifactMetadata)
     invalid.structSize = 0;
     SLANG_CHECK(physical->getProgramInfo(0, &invalid) == SLANG_E_INVALID_ARG);
     SLANG_CHECK(physical->getProgramInfo(2, nullptr) == SLANG_E_INVALID_ARG);
+
+    // The selected Miss has no trace/call operation and does not read a global. It nevertheless
+    // shares this component's full resource layout with ray generation, including both nested
+    // descriptor specializations. Their physical fields and metadata must therefore exist here
+    // without retaining the ray-generation body or either unselected Miss implementation.
+    ComPtr<slang::IBlob> providerCode;
+    result = linked->getEntryPointCode(1, 0, providerCode.writeRef(), diagnostics.writeRef());
+    if (SLANG_FAILED(result) && diagnostics)
+        getTestReporter()->message(
+            TestMessageType::Info,
+            static_cast<const char*>(diagnostics->getBufferPointer()));
+    SLANG_CHECK_ABORT(SLANG_SUCCEEDED(result));
+    auto providerText = UnownedStringSlice(
+        static_cast<const char*>(providerCode->getBufferPointer()),
+        providerCode->getBufferSize());
+    SLANG_CHECK(providerText.indexOf(UnownedStringSlice("[[visible]]")) >= 0);
+    SLANG_CHECK(providerText.indexOf(UnownedStringSlice("PortableRTDescriptorResources")) >= 0);
+    SLANG_CHECK(providerText.indexOf(UnownedStringSlice("readBackground")) < 0);
+    SLANG_CHECK(providerText.indexOf(UnownedStringSlice("[[kernel]]")) < 0);
+    ComPtr<slang::IMetadata> providerMetadata;
+    SLANG_CHECK_ABORT(SLANG_SUCCEEDED(
+        linked->getEntryPointMetadata(1, 0, providerMetadata.writeRef(), diagnostics.writeRef())));
+    auto providerPhysical = static_cast<slang::IMetalRayTracingMetadata*>(
+        providerMetadata->castAs(slang::IMetalRayTracingMetadata::getTypeGuid()));
+    SLANG_CHECK_ABORT(providerPhysical && providerPhysical->getProgramCount() == 2);
+    for (UInt schemaIndex = 0; schemaIndex < 2; ++schemaIndex)
+    {
+        uint32_t programIndex;
+        auto name = static_cast<const char*>(schemaNames[schemaIndex]->getBufferPointer());
+        SLANG_CHECK_ABORT(SLANG_SUCCEEDED(
+            providerPhysical->findProgramBySchemaTypeMangledName(name, &programIndex)));
+        slang::MetalRayTracingProgramInfo program;
+        SLANG_CHECK_ABORT(
+            SLANG_SUCCEEDED(providerPhysical->getProgramInfo(programIndex, &program)));
+        SLANG_CHECK(program.resourceCount == 7);
+        SLANG_CHECK(program.candidateDescriptorBufferIndex == UINT32_MAX);
+        SLANG_CHECK(program.missRecordStride == 128);
+    }
 }

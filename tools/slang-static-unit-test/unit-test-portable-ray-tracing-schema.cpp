@@ -11,13 +11,20 @@
 
 using namespace Slang;
 
-// Exercise the actual source producer, linker, specialization, and DCE boundary used by Metal
-// synthesis. A selected miss stage traces another ray but never directly calls its reached
-// stages: the descriptor's schema witness must retain them. Unrelated stages must not be roots.
-SLANG_UNIT_TEST(portableRayTracingSchemaRetainsOnlyReferencedStages)
+// Exercise the source producer, linker, specialization, and DCE boundary with and without an
+// IR-module roundtrip. Reached stage contracts remain available, while unselected invoke bodies
+// and their observable side effects must never become dependencies of the trace entry.
+static void _testSchemaReading(UnitTestContext* unitTestContext, bool serializeModule)
 {
     const char* source = R"(
         import slang.raytracing.portable;
+
+        RWStructuredBuffer<uint> stageBodyOutput;
+        [noinline]
+        void referencedStageBody()
+        {
+            stageBodyOutput[0] = 42;
+        }
 
         struct Payload { uint value; }
         struct TraceContext : rt::ITraceContext
@@ -36,7 +43,13 @@ SLANG_UNIT_TEST(portableRayTracingSchemaRetainsOnlyReferencedStages)
         {
             typealias TraceContext = ::TraceContext;
             typealias Payload = ::Payload;
-            typealias Record = void;
+            typealias Record = uint;
+        }
+        struct CallableContext : rt::ICallableContext
+        {
+            typealias TraceContext = ::TraceContext;
+            typealias CallableData = float2;
+            typealias Record = float4;
         }
         struct Attributes { float coordinate; }
         struct ProceduralContext : rt::IHitContext
@@ -51,6 +64,7 @@ SLANG_UNIT_TEST(portableRayTracingSchemaRetainsOnlyReferencedStages)
             typealias Context = HitContext;
             static void invoke(rt::ClosestHitInput<Context> input)
             {
+                referencedStageBody();
                 input.payload.value = 1;
             }
         }
@@ -64,7 +78,10 @@ SLANG_UNIT_TEST(portableRayTracingSchemaRetainsOnlyReferencedStages)
         struct Intersection : rt::IIntersectionShader
         {
             typealias Context = ProceduralContext;
-            static void invoke(rt::IntersectionInput<Context> input) {}
+            static void invoke(rt::IntersectionInput<Context> input)
+            {
+                referencedStageBody();
+            }
         }
         struct ProceduralGroup : rt::IHitGroup
         {
@@ -86,6 +103,7 @@ SLANG_UNIT_TEST(portableRayTracingSchemaRetainsOnlyReferencedStages)
             typealias Context = MissContext;
             static void invoke(rt::MissInput<Context> input)
             {
+                referencedStageBody();
                 input.payload.value = 2;
             }
         }
@@ -97,12 +115,21 @@ SLANG_UNIT_TEST(portableRayTracingSchemaRetainsOnlyReferencedStages)
                 input.payload.value = 3;
             }
         }
+        struct Callable : rt::ICallableShader
+        {
+            typealias Context = CallableContext;
+            static void invoke(rt::CallableInput<Context> input)
+            {
+                referencedStageBody();
+                input.data += input.record.xy;
+            }
+        }
         struct Schema : rt::ITraceProgramSchema
         {
             typealias TraceContext = ::TraceContext;
             typealias HitGroups = rt::HitGroupList<HitGroup, ProceduralGroup, OpaqueGroup>;
             typealias MissShaders = rt::MissShaderList<Miss>;
-            typealias CallableShaders = rt::EmptyCallableShaderList;
+            typealias CallableShaders = rt::CallableShaderList<Callable>;
         }
         rt::TraceProgramDescriptor<Schema> program;
         RaytracingAccelerationStructure scene;
@@ -148,21 +175,24 @@ SLANG_UNIT_TEST(portableRayTracingSchemaRetainsOnlyReferencedStages)
             static_cast<const char*>(diagnostics->getBufferPointer()));
     SLANG_CHECK_ABORT(module);
 
-    // A separately compiled library carries the same dependency edges. Reload in a fresh
-    // session so neither AST pointers nor cached source-module IR can supply missing metadata.
-    ComPtr<slang::IBlob> serializedModule;
-    SLANG_CHECK_ABORT(SLANG_SUCCEEDED(module->serialize(serializedModule.writeRef())));
-    ComPtr<slang::ISession> importingSession;
-    SLANG_CHECK_ABORT(SLANG_SUCCEEDED(unitTestContext->slangGlobalSession->createSession(
-        sessionDesc,
-        importingSession.writeRef())));
-    module = importingSession->loadModuleFromIRBlob(
-        "schemaRetention",
-        "schemaRetention.slang-module",
-        serializedModule,
-        diagnostics.writeRef());
-    SLANG_CHECK_ABORT(module);
-    session = importingSession;
+    if (serializeModule)
+    {
+        // A separately compiled library carries the same dependency edges. Reload in a fresh
+        // session so neither AST pointers nor cached source-module IR can supply missing metadata.
+        ComPtr<slang::IBlob> serializedModule;
+        SLANG_CHECK_ABORT(SLANG_SUCCEEDED(module->serialize(serializedModule.writeRef())));
+        ComPtr<slang::ISession> importingSession;
+        SLANG_CHECK_ABORT(SLANG_SUCCEEDED(unitTestContext->slangGlobalSession->createSession(
+            sessionDesc,
+            importingSession.writeRef())));
+        module = importingSession->loadModuleFromIRBlob(
+            "schemaRetention",
+            "schemaRetention.slang-module",
+            serializedModule,
+            diagnostics.writeRef());
+        SLANG_CHECK_ABORT(module);
+        session = importingSession;
+    }
 
     ComPtr<slang::IEntryPoint> entryPoint;
     SLANG_CHECK_ABORT(SLANG_SUCCEEDED(module->findAndCheckEntryPoint(
@@ -205,15 +235,25 @@ SLANG_UNIT_TEST(portableRayTracingSchemaRetainsOnlyReferencedStages)
             descriptorType = descriptor;
         }
         if (auto name = inst->findDecoration<IRNameHintDecoration>())
+        {
             SLANG_CHECK(name->getName().indexOf(toSlice("UnrelatedMiss")) < 0);
+            SLANG_CHECK(name->getName().indexOf(toSlice("referencedStageBody")) < 0);
+        }
+        if (auto witness = as<IRWitnessTable>(inst))
+        {
+            auto interfaceType = getResolvedInstForDecorations(witness->getConformanceType());
+            if (auto contract =
+                    interfaceType->findDecoration<IRPortableRTStageContractDecoration>())
+                SLANG_CHECK(!findWitnessTableEntry(witness, contract->getInvokeKey()));
+        }
     }
     SLANG_CHECK_ABORT(descriptorType);
     PortableRT::Schema schema;
-    SLANG_CHECK_ABORT(PortableRT::readSchema(descriptorType, schema));
+    SLANG_CHECK_ABORT(PortableRT::readSchemaContract(descriptorType, schema));
     SLANG_CHECK(schema.type == descriptorType->getSchema());
     SLANG_CHECK_ABORT(schema.hitGroups.getCount() == 3);
-    SLANG_CHECK(schema.missShaders.getCount() == 1);
-    SLANG_CHECK(schema.callableShaders.getCount() == 0);
+    SLANG_CHECK_ABORT(schema.missShaders.getCount() == 1);
+    SLANG_CHECK_ABORT(schema.callableShaders.getCount() == 1);
     SLANG_CHECK(schema.hitGroups[0].closestHit.isPresent);
     SLANG_CHECK(!schema.hitGroups[0].anyHit.isPresent);
     SLANG_CHECK(!schema.hitGroups[0].intersection.isPresent);
@@ -224,12 +264,62 @@ SLANG_UNIT_TEST(portableRayTracingSchemaRetainsOnlyReferencedStages)
     SLANG_CHECK(!opaque.closestHit.isPresent);
     SLANG_CHECK(!opaque.anyHit.isPresent);
     SLANG_CHECK(!opaque.intersection.isPresent);
-    SLANG_CHECK(opaque.payloadType == schema.hitGroups[0].closestHit.input->getPayloadType());
-    SLANG_CHECK(opaque.recordType == schema.hitGroups[0].closestHit.input->getRecordType());
-    SLANG_CHECK(opaque.primitiveType == schema.hitGroups[0].closestHit.input->getPrimitiveType());
-    SLANG_CHECK(opaque.attributesType == schema.hitGroups[0].closestHit.input->getAttributesType());
+    SLANG_CHECK(opaque.payloadType == schema.hitGroups[0].closestHit.payloadType);
+    SLANG_CHECK(opaque.recordType == schema.hitGroups[0].closestHit.recordType);
+    SLANG_CHECK(opaque.primitiveType == schema.hitGroups[0].closestHit.primitiveType);
+    SLANG_CHECK(opaque.attributesType == schema.hitGroups[0].closestHit.attributesType);
     SLANG_CHECK(schema.missShaders[0].isPresent);
-    SLANG_CHECK(
-        schema.hitGroups[0].closestHit.invoke->getParent() == linkedIR.module->getModuleInst());
-    SLANG_CHECK(schema.missShaders[0].invoke->getParent() == linkedIR.module->getModuleInst());
+    SLANG_CHECK(schema.missShaders[0].payloadType == opaque.payloadType);
+    SLANG_CHECK(as<IRUIntType>(schema.missShaders[0].recordType));
+    SLANG_CHECK(!schema.missShaders[0].primitiveType);
+    SLANG_CHECK(!schema.missShaders[0].attributesType);
+    SLANG_CHECK(schema.callableShaders[0].isPresent);
+    auto callableData = as<IRVectorType>(schema.callableShaders[0].payloadType);
+    SLANG_CHECK_ABORT(callableData);
+    SLANG_CHECK(as<IRFloatType>(callableData->getElementType()));
+    SLANG_CHECK(as<IRIntLit>(callableData->getElementCount())->getValue() == 2);
+    auto callableRecord = as<IRVectorType>(schema.callableShaders[0].recordType);
+    SLANG_CHECK_ABORT(callableRecord);
+    SLANG_CHECK(as<IRFloatType>(callableRecord->getElementType()));
+    SLANG_CHECK(as<IRIntLit>(callableRecord->getElementCount())->getValue() == 4);
+    SLANG_CHECK(!schema.callableShaders[0].primitiveType);
+    SLANG_CHECK(!schema.callableShaders[0].attributesType);
+
+    List<const PortableRT::SchemaStage*> stages;
+    for (auto& group : schema.hitGroups)
+    {
+        const PortableRT::SchemaStage* groupStages[] = {
+            &group.closestHit,
+            &group.anyHit,
+            &group.intersection,
+        };
+        for (auto stage : groupStages)
+        {
+            SLANG_CHECK(stage->contextType == group.contextType);
+            SLANG_CHECK(stage->payloadType == group.payloadType);
+            SLANG_CHECK(stage->recordType == group.recordType);
+            SLANG_CHECK(stage->primitiveType == group.primitiveType);
+            SLANG_CHECK(stage->attributesType == group.attributesType);
+            stages.add(stage);
+        }
+    }
+    stages.add(&schema.missShaders[0]);
+    stages.add(&schema.callableShaders[0]);
+    for (auto stage : stages)
+    {
+        SLANG_CHECK(stage->witness);
+        SLANG_CHECK(stage->contextWitness);
+        SLANG_CHECK(!stage->invoke);
+        SLANG_CHECK(!stage->input);
+    }
+}
+
+SLANG_UNIT_TEST(portableRayTracingSchemaRetainsOnlyContract)
+{
+    _testSchemaReading(unitTestContext, false);
+}
+
+SLANG_UNIT_TEST(portableRayTracingSchemaContractWithoutInvocations)
+{
+    _testSchemaReading(unitTestContext, true);
 }

@@ -104,16 +104,16 @@ void RayGeneration()
 }
 
 // INSTANCE-DAG: acceleration_structure<metal::raytracing::instancing, metal::raytracing::instance_motion>
-// INSTANCE-DAG: intersector<metal::raytracing::instancing, metal::raytracing::instance_motion>
-// INSTANCE-DAG: intersection_function_table<metal::raytracing::instancing, metal::raytracing::instance_motion>
+// INSTANCE-DAG: intersector<metal::raytracing::instancing, metal::raytracing::triangle_data, metal::raytracing::world_space_data, metal::raytracing::instance_motion>
+// INSTANCE-DAG: intersection_function_table<metal::raytracing::instancing, metal::raytracing::triangle_data, metal::raytracing::world_space_data, metal::raytracing::instance_motion>
 // INSTANCE-DAG: float time_
-// INSTANCE-DAG: intersection(triangle, metal::raytracing::instancing, metal::raytracing::instance_motion)
+// INSTANCE-DAG: intersection(triangle, metal::raytracing::instancing, metal::raytracing::triangle_data, metal::raytracing::world_space_data, metal::raytracing::instance_motion)
 // INSTANCE-DAG: instanceMask_{{[0-9]+}}, {{.*}}time_{{[0-9]+}}, {{.*}}intersectionFunctions_
 // INSTANCE-NOT: metalRTGetRayTime
 // COMBINED-DAG: acceleration_structure<metal::raytracing::instancing, metal::raytracing::primitive_motion, metal::raytracing::instance_motion>
-// COMBINED-DAG: intersector<metal::raytracing::instancing, metal::raytracing::primitive_motion, metal::raytracing::instance_motion>
-// COMBINED-DAG: intersection_function_table<metal::raytracing::instancing, metal::raytracing::primitive_motion, metal::raytracing::instance_motion>
+// COMBINED-DAG: intersector<metal::raytracing::instancing, metal::raytracing::triangle_data, metal::raytracing::world_space_data, metal::raytracing::primitive_motion, metal::raytracing::instance_motion>
+// COMBINED-DAG: intersection_function_table<metal::raytracing::instancing, metal::raytracing::triangle_data, metal::raytracing::world_space_data, metal::raytracing::primitive_motion, metal::raytracing::instance_motion>
 // COMBINED-DAG: float time_
-// COMBINED-DAG: intersection(triangle, metal::raytracing::instancing, metal::raytracing::primitive_motion, metal::raytracing::instance_motion)
+// COMBINED-DAG: intersection(triangle, metal::raytracing::instancing, metal::raytracing::triangle_data, metal::raytracing::world_space_data, metal::raytracing::primitive_motion, metal::raytracing::instance_motion)
 // COMBINED-DAG: instanceMask_{{[0-9]+}}, {{.*}}time_{{[0-9]+}}, {{.*}}intersectionFunctions_
 // COMBINED-NOT: metalRTGetRayTime

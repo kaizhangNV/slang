@@ -1,4 +1,8 @@
 //TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry RayGeneration -stage raygeneration -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=UINT): -experimental-feature -entry UintCallable -stage callable -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=FLOAT): -experimental-feature -entry FloatCallable -stage callable -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=EMPTY): -experimental-feature -entry EmptyCallable -stage callable -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=VOID): -experimental-feature -entry VoidCallable -stage callable -target metal -profile metallib_2_4 -validate-ir
 
 import slang.raytracing.portable;
 
@@ -113,13 +117,24 @@ void RayGeneration()
     output[1] = uint(floatData);
 }
 
+// METAL-NOT: visible]]
 // METAL-DAG: visible_function_table<void(void thread*, uint3, uint3,
 // METAL-DAG: thread_position_in_grid
 // METAL-DAG: threads_per_grid
-// METAL-DAG: _callable_0
-// METAL-DAG: _callable_1
-// METAL-DAG: _callable_2
-// METAL-DAG: _callable_3
 // METAL-DAG: forward
-// METAL-DAG: preserveData
+// METAL-NOT: visible]]
 // METAL-NOT: metalRTCallShader
+
+// UINT: rt_CallableInput_dispatchRaysIndex_get
+// UINT: visible]] void UintCallable_callable(void thread* data
+// UINT: UintCallable_invoke{{.*}}((uint thread*){{.*}}data{{.*}}, dispatchRaysIndex
+// FLOAT: *{{.*}} = *{{.*}} * 2.0f;
+// FLOAT: visible]] void FloatCallable_callable(void thread* data
+// FLOAT: FloatCallable_invoke{{.*}}((float thread*){{.*}}data
+// EMPTY: rt_CallableInput_dispatchRaysDimensions_get
+// EMPTY: visible]] void EmptyCallable_callable(void thread* data
+// EMPTY: EmptyCallable_invoke{{.*}}(dispatchRaysDimensions
+// VOID: void preserveData{{.*}}(void thread*
+// VOID: + 1U;
+// VOID: visible]] void VoidCallable_callable(void thread* data
+// VOID: VoidCallable_invoke{{.*}}(nullptr,

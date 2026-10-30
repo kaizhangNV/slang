@@ -92,6 +92,6 @@ void RayGeneration()
     output[0] = payload;
 }
 
-// METAL-DAG: intersection(triangle, metal::raytracing::instancing, metal::raytracing::triangle_data)
-// METAL-DAG: intersection(bounding_box, metal::raytracing::instancing, metal::raytracing::triangle_data)
+// METAL-DAG: intersection(triangle, metal::raytracing::instancing, metal::raytracing::triangle_data{{[^)]*}})
+// METAL-DAG: intersection(bounding_box, metal::raytracing::instancing, metal::raytracing::triangle_data{{[^)]*}})
 // METAL-NOT: metalRTGetHitKind

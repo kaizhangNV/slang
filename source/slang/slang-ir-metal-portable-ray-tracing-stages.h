@@ -10,8 +10,8 @@ namespace PortableRT
 namespace Metal
 {
 
-/// Describes values used by a source stage and its ordinary callees. The mask selects VFT
-/// parameters; the booleans select fields carried from the originating trace in ray_data.
+/// Describes the fixed invocation contract shared by independently compiled stages. The mask
+/// selects VFT parameters; the booleans select state carried from the originating trace.
 struct StageRequirements
 {
     UInt mask = 0;
@@ -24,7 +24,7 @@ struct StageRequirements
     bool has(MetalRTStageRequirement requirement) const { return (mask & UInt(requirement)) != 0; }
     void add(MetalRTStageRequirement requirement) { mask |= UInt(requirement); }
 
-    /// Forms the table-wide signature while retaining every stage's carrier requirements.
+    /// Combines the contracts whose state a shared traversal carrier must transport.
     void combine(const StageRequirements& other);
 };
 
@@ -66,6 +66,10 @@ IRInst* getRayPayloadReference(
     IRInst* rayData,
     IRType* payloadType);
 
+/// Restores a stage's nominal data reference from its erased ABI pointer. Void and empty source
+/// types carry no bytes; their references remain nominal tokens until ordinary legalization.
+IRInst* getStageDataReference(IRBuilder& builder, IRInst* erasedAddress, IRType* dataType);
+
 /// Binds one logical accessor result to a concrete adapter value. A reference getter's logical
 /// result type can differ from the value's physical pointer type, which retains its address space.
 struct StageInputBinding
@@ -84,12 +88,12 @@ struct VisibleAdapter
     IRInst* records = nullptr;
 };
 
-/// Collects operations reachable through specialized direct calls. The acceleration-structure
-/// contract determines whether instance identifiers use scalar values or indexed path views.
-StageRequirements collectStageRequirements(IRFunc* invoke, bool multiLevel = false);
+/// Selects a stage ABI from its declared kind and acceleration-structure topology. A shader body
+/// cannot change this contract, so caller and selected-stage compilations agree independently.
+StageRequirements getStageContractRequirements(Stage stage, bool multiLevel = false);
 
 /// Collects reachable invocation getters, excluding dispatch and candidate-control operations.
-/// Standalone immutable helpers use these exact operations to form their ordinary parameters.
+/// Adapters use these operations only to bind source getters to the fixed invocation values.
 void collectStageInputOperations(IRFunc* invoke, List<IRInst*>& operations);
 
 /// Identifies a logical invocation getter before a selected adapter supplies its value.
@@ -102,10 +106,9 @@ bool isBuiltinHitAttributeView(IRInst* operation);
 IRFuncType* getVisibleFunctionSignature(
     IRBuilder& builder,
     const StageRequirements& requirements,
-    IRType* descriptorPointerType,
-    IRType* instancePathParamType);
+    IRType* descriptorPointerType);
 
-/// Builds the callable-table ABI: erased data, optional launch/record inputs, and the descriptor
+/// Builds the callable-table ABI: erased data, fixed launch/record inputs, and the descriptor
 /// resources needed by nested dispatch. The runtime record still determines the concrete data type.
 IRFuncType* getCallableFunctionSignature(
     IRBuilder& builder,
@@ -118,10 +121,8 @@ VisibleAdapter createVisibleAdapter(
     IRModule* module,
     const SchemaStage& stage,
     const StageRequirements& tableRequirements,
-    const RayData& carrier,
     UnownedStringSlice symbolName,
-    IRType* descriptorPointerType,
-    IRType* instancePathParamType);
+    IRType* descriptorPointerType);
 
 /// Creates a callable VFT function while retaining the ordinary static source implementation.
 /// Include the returned root in the same immutable-input batch as visible and candidate stages.

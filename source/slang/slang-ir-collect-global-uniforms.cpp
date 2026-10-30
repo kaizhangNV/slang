@@ -2,6 +2,7 @@
 #include "slang-ir-collect-global-uniforms.h"
 
 #include "slang-ir-insts.h"
+#include "slang-ir-metal-portable-ray-tracing-context.h"
 #include "slang-ir-util.h"
 
 namespace Slang
@@ -251,6 +252,26 @@ struct CollectGlobalUniformParametersContext
 
             auto globalParamLayout = fieldLayoutAttr->getLayout();
 
+            // The uniform wrapper replaces these ProgramLayout-owned parameters. Carry the
+            // earliest declaration coordinate so its physical resource leaves keep a stable
+            // place in the independently compiled Metal shader resource context.
+            if (globalParam &&
+                globalParamLayout->getTypeLayout()->findSizeAttr(LayoutResourceKind::Uniform))
+            {
+                if (auto resource =
+                        globalParam->findDecoration<IRMetalRTGlobalResourceDecoration>())
+                {
+                    if (!wrapperParam->findDecoration<IRMetalRTGlobalResourceDecoration>())
+                    {
+                        builder->addDecoration(
+                            wrapperParam,
+                            kIROp_MetalRTGlobalResourceDecoration,
+                            resource->getOperand(0));
+                        builder->addKeepAliveDecoration(wrapperParam);
+                    }
+                }
+            }
+
             // Set insert position to a valid instruction under the global parent scope so we can
             // create struct keys.
             builder->setInsertAfter(fieldLayoutAttr->getFieldKey());
@@ -424,6 +445,38 @@ struct CollectGlobalUniformParametersContext
         }
     }
 };
+
+void preserveMetalPortableRayTracingGlobalParameters(
+    IRModule* module,
+    IRVarLayout* globalScopeVarLayout)
+{
+    if (!globalScopeVarLayout)
+        return;
+    auto typeLayout = globalScopeVarLayout->getTypeLayout();
+    if (auto group = as<IRParameterGroupTypeLayout>(typeLayout))
+        typeLayout = group->getElementVarLayout()->getTypeLayout();
+    auto structure = cast<IRStructTypeLayout>(typeLayout);
+    CollectGlobalUniformParametersContext context;
+    IRBuilder builder(module);
+    IRIntegerValue layoutIndex = 0;
+    // The linker has cloned the complete component layout. Its declaration sequence survives
+    // even when a shader reads no globals or two declarations intentionally alias one binding.
+    for (auto field : structure->getFieldLayoutAttrs())
+    {
+        auto parameter = context._getGlobalParamFromLayoutFieldKey(field->getFieldKey());
+        if (parameter &&
+            !field->getLayout()->findOffsetAttr(LayoutResourceKind::SpecializationConstant))
+        {
+            builder.addDecoration(
+                parameter,
+                kIROp_MetalRTGlobalResourceDecoration,
+                builder.getIntValue(builder.getIntType(), layoutIndex));
+            if (!parameter->findDecoration<IRKeepAliveDecoration>())
+                builder.addKeepAliveDecoration(parameter);
+        }
+        ++layoutIndex;
+    }
+}
 
 void collectGlobalUniformParameters(
     IRModule* module,

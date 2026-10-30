@@ -92,34 +92,36 @@ static bool _isPlaceholder(IRType* stageType, Stage stage)
     }
 }
 
-static SchemaStage _readStage(IRType* type, IRWitnessTable* witness, Stage stage)
+// A stage's Context is an associated-type requirement, independent of its invoke signature.
+// For example, IMissShader.Context fixes Payload and Record even when another compilation
+// supplies Miss.invoke. Read those canonical witnesses before asking for any executable code.
+static SchemaStage _readStageContract(IRType* type, IRWitnessTable* witness, Stage stage)
 {
     SchemaStage result;
     result.stage = stage;
     result.type = type;
-    if (_isPlaceholder(type, stage))
-        return result;
-
-    if (stage == Stage::Intersection)
+    result.witness = witness;
+    result.contextType = _getAssociatedType(witness, KnownBuiltinDeclName::RayTracingStageContext);
+    result.contextWitness =
+        _getAssociatedWitness(witness, KnownBuiltinDeclName::RayTracingStageContext);
+    auto payloadRole = stage == Stage::Callable
+                           ? KnownBuiltinDeclName::RayTracingContextCallableData
+                           : KnownBuiltinDeclName::RayTracingContextPayload;
+    result.payloadType = _getAssociatedType(result.contextWitness, payloadRole);
+    result.recordType =
+        _getAssociatedType(result.contextWitness, KnownBuiltinDeclName::RayTracingContextRecord);
+    if (stage == Stage::ClosestHit || stage == Stage::AnyHit || stage == Stage::Intersection)
     {
-        auto implementation = witness->findDecoration<IRPortableRTIntersectionStageDecoration>();
-        SLANG_RELEASE_ASSERT(implementation);
-        witness = as<IRWitnessTable>(implementation->getExecutableWitness());
-        SLANG_RELEASE_ASSERT(witness);
+        result.primitiveType = _getAssociatedType(
+            result.contextWitness,
+            KnownBuiltinDeclName::RayTracingContextPrimitive);
+        result.attributesType = _getAssociatedType(
+            _getAssociatedWitness(
+                result.contextWitness,
+                KnownBuiltinDeclName::RayTracingContextPrimitive),
+            KnownBuiltinDeclName::RayTracingPrimitiveAttributes);
     }
-    auto interfaceType = getResolvedInstForDecorations(witness->getConformanceType());
-    auto contract = interfaceType->findDecoration<IRPortableRTStageContractDecoration>();
-    SLANG_RELEASE_ASSERT(contract && Stage(contract->getStageKind()->getValue()) == stage);
-    result.invoke = as<IRFunc>(findWitnessTableEntry(witness, contract->getInvokeKey()));
-    SLANG_RELEASE_ASSERT(result.invoke && result.invoke->getParamCount() == 1);
-    auto inputType = unwrapAttributedType(result.invoke->getParamType(0));
-    // An explicit source `in` can have been represented as a read-only borrow by the time
-    // discovery runs. It still denotes the same logical invocation view, not another context.
-    if (auto borrowType = as<IRBorrowInParamType>(inputType))
-        inputType = borrowType->getValueType();
-    result.input = inputType->findDecoration<IRPortableRTStageInputDecoration>();
-    SLANG_RELEASE_ASSERT(result.input && Stage(result.input->getStageKind()->getValue()) == stage);
-    result.isPresent = true;
+    result.isPresent = !_isPlaceholder(type, stage);
     return result;
 }
 
@@ -134,12 +136,12 @@ IRRaytracingAccelerationStructureType* getStageAccelerationStructure(
         KnownBuiltinDeclName::RayTracingTraceAccelerationStructure));
 }
 
-static SchemaStage _readGroupStage(
+static SchemaStage _readGroupStageContract(
     IRWitnessTable* groupWitness,
     KnownBuiltinDeclName role,
     Stage stage)
 {
-    return _readStage(
+    return _readStageContract(
         _getAssociatedType(groupWitness, role),
         _getAssociatedWitness(groupWitness, role),
         stage);
@@ -163,7 +165,7 @@ static ShaderList _readList(IRType* type)
     return result;
 }
 
-bool readSchema(IRTraceProgramDescriptorType* descriptorType, Schema& outSchema)
+bool readSchemaContract(IRTraceProgramDescriptorType* descriptorType, Schema& outSchema)
 {
     auto witness = as<IRWitnessTable>(descriptorType->getSchemaWitness());
     if (!witness)
@@ -199,15 +201,15 @@ bool readSchema(IRTraceProgramDescriptorType* descriptorType, Schema& outSchema)
         group.attributesType = _getAssociatedType(
             _getAssociatedWitness(contextWitness, KnownBuiltinDeclName::RayTracingContextPrimitive),
             KnownBuiltinDeclName::RayTracingPrimitiveAttributes);
-        group.closestHit = _readGroupStage(
+        group.closestHit = _readGroupStageContract(
             groupWitness,
             KnownBuiltinDeclName::RayTracingHitGroupClosestHit,
             Stage::ClosestHit);
-        group.anyHit = _readGroupStage(
+        group.anyHit = _readGroupStageContract(
             groupWitness,
             KnownBuiltinDeclName::RayTracingHitGroupAnyHit,
             Stage::AnyHit);
-        group.intersection = _readGroupStage(
+        group.intersection = _readGroupStageContract(
             groupWitness,
             KnownBuiltinDeclName::RayTracingHitGroupIntersection,
             Stage::Intersection);
@@ -217,7 +219,7 @@ bool readSchema(IRTraceProgramDescriptorType* descriptorType, Schema& outSchema)
         _readList(_getAssociatedType(witness, KnownBuiltinDeclName::RayTracingProgramMissShaders));
     for (UInt i = 0; i < missList.types->getOperandCount(); ++i)
     {
-        result.missShaders.add(_readStage(
+        result.missShaders.add(_readStageContract(
             cast<IRType>(missList.types->getOperand(i)),
             cast<IRWitnessTable>(missList.witnesses->getOperand(i)),
             Stage::Miss));
@@ -226,7 +228,7 @@ bool readSchema(IRTraceProgramDescriptorType* descriptorType, Schema& outSchema)
         _getAssociatedType(witness, KnownBuiltinDeclName::RayTracingProgramCallableShaders));
     for (UInt i = 0; i < callableList.types->getOperandCount(); ++i)
     {
-        result.callableShaders.add(_readStage(
+        result.callableShaders.add(_readStageContract(
             cast<IRType>(callableList.types->getOperand(i)),
             cast<IRWitnessTable>(callableList.witnesses->getOperand(i)),
             Stage::Callable));

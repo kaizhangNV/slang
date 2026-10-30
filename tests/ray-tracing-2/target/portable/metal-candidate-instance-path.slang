@@ -1,4 +1,5 @@
 //TEST:SIMPLE(filecheck=PRIMITIVE): -experimental-feature -entry RayGeneration -stage raygeneration -target metal -capability metallib_3_1 -D LEVELS=1 -validate-ir
+//TEST:SIMPLE(filecheck=PROVIDER): -experimental-feature -entry AnyHit -stage anyhit -target metal -capability metallib_3_1 -D LEVELS=3 -validate-ir
 //TEST:SIMPLE(filecheck=MULTI): -experimental-feature -entry RayGeneration -stage raygeneration -target metal -capability metallib_3_1 -D LEVELS=3 -validate-ir
 
 import slang.raytracing.portable;
@@ -74,7 +75,7 @@ void RayGeneration()
     output[0] = payload;
 }
 
-// PRIMITIVE: intersection(triangle)
+// PRIMITIVE: intersection(triangle, metal::raytracing::triangle_data)
 // PRIMITIVE-NOT: instance_id
 // PRIMITIVE-NOT: user_instance_id
 // PRIMITIVE-NOT: object_to_world_transform
@@ -85,3 +86,8 @@ void RayGeneration()
 // MULTI-DAG: user_instance_id
 // MULTI-DAG: object_to_world_transform
 // MULTI-DAG: world_to_object_transform
+
+// PROVIDER-DAG: visible]]
+// PROVIDER-DAG: readPath
+// PROVIDER-DAG: instanceIndices
+// PROVIDER-DAG: instanceIDs

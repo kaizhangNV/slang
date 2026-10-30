@@ -5158,6 +5158,8 @@ enum class MetalRayTracingResourceKind : uint32_t
     ClosestHitVisibleFunctionTable,
     CallableVisibleFunctionTable,
     Records,
+    AnyHitVisibleFunctionTable,
+    IntersectionVisibleFunctionTable,
 };
 
 struct MetalRayTracingProgramInfo
@@ -5175,6 +5177,9 @@ struct MetalRayTracingProgramInfo
     uint64_t hitRecordStride = 0;
     uint64_t missRecordStride = 0;
     uint64_t callableRecordStride = 0;
+    /// Buffer binding on the IFT for the owning TraceProgramDescriptor argument buffer.
+    /// UINT32_MAX means this artifact has no generated candidate callback.
+    uint32_t candidateDescriptorBufferIndex = UINT32_MAX;
 };
 
 struct MetalRayTracingResourceInfo
@@ -5182,8 +5187,8 @@ struct MetalRayTracingResourceInfo
     size_t structSize = sizeof(MetalRayTracingResourceInfo);
     MetalRayTracingResourceKind kind = MetalRayTracingResourceKind::Records;
     uint32_t argumentBufferID = 0;
-    /// Minimum table size covering emitted indices, including holes in primitive-selected IFT
-    /// slots. Zero means no functions are emitted for that table; not applicable to Records.
+    /// Table capacity required by the schema, including unused hit-group and primitive IFT slots.
+    /// Providers may be emitted in other artifacts. Zero means no slots; not applicable to Records.
     uint32_t functionTableSize = 0;
 };
 
@@ -5197,6 +5202,8 @@ struct MetalRayTracingFunctionInfo
     uint32_t functionIndex = 0;
     MetalRayTracingPrimitive primitive = MetalRayTracingPrimitive::Unknown;
     uint32_t requirements = 0;
+    /// The exported function receives the shared component resource context in its fixed ABI.
+    /// Private mutable shader globals are local to each provider invocation.
     bool usesGlobalContext = false;
 };
 
@@ -5214,7 +5221,8 @@ The Records buffer starts with four uint32 byte offsets, in order: instance hit-
 contributions, hit records, miss records, callable records. Each record starts with a uint32
 function index; the remaining recordHeaderSize bytes are reserved. Application Record data
 starts at recordHeaderSize and each section uses its reflected stride. A hit group's word0
-also selects its candidate dispatch arm; NoClosestHit groups have a valid no-op VFT entry.
+also selects its candidate dispatch arm. A NoClosestHit group leaves an unused closest-hit
+table slot; the generated traversal dispatch skips that call.
 
 Returned strings remain valid for the lifetime of the owning metadata object. Default-initialize
 output structs so structSize is set. Queries return SLANG_E_INVALID_ARG for null output pointers,

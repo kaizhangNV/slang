@@ -1,5 +1,7 @@
 //TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry RayGeneration -stage raygeneration -target metal -profile metallib_2_4 -validate-ir
 //TEST:SIMPLE(filecheck=HLSL): -experimental-feature -entry Intersection -stage intersection -target hlsl -validate-ir
+//TEST:SIMPLE(filecheck=PROVIDER): -experimental-feature -entry Intersection -stage intersection -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=FILTER): -experimental-feature -entry FilteredAnyHit -stage anyhit -target metal -profile metallib_2_4 -validate-ir
 
 import slang.raytracing.portable;
 
@@ -139,8 +141,17 @@ void RayGeneration()
 // METAL-DAG: max_distance
 // METAL-DAG: opaque
 // METAL-DAG: buffer(
-// METAL-DAG: readCurrentLimit
-// METAL-DAG: filter
+// METAL-DAG: anyHitFunctions
+// METAL-DAG: intersectionShaders
+// METAL-NOT: readCurrentLimit
+// METAL-NOT: filter_
 // METAL-NOT: metalRTReportHit
 // METAL-NOT: metalRTIgnoreHit
+// PROVIDER-DAG: visible]]
+// PROVIDER-DAG: readCurrentLimit
+// PROVIDER-DAG: portableRTReportHit
+// PROVIDER-NOT: metalRTReportHit
+// FILTER-DAG: visible]]
+// FILTER-DAG: filter
+// FILTER-NOT: metalRTIgnoreHit
 // HLSL: ReportHit(

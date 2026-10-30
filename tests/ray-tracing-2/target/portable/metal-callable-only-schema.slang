@@ -77,7 +77,7 @@ rt::TraceProgramDescriptor<Schema> program;
 RWStructuredBuffer<uint> output;
 
 // No trace call or acceleration-structure resource exists. The complete schema still describes
-// all its table exports; resource construction and metadata cannot depend on observing a trace.
+// all its table contracts; resource construction and metadata cannot depend on observing a trace.
 [shader("raygeneration")]
 void RayGeneration()
 {
@@ -87,9 +87,10 @@ void RayGeneration()
     output[0] = data;
 }
 
+// METAL-NOT: visible]]
+// METAL-DAG: closestHitFunctions
+// METAL-DAG: missFunctions
+// METAL-DAG: callableFunctions
 // METAL-DAG: _slang_callable_function_index
-// METAL-DAG: __slang_portable_rt_0_closesthit_0
-// METAL-DAG: __slang_portable_rt_0_miss_0
-// METAL-DAG: __slang_portable_rt_0_callable_0
-// METAL-DAG: barycentricCoord
+// METAL-NOT: visible]]
 // METAL-NOT: metalRTCallShader

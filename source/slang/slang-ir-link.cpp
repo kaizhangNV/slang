@@ -781,11 +781,10 @@ bool shouldDeepCloneWitnessTable(IRSpecContextBase* context, IRWitnessTable* tab
         case kIROp_ComInterfaceDecoration:
             return true;
         case kIROp_PortableRTReflectedInterfaceDecoration:
-            // A reached schema/context/stage witness is consumed by target synthesis, even when
-            // source code never calls invoke or reads its associated types. Its ordinary entries
-            // are therefore live reflective dependencies. Unreferenced witnesses are still never
-            // cloned, so an unrelated schema does not retain its stages merely by being imported.
-            return true;
+            // Serialized modules must preserve the full source conformance. Final codegen
+            // needs only the checked contract unless an ordinary lookup requests a method;
+            // cloneWitnessTableImpl retains those metadata entries separately below.
+            return !context->getShared()->isFinalCodegenLink;
         case kIROp_KnownBuiltinDecoration:
             {
                 // Witness tables for the differentiable builtin interfaces carry
@@ -813,6 +812,24 @@ bool shouldDeepCloneWitnessTable(IRSpecContextBase* context, IRWitnessTable* tab
     }
 
     return false;
+}
+
+// A schema such as MissShaderList<Miss> needs Miss.Context and that context's Payload/Record
+// witnesses to fix its dispatch ABI. It does not call Miss.invoke. The source producer marks
+// associated-type requirements and their declared conformance/inheritance edges explicitly;
+// retain those canonical entries while ordinary executable lookups control method retention.
+static bool isPortableRTContractEntry(IRWitnessTableEntry* entry)
+{
+    auto key = entry->getRequirementKey();
+    if (key->findDecoration<IRPortableRTAssociatedTypeWitnessDecoration>() ||
+        key->findDecoration<IRPortableRTBaseInterfaceDecoration>())
+        return true;
+    auto builtin = key->findDecoration<IRKnownBuiltinDecoration>();
+    if (!builtin)
+        return false;
+    auto role = builtin->getName();
+    return role >= KnownBuiltinDeclName::RayTracingProgramHitGroups &&
+           role <= KnownBuiltinDeclName::RayTracingStageContext;
 }
 
 IRWitnessTable* cloneWitnessTableImpl(
@@ -857,6 +874,9 @@ IRWitnessTable* cloneWitnessTableImpl(
     witnessInfo->originalTable = originalTable;
 
     bool shouldDeepClone = shouldDeepCloneWitnessTable(context, originalTable);
+    bool reflectsPortableRTContract =
+        getResolvedInstForDecorations(originalTable->getConformanceType())
+            ->findDecoration<IRPortableRTReflectedInterfaceDecoration>() != nullptr;
 
     // Clone only the witness table entries that are actually used
     for (auto child : originalTable->getDecorationsAndChildren())
@@ -870,7 +890,8 @@ IRWitnessTable* cloneWitnessTableImpl(
             // deferring.
             bool isBuiltinReqEntry =
                 as<IRBuiltinRequirementKey>(entry->getRequirementKey()) != nullptr;
-            if (!shouldDeepClone && !isBuiltinReqEntry)
+            bool isContractEntry = reflectsPortableRTContract && isPortableRTContractEntry(entry);
+            if (!shouldDeepClone && !isBuiltinReqEntry && !isContractEntry)
             {
                 // Skip witness table entries during the first pass,
                 // and just add them to the deferred work list.

@@ -33,9 +33,9 @@ struct CallableContext : rt::ICallableContext
 
 StructuredBuffer<uint> values;
 
-// A standalone selected stage is an ordinary exported helper, not a native Metal stage. Its
-// caller supplies the used invocation values; no schema, function table, or SBT is fabricated.
-// Keep a helper call so address-space analysis must start from the selected exported wrapper.
+// A standalone selected stage exports a visible adapter with the fixed stage contract.
+// No schema or table resource is needed to compile it. Keep a helper call so address-space
+// analysis must start from the adapter and propagate through the ordinary invocation body.
 [noinline]
 void updateMiss(rt::MissInput<MissContext> input)
 {
@@ -80,14 +80,20 @@ struct StandaloneCallable : rt::ICallableShader
 }
 
 // MISS: updateMiss
-// MISS: void StandaloneMiss_miss(
-// MISS-NOT: kernel void
+// MISS: visible]] void StandaloneMiss_miss(
+// MISS-SAME: uchar device* recordData
+// MISS-SAME: uchar thread* globalResources
+// MISS-NOT: kernel]]
 // MISS-NOT: visible_function_table
 // MISS-NOT: intersection_function_table
-// HIT: void StandaloneHit_closesthit(
-// HIT-NOT: kernel void
+// HIT: visible]] void StandaloneHit_closesthit(
+// HIT-SAME: void thread* attributes
+// HIT-SAME: uchar thread* globalResources
+// HIT-NOT: kernel]]
 // HIT-NOT: visible_function_table
 // CALLABLE: updateCallable
-// CALLABLE: void StandaloneCallable_callable(
-// CALLABLE-NOT: kernel void
+// CALLABLE: visible]] void StandaloneCallable_callable(
+// CALLABLE-SAME: uint3 dispatchRaysIndex
+// CALLABLE-SAME: uchar thread* globalResources
+// CALLABLE-NOT: kernel]]
 // CALLABLE-NOT: visible_function_table

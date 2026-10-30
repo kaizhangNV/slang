@@ -41,7 +41,6 @@ struct Program : RefObject
     StageRequirements allRequirements;
     RayDataHeader header;
     Dictionary<IRType*, RayData> carriers;
-    List<VisibleAdapter> adapters;
     CandidateAdapters candidates;
     IRIntegerValue hitStride = kMetalRTRecordHeaderSize;
     IRIntegerValue missStride = kMetalRTRecordHeaderSize;
@@ -49,6 +48,7 @@ struct Program : RefObject
     IRFunc* instanceContribution = nullptr;
     IRType* instancePathType = nullptr;
     bool hasCandidates = false;
+    bool isTraced = false;
 };
 
 /// Creates a field once and returns its canonical key for all subsequent loads and stores.
@@ -79,11 +79,11 @@ RayDataHeader createHeader(IRModule* module)
     return result;
 }
 
-/// Constructs invocation storage from reachable requirements, rather than making every shader
-/// carry every optional builtin. The exact payload IR type is the cache key: a trace and its
-/// compatible stage therefore use one carrier without reconstructing or comparing source syntax.
-/// Empty source payloads share canonical void as their storage key. In particular, the library's
-/// payload-less overload and an application's empty payload need the same procedural attributes.
+/// Constructs invocation storage from the schema contract. The exact payload IR type is the cache
+/// key: a trace and its compatible stage therefore use one carrier without reconstructing or
+/// comparing source syntax. Empty source payloads share canonical void as their storage key. In
+/// particular, the library's payload-less overload and an application's empty payload need the same
+/// procedural attributes.
 RayData& getCarrier(IRModule* module, Program& program, IRType* payloadType)
 {
     IRBuilder builder(module);
@@ -176,8 +176,7 @@ bool getRecordStride(
     return true;
 }
 
-/// Collects the schema's own requirements before indirect dispatch propagates requirements from
-/// its callees. Resource signatures and adapters are created only after that propagation finishes.
+/// Reads the schema contract without resolving any stage implementation.
 RefPtr<Program> createProgram(
     IRModule* module,
     TargetRequest* target,
@@ -190,7 +189,7 @@ RefPtr<Program> createProgram(
     auto& program = *result;
     program.sourceType = type;
     program.index = programIndex;
-    SLANG_RELEASE_ASSERT(readSchema(type, program.schema));
+    SLANG_RELEASE_ASSERT(readSchemaContract(type, program.schema));
     TraceContextRequirements contextRequirements;
     if (!getTraceContextRequirements(program.schema, target, useSite, sink, contextRequirements))
         return nullptr;
@@ -200,6 +199,14 @@ RefPtr<Program> createProgram(
     auto accelerationStructure =
         cast<IRRaytracingAccelerationStructureType>(program.schema.accelerationStructure);
     bool hasInstancePath = accelerationStructure->getOperandCount() != 0;
+    program.hitRequirements = getStageContractRequirements(Stage::ClosestHit, hasInstancePath);
+    program.missRequirements = getStageContractRequirements(Stage::Miss, hasInstancePath);
+    program.callableRequirements = getStageContractRequirements(Stage::Callable, hasInstancePath);
+    program.candidateRequirements = program.hitRequirements;
+    program.allRequirements.combine(program.hitRequirements);
+    program.allRequirements.combine(program.missRequirements);
+    program.allRequirements.combine(program.candidateRequirements);
+
     bool firstGeometry = true;
     for (auto& group : program.schema.hitGroups)
     {
@@ -209,63 +216,33 @@ RefPtr<Program> createProgram(
                 ? geometry
                 : (program.geometry == geometry ? geometry : MetalRTGeometryKind::Unknown);
         firstGeometry = false;
-        auto hitRequirements = collectStageRequirements(group.closestHit.invoke, hasInstancePath);
-        program.hitRequirements.combine(hitRequirements);
-        auto candidateRequirements = collectStageRequirements(group.anyHit.invoke, hasInstancePath);
-        candidateRequirements.combine(
-            collectStageRequirements(group.intersection.invoke, hasInstancePath));
-        program.candidateRequirements.combine(candidateRequirements);
         program.hasCandidates |= group.anyHit.isPresent || group.intersection.isPresent;
-        // A triangle's hit kind is derived from its front-facing state. Procedural ReportHit
-        // also needs the trace flags even when the source never explicitly reads rayFlags.
-        if (geometry == MetalRTGeometryKind::Triangle &&
-            (candidateRequirements.has(MetalRTStageRequirement::HitKind) ||
-             hitRequirements.has(MetalRTStageRequirement::HitKind)))
+        // The primitive contract, rather than an implementation's getters, determines which
+        // traversal values can be supplied to independently compiled hit shaders.
+        if (geometry == MetalRTGeometryKind::Triangle)
             program.tags |= UInt(MetalRTTag::TriangleData);
-        if (geometry == MetalRTGeometryKind::BoundingBox && group.intersection.isPresent)
-            program.candidateRequirements.rayFlags = true;
+        if (geometry == MetalRTGeometryKind::Curve)
+            program.tags |= UInt(MetalRTTag::CurveData);
         IRIntegerValue stride;
         if (!getRecordStride(target, group.recordType, useSite, sink, stride))
             return nullptr;
         program.hitStride = Math::Max(program.hitStride, stride);
     }
-    for (auto& miss : program.schema.missShaders)
+    for (const auto& miss : program.schema.missShaders)
     {
-        program.missRequirements.combine(collectStageRequirements(miss.invoke));
         IRIntegerValue stride;
-        if (!getRecordStride(target, miss.input->getRecordType(), useSite, sink, stride))
+        if (!getRecordStride(target, miss.recordType, useSite, sink, stride))
             return nullptr;
         program.missStride = Math::Max(program.missStride, stride);
     }
-    for (auto& callable : program.schema.callableShaders)
+    for (const auto& callable : program.schema.callableShaders)
     {
-        program.callableRequirements.combine(collectStageRequirements(callable.invoke));
         IRIntegerValue stride;
-        if (!getRecordStride(target, callable.input->getRecordType(), useSite, sink, stride))
+        if (!getRecordStride(target, callable.recordType, useSite, sink, stride))
             return nullptr;
         program.callableStride = Math::Max(program.callableStride, stride);
     }
-    program.allRequirements.combine(program.hitRequirements);
-    program.allRequirements.combine(program.missRequirements);
-    program.allRequirements.combine(program.candidateRequirements);
-    // Candidate signatures are shared by primitive kind. A procedural group's hitKind query
-    // can therefore add front_facing to a triangle callback even if that triangle stage does
-    // not query hitKind itself. Infer tags from the generated signature's requirements too.
-    if (program.candidateRequirements.has(MetalRTStageRequirement::HitKind))
-        for (const auto& group : program.schema.hitGroups)
-            if (getGeometry(group.primitiveType) == MetalRTGeometryKind::Triangle)
-                program.tags |= UInt(MetalRTTag::TriangleData);
-    if (program.allRequirements.has(MetalRTStageRequirement::TriangleBarycentricCoord) ||
-        program.allRequirements.has(MetalRTStageRequirement::TriangleFrontFacing))
-        program.tags |= UInt(MetalRTTag::TriangleData);
-    if (program.allRequirements.has(MetalRTStageRequirement::CurveParameter))
-        program.tags |= UInt(MetalRTTag::CurveData);
-    if ((program.tags & UInt(MetalRTTag::Instancing)) &&
-        (program.allRequirements.has(MetalRTStageRequirement::WorldSpaceOrigin) ||
-         program.allRequirements.has(MetalRTStageRequirement::WorldSpaceDirection) ||
-         program.allRequirements.has(MetalRTStageRequirement::ObjectToWorld) ||
-         program.allRequirements.has(MetalRTStageRequirement::WorldToObject) ||
-         program.hitRequirements.has(MetalRTStageRequirement::ObjectSpaceRay)))
+    if ((program.tags & UInt(MetalRTTag::Instancing)) && program.schema.hitGroups.getCount())
         program.tags |= UInt(MetalRTTag::WorldSpaceData);
 
     IRBuilder builder(module);
@@ -274,7 +251,7 @@ RefPtr<Program> createProgram(
     return result;
 }
 
-/// Freezes physical resource signatures only after nested dispatch has propagated launch needs.
+/// Creates fixed stage signatures from the schema contract.
 void createProgramResources(
     IRModule* module,
     Program& program,
@@ -288,17 +265,33 @@ void createProgramResources(
         program.sourceType,
         program.tags,
         program.maxLevels,
-        getVisibleFunctionSignature(
-            builder,
-            program.missRequirements,
-            descriptorPointer,
-            instancePathType),
-        getVisibleFunctionSignature(
-            builder,
-            program.hitRequirements,
-            descriptorPointer,
-            instancePathType),
-        getCallableFunctionSignature(builder, program.callableRequirements, descriptorPointer));
+        getVisibleFunctionSignature(builder, program.missRequirements, descriptorPointer),
+        getVisibleFunctionSignature(builder, program.hitRequirements, descriptorPointer),
+        getCallableFunctionSignature(builder, program.callableRequirements, descriptorPointer),
+        getAnyHitFunctionSignature(builder),
+        getIntersectionFunctionSignature(builder));
+    UInt candidateTableSize = 0;
+    for (const auto& group : program.schema.hitGroups)
+    {
+        if (!group.anyHit.isPresent && !group.intersection.isPresent)
+            continue;
+        MetalRTCandidateKind kind;
+        switch (getGeometry(group.primitiveType))
+        {
+        case MetalRTGeometryKind::Triangle:
+            kind = MetalRTCandidateKind::Triangle;
+            break;
+        case MetalRTGeometryKind::BoundingBox:
+            kind = MetalRTCandidateKind::BoundingBox;
+            break;
+        case MetalRTGeometryKind::Curve:
+            kind = MetalRTCandidateKind::Curve;
+            break;
+        default:
+            SLANG_UNEXPECTED("expected a checked primitive");
+        }
+        candidateTableSize = Math::Max(candidateTableSize, UInt(kind) + 1);
+    }
     addMetalRTProgramMetadata(
         module,
         program.resources.resourcesStruct,
@@ -306,7 +299,11 @@ void createProgramResources(
         program.maxLevels,
         program.hitStride,
         program.missStride,
-        program.callableStride);
+        program.callableStride,
+        UInt(program.schema.hitGroups.getCount()),
+        UInt(program.schema.missShaders.getCount()),
+        UInt(program.schema.callableShaders.getCount()),
+        candidateTableSize);
     if (program.tags & UInt(MetalRTTag::Instancing))
     {
         if (!instanceContributions.containsKey(instancePathType))
@@ -317,16 +314,10 @@ void createProgramResources(
     }
 }
 
-/// Creates every source-stage root after trace/call lowering has inserted its launch queries.
-/// Binding sooner would miss queries introduced by nested dispatch inside an ordinary helper.
-void createProgramAdapters(IRModule* module, Program& program, DiagnosticSink* sink)
+/// Creates traversal glue from schema types and table indices. Source stage bodies are emitted
+/// only when selected independently; the glue calls their visible-function table entries.
+void createProgramCandidateDispatch(IRModule* module, Program& program)
 {
-    IRBuilder builder(module);
-    auto descriptorPointer = builder.getPtrType(builder.getUIntType(), AddressSpace::Uniform);
-    auto instancePathType = program.instancePathType;
-
-    // Candidate callbacks can be needed even when ClosestHit is absent. Create their exact
-    // payload carriers before either family of adapters starts threading invocation values.
     for (auto& group : program.schema.hitGroups)
         getCarrier(module, program, group.payloadType);
     StringBuilder candidatePrefix;
@@ -334,16 +325,15 @@ void createProgramAdapters(IRModule* module, Program& program, DiagnosticSink* s
     program.candidates = createCandidateAdapters(
         module,
         program.schema,
+        program.resources,
         program.carriers,
         program.header,
-        program.candidateRequirements,
         program.tags,
         program.maxLevels,
         program.hitStride,
         program.instanceContribution,
-        instancePathType,
-        candidatePrefix.getUnownedSlice(),
-        sink);
+        program.instancePathType,
+        candidatePrefix.getUnownedSlice());
     for (auto& pair : program.candidates.intersectionFunctions)
         addMetalRTFunctionMetadata(
             module,
@@ -351,79 +341,6 @@ void createProgramAdapters(IRModule* module, Program& program, DiagnosticSink* s
             program.resources.resourcesStruct,
             UInt(pair.first),
             program.candidateRequirements.mask);
-
-    auto createAdapter = [&](const SchemaStage& stage,
-                             IRType* payload,
-                             const StageRequirements& requirements,
-                             MetalRTDescriptorResource tableRole,
-                             const char* stageName,
-                             Index index)
-    {
-        StringBuilder symbol;
-        symbol << "__slang_portable_rt_" << program.index << "_" << stageName << "_" << index;
-        auto adapter = createVisibleAdapter(
-            module,
-            stage,
-            requirements,
-            getCarrier(module, program, payload),
-            symbol.getUnownedSlice(),
-            descriptorPointer,
-            instancePathType);
-        SLANG_RELEASE_ASSERT(
-            adapter.function->findDecoration<IRMetalVisibleFunctionDecoration>()->getTableType() ==
-            program.resources.getField(tableRole)->getFieldType());
-        program.adapters.add(adapter);
-        addMetalRTFunctionMetadata(
-            module,
-            adapter.function,
-            program.resources.resourcesStruct,
-            UInt(index),
-            requirements.mask);
-    };
-    for (Index i = 0; i < program.schema.hitGroups.getCount(); ++i)
-    {
-        auto& group = program.schema.hitGroups[i];
-        createAdapter(
-            group.closestHit,
-            group.payloadType,
-            program.hitRequirements,
-            MetalRTDescriptorResource::ClosestHitVisibleFunctionTable,
-            "closesthit",
-            i);
-    }
-    for (Index i = 0; i < program.schema.missShaders.getCount(); ++i)
-    {
-        auto& miss = program.schema.missShaders[i];
-        createAdapter(
-            miss,
-            miss.input->getPayloadType(),
-            program.missRequirements,
-            MetalRTDescriptorResource::MissVisibleFunctionTable,
-            "miss",
-            i);
-    }
-    for (Index i = 0; i < program.schema.callableShaders.getCount(); ++i)
-    {
-        StringBuilder symbol;
-        symbol << "__slang_portable_rt_" << program.index << "_callable_" << i;
-        auto adapter = createCallableAdapter(
-            module,
-            program.schema.callableShaders[i],
-            program.callableRequirements,
-            symbol.getUnownedSlice(),
-            descriptorPointer);
-        SLANG_RELEASE_ASSERT(
-            adapter.function->findDecoration<IRMetalVisibleFunctionDecoration>()->getTableType() ==
-            program.resources.getField(MetalRTDescriptorResource::CallableVisibleFunctionTable)
-                ->getFieldType());
-        program.adapters.add(adapter);
-        addMetalRTFunctionMetadata(
-            module,
-            adapter.function,
-            program.resources.resourcesStruct,
-            UInt(i),
-            program.callableRequirements.mask);
-    }
 }
 
 /// Loads a named resource from the descriptor using the physical field's exact type. The
@@ -435,6 +352,70 @@ IRInst* loadResource(IRBuilder& builder, IRInst* descriptor, IRStructField* fiel
     return builder.emitLoad(builder.emitFieldAddress(addressType, descriptor, field->getKey()));
 }
 
+/// Selects committed custom attributes by the schema's group index. Consider two procedural
+/// groups with different attribute types: their fields belong to the caller's carrier, while
+/// the separately compiled closest-hit shader sees only a pointer to its own attributes.
+/// Builtin primitives and empty attributes have no custom storage and return a null pointer.
+IRFunc* createAttributesLookup(IRModule* module, const Program& program, const RayData& carrier)
+{
+    IRBuilder builder(module);
+    builder.setInsertInto(module);
+    auto result = builder.createFunc();
+    auto pointer = builder.getPtrType(builder.getVoidType(), AddressSpace::ThreadLocal);
+    IRType* parameterTypes[] = {
+        builder.getPtrType(carrier.type, AddressSpace::ThreadLocal),
+        builder.getUIntType()};
+    result->setFullType(builder.getFuncType(2, parameterTypes, pointer));
+    builder.addNameHintDecoration(result, toSlice("getCommittedAttributes"));
+    builder.setInsertInto(result);
+    builder.emitBlock();
+    auto data = builder.emitParam(parameterTypes[0]);
+    auto index = builder.emitParam(parameterTypes[1]);
+    IRInst* value = builder.getNullPtrValue(pointer);
+    for (Index i = 0; i < program.schema.hitGroups.getCount(); ++i)
+    {
+        const auto& group = program.schema.hitGroups[i];
+        auto key = carrier.customAttributeKeys.tryGetValue(group.attributesType);
+        if (!key || isEmptyType(group.attributesType))
+            continue;
+        auto address = builder.emitBitCast(pointer, builder.emitFieldAddress(data, *key));
+        IRInst* operands[] = {
+            builder.emitEql(index, builder.getIntValue(builder.getUIntType(), i)),
+            address,
+            value};
+        value = builder.emitIntrinsicInst(pointer, kIROp_Select, 3, operands);
+    }
+    builder.emitReturn(value);
+    return result;
+}
+
+/// Tests schema membership without requiring a no-op implementation for NoClosestHit.
+IRFunc* createClosestHitPresenceLookup(IRModule* module, const Program& program)
+{
+    IRBuilder builder(module);
+    builder.setInsertInto(module);
+    auto result = builder.createFunc();
+    IRType* parameterTypes[] = {builder.getUIntType()};
+    result->setFullType(builder.getFuncType(1, parameterTypes, builder.getBoolType()));
+    builder.addNameHintDecoration(result, toSlice("hasClosestHit"));
+    builder.setInsertInto(result);
+    builder.emitBlock();
+    auto index = builder.emitParam(builder.getUIntType());
+    IRInst* value = builder.getBoolValue(false);
+    for (Index i = 0; i < program.schema.hitGroups.getCount(); ++i)
+    {
+        if (!program.schema.hitGroups[i].closestHit.isPresent)
+            continue;
+        IRInst* operands[] = {
+            builder.emitEql(index, builder.getIntValue(builder.getUIntType(), i)),
+            builder.getBoolValue(true),
+            value};
+        value = builder.emitIntrinsicInst(builder.getBoolType(), kIROp_Select, 3, operands);
+    }
+    builder.emitReturn(value);
+    return result;
+}
+
 /// Expands the trace boundary, leaving traversal and the post-trace choice explicit for emission.
 /// The payload is copied into ray_data before traversal and back afterward; stages all reference
 /// that invocation's carrier rather than independent copies of the logical input object.
@@ -442,6 +423,8 @@ void lowerTrace(IRModule* module, IRMetalTraceRay* trace, Program& program)
 {
     auto payloadType = cast<IRPtrTypeBase>(trace->getPayload()->getDataType())->getValueType();
     auto& carrier = getCarrier(module, program, payloadType);
+    auto attributesLookup = createAttributesLookup(module, program, carrier);
+    auto closestHitPresence = createClosestHitPresenceLookup(module, program);
     IRBuilder builder(module);
     builder.setInsertBefore(trace);
     auto load = [&](MetalRTDescriptorResource role)
@@ -476,20 +459,20 @@ void lowerTrace(IRModule* module, IRMetalTraceRay* trace, Program& program)
     if (carrier.rayTimeKey)
         builder.emitStore(builder.emitFieldAddress(rayData, carrier.rayTimeKey), time);
     auto uint3 = builder.getVectorType(builder.getUIntType(), 3);
-    if (carrier.dispatchRaysIndexKey)
-    {
-        auto index =
-            builder.emitIntrinsicInst(uint3, kIROp_MetalRTGetDispatchRaysIndex, 0, nullptr);
-        builder.emitStore(builder.emitFieldAddress(rayData, carrier.dispatchRaysIndexKey), index);
-    }
-    if (carrier.dispatchRaysDimensionsKey)
-    {
-        auto dimensions =
-            builder.emitIntrinsicInst(uint3, kIROp_MetalRTGetDispatchRaysDimensions, 0, nullptr);
-        builder.emitStore(
-            builder.emitFieldAddress(rayData, carrier.dispatchRaysDimensionsKey),
-            dimensions);
-    }
+    auto index = builder.emitIntrinsicInst(uint3, kIROp_MetalRTGetDispatchRaysIndex, 0, nullptr);
+    auto dimensions =
+        builder.emitIntrinsicInst(uint3, kIROp_MetalRTGetDispatchRaysDimensions, 0, nullptr);
+    builder.emitStore(builder.emitFieldAddress(rayData, carrier.dispatchRaysIndexKey), index);
+    builder.emitStore(
+        builder.emitFieldAddress(rayData, carrier.dispatchRaysDimensionsKey),
+        dimensions);
+    auto erasedPointer = builder.getPtrType(builder.getVoidType(), AddressSpace::ThreadLocal);
+    auto resourcePointer = builder.getPtrType(builder.getUInt8Type(), AddressSpace::ThreadLocal);
+    auto customHitKind =
+        carrier.customHitKindKey
+            ? builder.emitFieldAddress(rayData, carrier.customHitKindKey)
+            : builder.getNullPtrValue(
+                  builder.getPtrType(builder.getUIntType(), AddressSpace::ThreadLocal));
     auto integer = [&](IRIntegerValue value)
     { return builder.getIntValue(builder.getIntType(), value); };
     IRInst* operands[] = {
@@ -520,12 +503,19 @@ void lowerTrace(IRModule* module, IRMetalTraceRay* trace, Program& program)
         builder.getIntValue(builder.getUIntType(), program.hitStride),
         builder.getIntValue(builder.getUIntType(), program.missStride),
         rayData,
-        builder.getBoolValue(false),
-        builder.getBoolValue(false),
-        builder.emitDefaultConstruct(
-            builder.getPtrType(builder.getUIntType(), AddressSpace::ThreadLocal)),
+        builder.getBoolValue(true),
+        builder.getBoolValue(true),
+        builder
+            .emitIntrinsicInst(resourcePointer, kIROp_MetalRTGetGlobalResourceContext, 0, nullptr),
         program.instanceContribution ? static_cast<IRInst*>(program.instanceContribution)
                                      : integer(0),
+        payload ? builder.emitBitCast(erasedPointer, payload)
+                : builder.getNullPtrValue(erasedPointer),
+        attributesLookup,
+        customHitKind,
+        index,
+        dimensions,
+        closestHitPresence,
     };
     builder.emitIntrinsicInst(
         builder.getVoidType(),
@@ -580,9 +570,12 @@ void lowerCallable(IRModule* module, IRMetalRTCallShader* call, Program& program
         descriptor->getDataType(),
         program.resources.getField(MetalRTDescriptorResource::CallableVisibleFunctionTable)
             ->getKey(),
-        builder.getBoolValue(false),
-        builder.emitDefaultConstruct(
-            builder.getPtrType(builder.getUIntType(), AddressSpace::ThreadLocal))};
+        builder.getBoolValue(true),
+        builder.emitIntrinsicInst(
+            builder.getPtrType(builder.getUInt8Type(), AddressSpace::ThreadLocal),
+            kIROp_MetalRTGetGlobalResourceContext,
+            0,
+            nullptr)};
     builder.emitIntrinsicInst(
         builder.getVoidType(),
         kIROp_MetalRTCallDispatch,
@@ -606,106 +599,6 @@ void collectDispatches(
             calls.add(call);
         collectDispatches(child, traces, calls);
     }
-}
-
-/// Propagates the two launch values across actual indirect-dispatch dependencies. Consider a
-/// closest-hit method that calls a callable reading dispatchRaysIndex: the source closest-hit
-/// contains no such getter yet, but lowerCallable will create one. Follow that descriptor edge
-/// before fixing the caller's carrier/table signature, rather than giving every program all inputs.
-void propagateLaunchRequirements(
-    Dictionary<IRTraceProgramDescriptorType*, RefPtr<Program>>& programs,
-    const List<IRMetalTraceRay*>& traces,
-    const List<IRMetalRTCallShader*>& calls)
-{
-    struct StageUse
-    {
-        IRFunc* function;
-        StageRequirements* requirements;
-    };
-    List<StageUse> stages;
-    List<IRFunc*> roots;
-    HashSet<IRFunc*> uniqueRoots;
-    auto add = [&](const SchemaStage& stage, StageRequirements* requirements)
-    {
-        if (!stage.invoke)
-            return;
-        stages.add({stage.invoke, requirements});
-        if (uniqueRoots.add(stage.invoke))
-            roots.add(stage.invoke);
-    };
-    for (auto& pair : programs)
-    {
-        auto program = pair.second.Ptr();
-        for (const auto& group : program->schema.hitGroups)
-        {
-            add(group.closestHit, &program->hitRequirements);
-            add(group.anyHit, &program->candidateRequirements);
-            add(group.intersection, &program->candidateRequirements);
-        }
-        for (const auto& stage : program->schema.missShaders)
-            add(stage, &program->missRequirements);
-        for (const auto& stage : program->schema.callableShaders)
-            add(stage, &program->callableRequirements);
-    }
-    Dictionary<IRInst*, HashSet<IRFunc*>> references;
-    buildEntryPointReferenceGraph(references, roots.getArrayView());
-    struct Dependency
-    {
-        IRFunc* caller;
-        Program* target;
-        bool callable;
-    };
-    List<Dependency> dependencies;
-    for (auto trace : traces)
-        dependencies.add(
-            {getParentFunc(trace),
-             programs
-                 .getValue(
-                     cast<IRTraceProgramDescriptorType>(trace->getDescriptor()->getDataType()))
-                 .Ptr(),
-             false});
-    for (auto call : calls)
-        dependencies.add(
-            {getParentFunc(call),
-             programs
-                 .getValue(cast<IRTraceProgramDescriptorType>(call->getDescriptor()->getDataType()))
-                 .Ptr(),
-             true});
-    bool changed;
-    do
-    {
-        changed = false;
-        for (const auto& dependency : dependencies)
-        {
-            auto callers = references.tryGetValue(dependency.caller);
-            if (!callers)
-                continue;
-            auto& required = dependency.callable ? dependency.target->callableRequirements
-                                                 : dependency.target->allRequirements;
-            for (auto& stage : stages)
-                if (callers->contains(stage.function))
-                {
-                    if (required.dispatchRaysIndex && !stage.requirements->dispatchRaysIndex)
-                    {
-                        stage.requirements->dispatchRaysIndex = true;
-                        changed = true;
-                    }
-                    if (required.dispatchRaysDimensions &&
-                        !stage.requirements->dispatchRaysDimensions)
-                    {
-                        stage.requirements->dispatchRaysDimensions = true;
-                        changed = true;
-                    }
-                }
-        }
-        for (auto& pair : programs)
-        {
-            auto& program = *pair.second;
-            program.allRequirements.combine(program.hitRequirements);
-            program.allRequirements.combine(program.missRequirements);
-            program.allRequirements.combine(program.candidateRequirements);
-        }
-    } while (changed);
 }
 
 /// Adds a Metal launch builtin only at a kernel boundary. Intermediate ordinary functions receive
@@ -840,9 +733,8 @@ void lowerMetalPortableRayTracing(
     }
     Dictionary<IRTraceProgramDescriptorType*, RefPtr<Program>> programs;
     Dictionary<IRType*, IRFunc*> instanceContributions;
-    auto discover = [&](IRInst* descriptor, IRInst* useSite)
+    auto discover = [&](IRTraceProgramDescriptorType* descriptorType, IRInst* useSite)
     {
-        auto descriptorType = cast<IRTraceProgramDescriptorType>(descriptor->getDataType());
         if (!programs.containsKey(descriptorType))
             programs.add(
                 descriptorType,
@@ -854,14 +746,32 @@ void lowerMetalPortableRayTracing(
                     useSite,
                     sink));
     };
+    // A separately compiled provider retains the complete component resource layout, even if
+    // it never traces a ray. For example, a Miss shader that only reads `background` still has
+    // the same `TraceProgramDescriptor<Schema> descriptor` global as ray generation. Physicalize
+    // that declaration from its schema contract too; discovering only dispatch operands would
+    // leave an opaque source descriptor inside the provider's shared resource context.
+    // Concrete hoistable descriptor types live directly in the module after specialization.
+    // Snapshot them before creating the target-local types added by createProgram().
+    List<IRTraceProgramDescriptorType*> descriptorTypes;
+    for (auto inst : module->getGlobalInsts())
+        if (auto descriptorType = as<IRTraceProgramDescriptorType>(inst))
+            descriptorTypes.add(descriptorType);
+    for (auto descriptorType : descriptorTypes)
+        discover(descriptorType, descriptorType);
     for (auto trace : traces)
-        discover(trace->getDescriptor(), trace);
+    {
+        auto descriptorType =
+            cast<IRTraceProgramDescriptorType>(trace->getDescriptor()->getDataType());
+        discover(descriptorType, trace);
+        if (auto program = programs.getValue(descriptorType))
+            program->isTraced = true;
+    }
     for (auto call : calls)
-        discover(call->getDescriptor(), call);
+        discover(cast<IRTraceProgramDescriptorType>(call->getDescriptor()->getDataType()), call);
     for (auto& pair : programs)
         if (!pair.second)
             return;
-    propagateLaunchRequirements(programs, traces, calls);
     List<AccelerationStructureUse> accelerationStructures;
     for (auto trace : traces)
     {
@@ -883,15 +793,20 @@ void lowerMetalPortableRayTracing(
         auto type = cast<IRTraceProgramDescriptorType>(call->getDescriptor()->getDataType());
         lowerCallable(module, call, *programs.tryGetValue(type)->Ptr());
     }
-    auto adapters = prepareMetalStandaloneStages(module, targetProgram, entryPoints, sink);
+    auto adapters = prepareMetalStandaloneStages(
+        module,
+        targetProgram,
+        entryPoints,
+        requiresResultTypeLowering,
+        sink);
     List<MetalRTDescriptorResources> resources;
     for (auto& pair : programs)
     {
         auto& program = *pair.second;
-        createProgramAdapters(module, program, sink);
-        adapters.addRange(program.adapters);
-        adapters.addRange(program.candidates.invocationRoots);
-        requiresResultTypeLowering |= program.candidates.producesResultTypes;
+        // Native intersection callbacks belong to traversal artifacts. A provider only needs
+        // the descriptor's fixed resource type and must not export another set of callbacks.
+        if (program.isTraced)
+            createProgramCandidateDispatch(module, program);
         resources.add(program.resources);
     }
     lowerVisibleStageInputs(module, adapters);
