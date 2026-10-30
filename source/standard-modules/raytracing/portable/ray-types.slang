@@ -255,6 +255,11 @@ public struct MultiLevelAccelerationStructure<let maxLevelCount : int>
     public static const uint levelCount = maxLevelCount;
 }
 
+/// Reads candidate or committed triangle orientation from the current Metal invocation.
+[require(metal, portable_raytracing_anyhit_closesthit)]
+__intrinsic_op(metalRTGetTriangleFrontFacing)
+internal bool __metalRTGetTriangleFrontFacing();
+
 /// Exposes the built-in attributes of a triangle hit as a zero-storage property view.
 ///
 /// Each property maps independently to native stage state; the aggregate is not transported as one
@@ -283,7 +288,7 @@ public struct TriangleData
     /// Requires `portable_raytracing_anyhit_closesthit`, so access is available only in supported
     /// any-hit and closest-hit stages. Reads built-in triangle state for the current hit.
     ///
-    /// @todo A following PR must synthesize Metal's candidate or committed-hit facing value.
+    /// Metal adapters supply candidate or committed-hit facing state independently of barycentrics.
     [require(portable_raytracing_anyhit_closesthit)]
     public property bool frontFacing
     {
@@ -297,12 +302,7 @@ public struct TriangleData
             case cuda:
                 return HitKind() == HIT_KIND_TRIANGLE_FRONT_FACE;
             case metal:
-                // TODO: A following PR must synthesize the candidate's [[front_facing]] input or
-                // the committed intersection result's triangle_front_facing value.
-                static_assert(
-                    false,
-                    "Metal structural ray-tracing frontFacing requires compiler synthesis");
-                return false; // Unreachable; required by return checking.
+                return __metalRTGetTriangleFrontFacing();
             }
         }
     }
@@ -322,8 +322,7 @@ public struct CurveData
     /// Uses a `float` and inherits `CurveData`'s Metal library version 3.1 requirement. The getter
     /// has no additional declared stage or numeric-range constraint.
     ///
-    /// @todo A following PR must synthesize this getter from Metal's candidate or committed curve
-    /// data.
+    /// Metal adapters supply this value from candidate or committed curve data.
     public property float parameter
     {
         __intrinsic_op(portableRTGetCurveParameter)

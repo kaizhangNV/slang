@@ -123,6 +123,17 @@ static SchemaStage _readStage(IRType* type, IRWitnessTable* witness, Stage stage
     return result;
 }
 
+IRRaytracingAccelerationStructureType* getStageAccelerationStructure(
+    IRPortableRTStageInputDecoration* input)
+{
+    auto traceWitness = _getAssociatedWitness(
+        cast<IRWitnessTable>(input->getContextWitness()),
+        KnownBuiltinDeclName::RayTracingContextTraceContext);
+    return cast<IRRaytracingAccelerationStructureType>(_getAssociatedType(
+        traceWitness,
+        KnownBuiltinDeclName::RayTracingTraceAccelerationStructure));
+}
+
 static SchemaStage _readGroupStage(
     IRWitnessTable* groupWitness,
     KnownBuiltinDeclName role,
@@ -177,6 +188,17 @@ bool readSchema(IRTraceProgramDescriptorType* descriptorType, Schema& outSchema)
         auto groupWitness = cast<IRWitnessTable>(hitList.witnesses->getOperand(i));
         group.contextType =
             _getAssociatedType(groupWitness, KnownBuiltinDeclName::RayTracingHitGroupContext);
+        auto contextWitness =
+            _getAssociatedWitness(groupWitness, KnownBuiltinDeclName::RayTracingHitGroupContext);
+        group.payloadType =
+            _getAssociatedType(contextWitness, KnownBuiltinDeclName::RayTracingContextPayload);
+        group.recordType =
+            _getAssociatedType(contextWitness, KnownBuiltinDeclName::RayTracingContextRecord);
+        group.primitiveType =
+            _getAssociatedType(contextWitness, KnownBuiltinDeclName::RayTracingContextPrimitive);
+        group.attributesType = _getAssociatedType(
+            _getAssociatedWitness(contextWitness, KnownBuiltinDeclName::RayTracingContextPrimitive),
+            KnownBuiltinDeclName::RayTracingPrimitiveAttributes);
         group.closestHit = _readGroupStage(
             groupWitness,
             KnownBuiltinDeclName::RayTracingHitGroupClosestHit,

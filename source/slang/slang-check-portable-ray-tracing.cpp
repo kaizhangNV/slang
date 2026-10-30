@@ -390,11 +390,11 @@ Type* getAssociatedType(
     SLANG_UNEXPECTED("portable ray-tracing contract is missing its associated-type role");
 }
 
-// Returns the checked entry types used by the duplicate-entry diagnostic. The list's conformance
-// witnesses are handled by ordinary conformance checking and are not needed to compare types.
-static ConcreteTypePack* _getEntryTypes(ASTBuilder* astBuilder, Type* entryListType)
+// The checked list application already owns its type pack. Use that semantic value for both
+// duplicate-entry checking and source reflection, without reparsing the generic argument list.
+ConcreteTypePack* getConcreteEntryTypes(Type* entryListType)
 {
-    if (auto declRefType = as<DeclRefType>(entryListType))
+    if (auto declRefType = as<DeclRefType>(entryListType->resolve()))
     {
         if (auto genericApp = SubstitutionSet(declRefType->getDeclRef()).findGenericAppDeclRef())
         {
@@ -407,6 +407,15 @@ static ConcreteTypePack* _getEntryTypes(ASTBuilder* astBuilder, Type* entryListT
             }
         }
     }
+    return nullptr;
+}
+
+// Returns the checked entry types used by the duplicate-entry diagnostic. The list's conformance
+// witnesses are handled by ordinary conformance checking and are not needed to compare types.
+static ConcreteTypePack* _getEntryTypes(ASTBuilder* astBuilder, Type* entryListType)
+{
+    if (auto typePack = getConcreteEntryTypes(entryListType))
+        return typePack;
     // The list itself may still be a type parameter. Consider this example:
     //
     //     struct Schema<Misses : rt::IMissShaderList> : rt::ITraceProgramSchema

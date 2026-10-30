@@ -301,6 +301,8 @@ void* ArtifactPostEmitMetadata::getInterface(const Guid& guid)
     }
     if (guid == slang::ICooperativeTypesMetadata::getTypeGuid())
         return static_cast<slang::ICooperativeTypesMetadata*>(this);
+    if (guid == slang::IMetalRayTracingMetadata::getTypeGuid())
+        return static_cast<slang::IMetalRayTracingMetadata*>(this);
     return nullptr;
 }
 

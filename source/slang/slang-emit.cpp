@@ -99,6 +99,8 @@
 #include "slang-ir-lower-tuple-types.h"
 #include "slang-ir-metadata.h"
 #include "slang-ir-metal-legalize.h"
+#include "slang-ir-metal-portable-ray-tracing-context.h"
+#include "slang-ir-metal-portable-ray-tracing.h"
 #include "slang-ir-missing-return.h"
 #include "slang-ir-optix-entry-point-uniforms.h"
 #include "slang-ir-portable-ray-tracing-resources.h"
@@ -657,6 +659,8 @@ void calcRequiredLoweringPassSet(
         result.lateRequireCapability = true;
         break;
     case kIROp_PortableRTStageInputDecoration:
+    case kIROp_MetalTraceRay:
+    case kIROp_MetalRTCallShader:
         result.portableRayTracing = true;
         break;
     case kIROp_TraceProgramDescriptorType:
@@ -1110,7 +1114,7 @@ Result linkAndOptimizeIR(
     // their entry wrappers before the ordinary pipeline starts inspecting parameter layouts.
     if (requiredLoweringPassSet.portableRayTracing &&
         (isD3DTarget(targetRequest) || isKhronosTarget(targetRequest) ||
-         isCUDATarget(targetRequest)))
+         isCUDATarget(targetRequest) || isMetalTarget(targetRequest)))
         SLANG_PASS(preparePortableRayTracingEntryPoints, irEntryPoints);
 
     SLANG_PASS(translateEntryPointInParamToBorrow, sink);
@@ -1589,7 +1593,14 @@ Result linkAndOptimizeIR(
     // A portable stage's checked static method is still an ordinary callable helper. Build
     // its target entry adapter only after specialization has resolved its input context, and
     // before DCE or native ABI legalization can discard or reinterpret that logical input.
-    if (requiredLoweringPassSet.portableRayTracing)
+    if (requiredLoweringPassSet.portableRayTracing && isMetalTarget(targetRequest))
+        SLANG_PASS(
+            lowerMetalPortableRayTracing,
+            targetProgram,
+            irEntryPoints,
+            sink,
+            requiredLoweringPassSet.resultType);
+    else if (requiredLoweringPassSet.portableRayTracing)
         SLANG_PASS(lowerPortableRayTracingEntryPoints, targetProgram, irEntryPoints, sink);
     if (sink->getErrorCount() != 0)
         return SLANG_FAIL;
@@ -2549,6 +2560,8 @@ Result linkAndOptimizeIR(
     case CodeGenTarget::ShaderObjectCode:
     case CodeGenTarget::ShaderHostCallable:
         SLANG_PASS(introduceExplicitGlobalContext, target);
+        if (target == CodeGenTarget::Metal && requiredLoweringPassSet.portableRayTracing)
+            SLANG_PASS(finalizeMetalPortableRayTracingGlobalContext, sink);
         if (target == CodeGenTarget::CPPSource || target == CodeGenTarget::CPPHeader)
         {
             SLANG_PASS(convertEntryPointPtrParamsToRawPtrs);
@@ -2972,6 +2985,14 @@ Result linkAndOptimizeIR(
             if (!targetProgram->getOrCreateLayout(sink))
                 return SLANG_FAIL;
         }
+    }
+    // Library exports may retain invocation getters without selecting a native stage/schema.
+    // Diagnose that target ABI boundary after DCE rather than restricting ordinary source calls.
+    if (isMetalTarget(targetRequest))
+    {
+        SLANG_PASS(diagnoseUnboundMetalPortableRayTracing, sink);
+        if (sink->getErrorCount() != 0)
+            return SLANG_FAIL;
     }
     SLANG_PASS(collectMetadata, targetProgram, *metadata);
 

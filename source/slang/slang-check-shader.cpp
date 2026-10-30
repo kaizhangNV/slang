@@ -1849,14 +1849,29 @@ static void validateEntryPointCapabilities(
     for (auto target : linkage->targets)
     {
         auto targetCaps = target->getTargetCaps();
-        targetCaps.join(stageCapabilitySet);
+        auto targetStageCaps = stageCapabilitySet;
+        if (entryPoint->getStage() == Stage::RayGeneration && isMetalTarget(target) &&
+            linkage->m_optionSet.getBoolOption(CompilerOptionName::ExperimentalFeature) &&
+            stageCapabilitySet == CapabilitySet{CapabilityName::raygeneration})
+        {
+            // Consider a raygeneration entry that reaches rt::RayTracer.trace through a generic
+            // interface call. Its inferred requirements already describe the portable Metal path;
+            // the default native raygeneration profile must not reintroduce DXR/SPIR-V-only
+            // `raytracing`. Use the logical stage atom here, just as structural stage inputs do.
+            // Body requirements stay intact, so legacy TraceRay and DispatchRaysIndex still fail
+            // on Metal. An explicitly richer profile (e.g. shader("ser_raygen")) is not replaced.
+            // The Metal backend must lower a reachable portable trace to a compute entry, or
+            // diagnose a logical raygeneration entry that it cannot implement.
+            targetStageCaps = CapabilitySet{CapabilityName::_raygen};
+        }
+        targetCaps.join(targetStageCaps);
         if (targetCaps.isIncompatibleWith(entryPointInferredCaps))
         {
             // Incompatable means we don't support a set of abstract atoms.
             // Diagnose that we lack support for 'stage' and 'target' atoms with our provided
             // entry-point
             auto compileTarget = target->getTargetCaps().getCompileTarget();
-            auto stageTarget = stageCapabilitySet.getTargetStage();
+            auto stageTarget = targetStageCaps.getTargetStage();
             maybeDiagnose(
                 sink,
                 linkage->m_optionSet,

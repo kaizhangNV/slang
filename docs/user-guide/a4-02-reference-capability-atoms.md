@@ -1771,6 +1771,10 @@ Other
 `all`
 > User should not use this capability
 
+`metal_raytracing_extended_limits`
+> Opts into the extended Metal ray-tracing traversal limits.
+> This is selected explicitly rather than implied by a Metal language version.
+
 `optix_coopvec`
 > Represents capabilities required for optix cooperative vector support.
 

@@ -22,6 +22,7 @@ public interface IClosestHitShader
     /// @par Constraints
     /// Must conform to `IHitContext`. A hit group using this shader requires this type to equal
     /// the group's `Context`.
+    [KnownBuiltin("RayTracingStageContext")]
     associatedtype Context : IHitContext;
 
     /// Implements the closest-hit stage selected for the committed hit.
@@ -48,6 +49,7 @@ public interface IAnyHitShader
     /// @par Constraints
     /// Must conform to `IHitContext`. A hit group using this shader requires this type to equal
     /// the group's `Context`.
+    [KnownBuiltin("RayTracingStageContext")]
     associatedtype Context : IHitContext;
 
     /// Implements the any-hit stage for an intersection candidate.
@@ -125,6 +127,7 @@ public interface IMissShader
     ///
     /// @par Constraints
     /// Must conform to `IPayloadContext`.
+    [KnownBuiltin("RayTracingStageContext")]
     associatedtype Context : IPayloadContext;
 
     /// Implements the miss stage for a trace that finds no accepted hit.
@@ -149,6 +152,7 @@ public interface ICallableShader
     ///
     /// @par Constraints
     /// Must conform to `ICallableContext`.
+    [KnownBuiltin("RayTracingStageContext")]
     associatedtype Context : ICallableContext;
 
     /// Implements the callable stage selected by `RayTracer.callShader`.

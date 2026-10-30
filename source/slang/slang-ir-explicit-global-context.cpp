@@ -1,9 +1,11 @@
 // slang-ir-explicit-global-context.cpp
 #include "slang-ir-explicit-global-context.h"
 
+#include "slang-ir-call-graph.h"
 #include "slang-ir-clone.h"
 #include "slang-ir-insts.h"
 #include "slang-ir-util.h"
+#include "slang-target.h"
 
 namespace Slang
 {
@@ -157,6 +159,13 @@ struct IntroduceExplicitGlobalContextPass
     List<IRGlobalVar*> m_globalVars;
     List<IRFunc*> m_entryPoints;
 
+    // Physical traversal callbacks receive resources from the driver, whereas visible functions
+    // inherit their caller's invocation context through an indirect table call.
+    List<IRFunc*> m_metalIntersectionFunctions;
+    Dictionary<IRInst*, HashSet<IRFunc*>> m_referencingMetalIntersectionFunctions;
+    Dictionary<IRFunc*, SourceLoc> m_metalIntersectionGlobalVarLocations;
+    Dictionary<IRMetalVisibleFunctionTable*, List<IRInst*>> m_metalTableDispatches;
+
     ExplicitContextPolicy m_options;
 
     AddressSpace getAddressSpaceOfLocal() { return m_options.getAddressSpaceOfLocal(); }
@@ -275,6 +284,10 @@ struct IntroduceExplicitGlobalContextPass
                     // that represent entry points.
                     //
                     auto func = cast<IRFunc>(inst);
+                    if (func->findDecoration<IRMetalIntersectionFunctionDecoration>())
+                        m_metalIntersectionFunctions.add(func);
+                    if (isMetalTarget(m_target))
+                        collectMetalTableDispatches(func);
                     // Each shader or CUDA launch creates per-invocation global storage. Ordinary
                     // clones instead receive their caller's context through the direct call.
                     if (!isShaderOrCudaKernelEntryPoint(func))
@@ -285,6 +298,11 @@ struct IntroduceExplicitGlobalContextPass
                 break;
             }
         }
+
+        if (m_metalIntersectionFunctions.getCount())
+            buildEntryPointReferenceGraph(
+                m_referencingMetalIntersectionFunctions,
+                m_metalIntersectionFunctions.getArrayView());
 
         // If there are no global-scope entities that require processing,
         // then we can completely skip the work of this pass for CUDA/Metal.
@@ -365,6 +383,34 @@ struct IntroduceExplicitGlobalContextPass
             createContextForEntryPoint(entryPoint);
         }
 
+        // Consider an AnyHit function reading a material buffer while ray generation also binds
+        // a scene acceleration structure. Metal calls AnyHit through an IFT callback: that callback
+        // needs a buffer parameter, but must not receive every unrelated ray-generation resource.
+        // The same reference graph used for source entries selects its actual dependencies.
+        for (auto function : m_metalIntersectionFunctions)
+        {
+            bool referencesBuffer = false;
+            for (auto parameter : m_globalParams)
+                referencesBuffer |=
+                    isReferencedByMetalIntersection(parameter.globalParam, function);
+
+            bool referencesMutableGlobal = false;
+            for (auto variable : m_globalVars)
+            {
+                if (isReferencedByMetalIntersection(variable, function))
+                {
+                    referencesMutableGlobal = true;
+                    m_metalIntersectionGlobalVarLocations.add(function, variable->sourceLoc);
+                    break;
+                }
+            }
+            // A fresh callback-local context must not silently reset mutable invocation state.
+            // Keep the ordinary context parameter in that case so the target finalizer reports
+            // the unsupported state at its source declaration.
+            if (referencesBuffer && !referencesMutableGlobal)
+                createContextForEntryPoint(function, true);
+        }
+
         // Now that we've prepared all the entry points, we can make another
         // pass over the global parameters/variables and start to replace
         // their use sites with references to the fields of the context.
@@ -383,6 +429,10 @@ struct IntroduceExplicitGlobalContextPass
         {
             replaceUsesOfGlobalVar(globalVar);
         }
+
+        for (auto location : m_metalIntersectionGlobalVarLocations)
+            if (auto context = m_mapFuncToContextPtr.tryGetValue(location.first))
+                (*context)->sourceLoc = location.second;
 
         // SPIRV requires a correct IR func-type to emit properly
         if (m_options.requiresFuncTypeCorrection())
@@ -411,6 +461,44 @@ struct IntroduceExplicitGlobalContextPass
     };
     Dictionary<IRInst*, ContextFieldInfo> m_mapInstToContextFieldInfo;
     Dictionary<IRFunc*, IRInst*> m_mapFuncToContextPtr;
+
+    bool isReferencedByMetalIntersection(IRInst* inst, IRFunc* function)
+    {
+        auto roots = m_referencingMetalIntersectionFunctions.tryGetValue(inst);
+        return roots && roots->contains(function);
+    }
+
+    // Records the indirect edges that ordinary direct-call propagation cannot see. The physical
+    // table type is already the canonical ABI identity shared by its adapters and dispatch ops;
+    // no source-schema walk or shader-name matching is needed here.
+    void collectMetalTableDispatches(IRFunc* function)
+    {
+        for (auto block : function->getBlocks())
+        {
+            for (auto operation : block->getChildren())
+            {
+                if (auto trace = as<IRMetalRTTraceDispatch>(operation))
+                {
+                    auto miss =
+                        cast<IRMetalVisibleFunctionTable>(trace->getMissFunctions()->getDataType());
+                    auto hit = cast<IRMetalVisibleFunctionTable>(
+                        trace->getClosestHitFunctions()->getDataType());
+                    m_metalTableDispatches.getOrAddValue(miss, List<IRInst*>()).add(trace);
+                    m_metalTableDispatches.getOrAddValue(hit, List<IRInst*>()).add(trace);
+                }
+                else if (auto call = as<IRMetalRTCallDispatch>(operation))
+                {
+                    auto resources =
+                        cast<IRUniformParameterGroupType>(call->getDescriptorResourcesType());
+                    auto field = findStructField(
+                        cast<IRStructType>(resources->getElementType()),
+                        call->getCallableFunctionsKey());
+                    auto table = cast<IRMetalVisibleFunctionTable>(field->getFieldType());
+                    m_metalTableDispatches.getOrAddValue(table, List<IRInst*>()).add(call);
+                }
+            }
+        }
+    }
 
     void createContextStructField(IRInst* originalInst, GlobalObjectKind kind, IRType* type)
     {
@@ -461,7 +549,7 @@ struct IntroduceExplicitGlobalContextPass
         m_mapInstToContextFieldInfo.add(originalInst, ContextFieldInfo{key, needDereference});
     }
 
-    void createContextForEntryPoint(IRFunc* entryPointFunc)
+    void createContextForEntryPoint(IRFunc* entryPointFunc, bool isMetalIntersection = false)
     {
         // We can only introduce the explicit context into
         // entry points that have definitions.
@@ -488,7 +576,13 @@ struct IntroduceExplicitGlobalContextPass
         {
             // Do not add global param to current entry point if global param
             // explicitly originates from a different entry point.
-            if (globalParam.originatingEntryPoint &&
+            if (isMetalIntersection)
+            {
+                if (!isReferencedByMetalIntersection(globalParam.globalParam, entryPointFunc))
+                    continue;
+            }
+            else if (
+                globalParam.originatingEntryPoint &&
                 globalParam.originatingEntryPoint != entryPointFunc)
             {
                 continue;
@@ -502,6 +596,8 @@ struct IntroduceExplicitGlobalContextPass
                 m_module,
                 globalParam.globalParam,
                 globalParam.entryPointParam);
+            if (isMetalIntersection)
+                globalParam.entryPointParam->sourceLoc = globalParam.globalParam->sourceLoc;
             entryPointParamsToAdd.add(globalParam);
 
             // The new parameter will be the last one in the
@@ -844,17 +940,36 @@ struct IntroduceExplicitGlobalContextPass
             call->removeAndDeallocate();
         }
 
+        // Consider ray generation -> helper -> trace -> visible Miss, where only Miss reads a
+        // global buffer. Giving Miss a context must also give helper a context even though helper
+        // contains no global read. Registering each function above before following these edges
+        // preserves the existing recursion guard for nested traces and callable dispatches.
+        if (auto visible = func->findDecoration<IRMetalVisibleFunctionDecoration>())
+        {
+            auto table = cast<IRMetalVisibleFunctionTable>(visible->getTableType());
+            if (auto dispatches = m_metalTableDispatches.tryGetValue(table))
+            {
+                for (auto dispatch : *dispatches)
+                {
+                    auto callerContext = findOrCreateContextPtrForInst(dispatch);
+                    if (auto trace = as<IRMetalRTTraceDispatch>(dispatch))
+                        trace->setOperand(29, callerContext);
+                    else
+                        cast<IRMetalRTCallDispatch>(dispatch)->setOperand(13, callerContext);
+                }
+            }
+        }
+
         return contextParam;
     }
 
-    // Because we have multiple places where instructions representing
-    // the kernel context get introduced, we have factored out a subroutine
-    // for setting up the name hint to be used by those instructions.
-    //
+    // Mark the semantic role at its producer; names remain only a debugging aid. Physical Metal
+    // table finalization uses this marker to recognize and erase the explicit context parameter.
     void addKernelContextNameHint(IRInst* inst)
     {
         IRBuilder builder(m_module);
         builder.addNameHintDecoration(inst, UnownedTerminatedStringSlice("kernelContext"));
+        builder.addDecoration(inst, kIROp_ExplicitGlobalContextDecoration);
     }
 };
 

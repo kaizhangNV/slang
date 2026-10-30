@@ -16379,6 +16379,46 @@ static SourceLoc _getTypeNestingDiagnosticPos(TypeLayout* typeLayout)
     return SourceLoc();
 }
 
+/// Keeps the source schema identity in layout operands, where ordinary canonical uniquing can
+/// distinguish otherwise identical descriptor layouts. Consider two fields of types
+/// TraceProgramDescriptor<Schema<int>> and TraceProgramDescriptor<Schema<float>>. Both occupy
+/// one binding, but the host must match their generated tables to different reflected schemas.
+/// This boundary still owns the checked AST type, so it can use precisely the same declaration
+/// mangling as ISession::getTypeRTTIMangledName instead of interpreting specialized IR symbols.
+struct PortableRTDescriptorLayoutBuilder : IRTypeLayout::Builder
+{
+    IRStringLit* schemaName;
+
+    PortableRTDescriptorLayoutBuilder(IRLayoutGenContext* context, TraceProgramDescriptorType* type)
+        : IRTypeLayout::Builder(context->irBuilder)
+    {
+        auto declRef = type->getDeclRef();
+        auto generic = as<GenericDecl>(declRef.getDecl()->parentDecl);
+        SLANG_RELEASE_ASSERT(generic);
+        auto application = SubstitutionSet(declRef).findGenericAppDeclRef(generic);
+        SLANG_RELEASE_ASSERT(application);
+        Type* schemaType = nullptr;
+        for (auto argument : application->getArgs())
+        {
+            if (auto argumentType = as<Type>(argument->resolve()))
+            {
+                SLANG_RELEASE_ASSERT(!schemaType);
+                schemaType = argumentType;
+            }
+        }
+        auto schema = as<DeclRefType>(schemaType);
+        SLANG_RELEASE_ASSERT(schema);
+        schemaName = context->irBuilder->getStringValue(
+            getMangledName(context->astBuilder, schema->getDeclRef()).getUnownedSlice());
+    }
+
+    void addAttrsImpl(List<IRInst*>& operands) SLANG_OVERRIDE
+    {
+        IRInst* args[] = {schemaName};
+        operands.add(getIRBuilder()->getAttr(kIROp_PortableRTSchemaNameAttr, 1, args));
+    }
+};
+
 IRTypeLayout* lowerTypeLayout(IRLayoutGenContext* context, TypeLayout* typeLayout)
 {
     static constexpr UInt kMaxIRLayoutLoweringRecursionDepth = 128;
@@ -16407,7 +16447,12 @@ IRTypeLayout* lowerTypeLayout(IRLayoutGenContext* context, TypeLayout* typeLayou
     // one of the cases that requires a dedicated sub-type
     // of IR type layout.
     //
-    if (auto paramGroupTypeLayout = as<ParameterGroupTypeLayout>(typeLayout))
+    if (auto descriptor = as<TraceProgramDescriptorType>(typeLayout->getType()))
+    {
+        PortableRTDescriptorLayoutBuilder builder(context, descriptor);
+        return _lowerTypeLayoutCommon(&builder, typeLayout);
+    }
+    else if (auto paramGroupTypeLayout = as<ParameterGroupTypeLayout>(typeLayout))
     {
         IRParameterGroupTypeLayout::Builder builder(context->irBuilder);
 

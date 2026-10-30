@@ -84,6 +84,10 @@ Type* getAssociatedType(
     Type* owner,
     KnownBuiltinDeclName role);
 
+/// Returns the concrete type pack of a checked shader list, or null for an unresolved list.
+/// A non-null pack with no elements represents an actual empty list.
+ConcreteTypePack* getConcreteEntryTypes(Type* entryListType);
+
 /// Returns this executable interface's `invoke` requirement, or null for other interfaces.
 FunctionDeclBase* getStageInvokeRequirement(InterfaceDecl* interfaceDecl);
 

@@ -3387,6 +3387,8 @@ void CLikeSourceEmitter::_emitInst(IRInst* inst)
     case kIROp_StructuredBufferGetDimensions:
     case kIROp_MetalAtomicCast:
     case kIROp_MetalCastToDepthTexture:
+    case kIROp_MetalRTTraceDispatch:
+    case kIROp_MetalRTCallDispatch:
     case kIROp_SetOptiXPayloadRegister:
     case kIROp_CoopMatMulAdd:
     case kIROp_CoopVecMatMulAdd:
