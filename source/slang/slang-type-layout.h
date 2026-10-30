@@ -4,6 +4,7 @@
 #include "core/slang-basic.h"
 #include "slang-compiler.h"
 #include "slang-profile.h"
+#include "slang-reflection-portable-ray-tracing.h"
 #include "slang-syntax.h"
 #include "slang.h"
 
@@ -1266,6 +1267,9 @@ public:
     // and any entry-point-specific parameter data
     // will (eventually) belong there...
     List<RefPtr<EntryPointLayout>> entryPoints;
+
+    /// Checked source schemas are immutable views, independent of target-code generation.
+    PortableRT::SchemaReflectionCache portableRTSchemas;
 
     /// Reflection information on (unspecialized) specialization parameters.
     List<RefPtr<SpecializationParamLayout>> specializationParams;

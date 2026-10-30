@@ -73,6 +73,13 @@ SLANG_UNIT_TEST(portableRayTracingSchemaRetainsOnlyReferencedStages)
             typealias AnyHit = rt::NoAnyHit<Context>;
             typealias Intersection = ::Intersection;
         }
+        struct OpaqueGroup : rt::IHitGroup
+        {
+            typealias Context = HitContext;
+            typealias ClosestHit = rt::NoClosestHit<Context>;
+            typealias AnyHit = rt::NoAnyHit<Context>;
+            typealias Intersection = rt::NoIntersection<Context>;
+        }
         interface IRefinedMiss : rt::IMissShader {}
         struct Miss : IRefinedMiss
         {
@@ -93,7 +100,7 @@ SLANG_UNIT_TEST(portableRayTracingSchemaRetainsOnlyReferencedStages)
         struct Schema : rt::ITraceProgramSchema
         {
             typealias TraceContext = ::TraceContext;
-            typealias HitGroups = rt::HitGroupList<HitGroup, ProceduralGroup>;
+            typealias HitGroups = rt::HitGroupList<HitGroup, ProceduralGroup, OpaqueGroup>;
             typealias MissShaders = rt::MissShaderList<Miss>;
             typealias CallableShaders = rt::EmptyCallableShaderList;
         }
@@ -204,7 +211,7 @@ SLANG_UNIT_TEST(portableRayTracingSchemaRetainsOnlyReferencedStages)
     PortableRT::Schema schema;
     SLANG_CHECK_ABORT(PortableRT::readSchema(descriptorType, schema));
     SLANG_CHECK(schema.type == descriptorType->getSchema());
-    SLANG_CHECK_ABORT(schema.hitGroups.getCount() == 2);
+    SLANG_CHECK_ABORT(schema.hitGroups.getCount() == 3);
     SLANG_CHECK(schema.missShaders.getCount() == 1);
     SLANG_CHECK(schema.callableShaders.getCount() == 0);
     SLANG_CHECK(schema.hitGroups[0].closestHit.isPresent);
@@ -213,6 +220,14 @@ SLANG_UNIT_TEST(portableRayTracingSchemaRetainsOnlyReferencedStages)
     SLANG_CHECK(!schema.hitGroups[1].closestHit.isPresent);
     SLANG_CHECK(!schema.hitGroups[1].anyHit.isPresent);
     SLANG_CHECK(schema.hitGroups[1].intersection.isPresent);
+    auto& opaque = schema.hitGroups[2];
+    SLANG_CHECK(!opaque.closestHit.isPresent);
+    SLANG_CHECK(!opaque.anyHit.isPresent);
+    SLANG_CHECK(!opaque.intersection.isPresent);
+    SLANG_CHECK(opaque.payloadType == schema.hitGroups[0].closestHit.input->getPayloadType());
+    SLANG_CHECK(opaque.recordType == schema.hitGroups[0].closestHit.input->getRecordType());
+    SLANG_CHECK(opaque.primitiveType == schema.hitGroups[0].closestHit.input->getPrimitiveType());
+    SLANG_CHECK(opaque.attributesType == schema.hitGroups[0].closestHit.input->getAttributesType());
     SLANG_CHECK(schema.missShaders[0].isPresent);
     SLANG_CHECK(
         schema.hitGroups[0].closestHit.invoke->getParent() == linkedIR.module->getModuleInst());

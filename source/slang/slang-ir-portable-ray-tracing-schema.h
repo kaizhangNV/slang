@@ -25,6 +25,11 @@ struct SchemaHitGroup
 {
     IRType* type = nullptr;
     IRType* contextType = nullptr;
+    // These belong to the group's Context even when all three stages are No* placeholders.
+    IRType* payloadType = nullptr;
+    IRType* recordType = nullptr;
+    IRType* primitiveType = nullptr;
+    IRType* attributesType = nullptr;
     SchemaStage closestHit;
     SchemaStage anyHit;
     SchemaStage intersection;
@@ -45,6 +50,10 @@ struct Schema
 
 /// Returns a declaration's checked semantic role, or COUNT when it has no builtin role.
 KnownBuiltinDeclName getBuiltinRole(IRInst* value);
+
+/// Reads the checked trace context's acceleration-structure type for a standalone stage.
+IRRaytracingAccelerationStructureType* getStageAccelerationStructure(
+    IRPortableRTStageInputDecoration* input);
 
 /// Reads a fully specialized descriptor schema. Returns false only while its witness is still
 /// unresolved; a malformed concrete contract is an IR invariant failure, not an empty schema.

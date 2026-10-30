@@ -211,6 +211,10 @@ def metallib_4_0 : metallib_3_2;
 /// [Version]
 alias metallib_latest = metallib_4_0;
 
+/// Opts into the extended Metal ray-tracing traversal limits.
+/// This is selected explicitly rather than implied by a Metal language version.
+def metal_raytracing_extended_limits : metal;
+
 // HLSL versions
 
 def _sm_4_0 : hlsl;

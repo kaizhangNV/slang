@@ -1,7 +1,7 @@
 #include "slang-ir-portable-ray-tracing.h"
 
-#include "slang-ir-clone.h"
 #include "slang-ir-insts.h"
+#include "slang-ir-portable-ray-tracing-util.h"
 #include "slang-ir-util.h"
 #include "slang-rich-diagnostics.h"
 #include "slang-target-program.h"
@@ -60,17 +60,12 @@ void addParameterLayout(
     builder.addLayoutDecoration(parameter, layout.build());
 }
 
-/// Threads one invocation value through ordinary helpers, stopping at a native adapter.
-///
-/// Consider `SharedMiss::invoke(input)` calling a noinline helper which changes `input.payload`.
-/// The helper and the static method need the same payload reference; copying input must not copy
-/// payload storage. Inputs cannot be constructed or escape an invocation, so each legal input
-/// denotes the current invocation. Add an ordinary typed parameter to each affected helper and
-/// pass the adapter's native parameter through its callers. This avoids storing pointers inside
-/// a generated struct, which would not be a legal HLSL representation for a kept helper.
-struct InvocationParameter
+/// Exposes an invocation value through a native entry-point parameter. Ordinary helper-call
+/// threading is target-independent; only this adapter boundary knows the native ABI. For example,
+/// triangle barycentrics are a float2 in helpers but come from a borrowed native attribute struct.
+struct NativeInvocationParameter : PortableRTInvocationParameter
 {
-    InvocationParameter(
+    NativeInvocationParameter(
         IRModule* inModule,
         IRType* inHelperType,
         IRType* inNativeType,
@@ -79,91 +74,49 @@ struct InvocationParameter
         const char* inSemantic,
         bool inIsOutput,
         IRStructKey* inNativeField = nullptr)
-        : module(inModule)
-        , helperType(inHelperType)
+        : PortableRTInvocationParameter(inModule, inHelperType, inName)
         , nativeType(inNativeType)
         , resourceKind(inResourceKind)
-        , name(inName)
         , semantic(inSemantic)
         , isOutput(inIsOutput)
         , nativeField(inNativeField)
     {
     }
 
-    IRModule* module;
-    IRType* helperType;
     IRType* nativeType;
     LayoutResourceKind resourceKind;
-    const char* name;
     const char* semantic;
     bool isOutput;
     IRStructKey* nativeField = nullptr;
-    Dictionary<IRFunc*, IRInst*> values;
-
-    IRInst* get(IRFunc* function)
+    IRInst* createParameter(IRFunc* function) override
     {
-        if (auto value = values.tryGetValue(function))
-            return *value;
+        auto entryPoint = function->findDecoration<IREntryPointDecoration>();
+        if (!entryPoint)
+            return PortableRTInvocationParameter::createParameter(function);
 
         auto block = function->getFirstBlock();
         SLANG_RELEASE_ASSERT(block);
-        auto entryPoint = function->findDecoration<IREntryPointDecoration>();
-        IRBuilder builder(module);
-        auto parameter = builder.createParam(entryPoint ? nativeType : helperType);
+        IRBuilder builder(m_module);
+        auto parameter = builder.createParam(nativeType);
         parameter->insertBefore(block->getFirstOrdinaryInst());
-        builder.addNameHintDecoration(parameter, UnownedTerminatedStringSlice(name));
+        builder.addNameHintDecoration(parameter, UnownedTerminatedStringSlice(m_name));
+        addParameterLayout(
+            builder,
+            parameter,
+            entryPoint->getProfile().getStage(),
+            resourceKind,
+            semantic,
+            isOutput);
 
         IRInst* value = parameter;
-        if (entryPoint)
+        if (nativeType != m_valueType)
         {
-            addParameterLayout(
-                builder,
-                parameter,
-                entryPoint->getProfile().getStage(),
-                resourceKind,
-                semantic,
-                isOutput);
-            if (nativeType != helperType)
-            {
-                builder.setInsertBefore(block->getFirstOrdinaryInst());
-                value = builder.emitLoad(parameter);
-                if (nativeField)
-                    value = builder.emitFieldExtract(helperType, value, nativeField);
-            }
-        }
-        // Cache before visiting callers: a recursive helper graph still has one parameter for
-        // this value per function, rather than recursively allocating new parameters forever.
-        values.add(function, value);
-        fixUpFuncType(function);
-
-        List<IRCall*> calls;
-        for (auto use = function->firstUse; use; use = use->nextUse)
-        {
-            auto call = as<IRCall>(use->getUser());
-            if (call && call->getCalleeUse() == use)
-                calls.add(call);
-        }
-        for (auto call : calls)
-        {
-            List<IRInst*> arguments;
-            for (UInt i = 0; i < call->getArgCount(); ++i)
-                arguments.add(call->getArg(i));
-            arguments.add(get(getParentFunc(call)));
-            builder.setInsertBefore(call);
-            auto replacement = builder.emitCallInst(call->getDataType(), function, arguments);
-            replacement->sourceLoc = call->sourceLoc;
-            for (auto decoration : call->getDecorations())
-                cloneDecoration(decoration, replacement);
-            call->replaceUsesWith(replacement);
-            call->removeAndDeallocate();
+            builder.setInsertBefore(block->getFirstOrdinaryInst());
+            value = builder.emitLoad(parameter);
+            if (nativeField)
+                value = builder.emitFieldExtract(m_valueType, value, nativeField);
         }
         return value;
-    }
-
-    void lower(IRInst* operation)
-    {
-        operation->replaceUsesWith(get(getParentFunc(operation)));
-        operation->removeAndDeallocate();
     }
 };
 
@@ -320,7 +273,7 @@ void lowerPayloads(
     {
         IRBuilder builder(module);
         auto parameterType = builder.getBorrowInOutParamType(type);
-        InvocationParameter parameter = {
+        NativeInvocationParameter parameter = {
             module,
             parameterType,
             parameterType,
@@ -392,7 +345,7 @@ void lowerAttributes(IRModule* module, const List<NativeStage>& stages, List<IRI
     }
     for (auto type : customTypes)
     {
-        InvocationParameter parameter = {
+        NativeInvocationParameter parameter = {
             module,
             type,
             builder.getBorrowInParamType(type, AddressSpace::Generic),
@@ -431,7 +384,7 @@ void lowerAttributes(IRModule* module, const List<NativeStage>& stages, List<IRI
     builder.addNameHintDecoration(barycentrics, UnownedTerminatedStringSlice("barycentrics"));
     auto barycentricType = builder.getVectorType(builder.getFloatType(), 2);
     builder.createStructField(nativeType, barycentrics, barycentricType);
-    InvocationParameter parameter = {
+    NativeInvocationParameter parameter = {
         module,
         barycentricType,
         builder.getBorrowInParamType(nativeType, AddressSpace::Generic),
@@ -507,14 +460,7 @@ void lowerRecords(
 
     for (auto recordType : types)
     {
-        InvocationParameter parameter = {
-            module,
-            recordType,
-            recordType,
-            LayoutResourceKind::ShaderRecord,
-            "record",
-            nullptr,
-            false};
+        PortableRTInvocationParameter parameter(module, recordType, "record");
         for (auto stage : stages)
         {
             if (stage.input->getRecordType() != recordType)
@@ -544,7 +490,7 @@ void lowerRecords(
                 builder.addLayoutDecoration(record, layout.build());
             }
             builder.setInsertBefore(stage.adapter->getFirstBlock()->getFirstOrdinaryInst());
-            parameter.values.add(stage.adapter, builder.emitLoad(record));
+            parameter.bind(stage.adapter, builder.emitLoad(record));
         }
         for (auto& operation : operations)
         {
