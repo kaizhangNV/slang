@@ -1831,13 +1831,14 @@ static void validateEntryPointCapabilities(
     auto linkage = entryPoint->getLinkage();
     auto entryPointFuncDecl = entryPoint->getFuncDecl();
     CapabilitySet stageCapabilitySet{entryPoint->getProfile().getCapabilityName()};
+    // For portable ray-tracing stages, do not add `raytracing`: it excludes Metal, where our
+    // lowering implements those stages. Ray generation is an exception among nonstructural
+    // entries: a [shader("raygeneration")] function can call rt::RayTracer.trace and lower to a
+    // Metal compute entry, so we do not add this extra requirement there either. Other
+    // nonstructural ray-tracing entries require a native ray-tracing pipeline.
     if (!entryPoint->isStructuralRayTracingEntryPoint() &&
         isRaytracingStage(entryPoint->getStage()) && entryPoint->getStage() != Stage::RayGeneration)
     {
-        // Shared stage names include Metal's portable roles. A native [shader("miss")] entry
-        // still needs a target with a ray-tracing pipeline, unlike a portable IMissShader.
-        // A [shader("raygeneration")] entry can call rt::RayTracer.trace and become a Metal
-        // compute entry after specialization, so its declared stage capabilities suffice.
         stageCapabilitySet.join(CapabilitySet{CapabilityName::raytracing});
     }
 
