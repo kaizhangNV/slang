@@ -1832,8 +1832,7 @@ static void validateEntryPointCapabilities(
     auto entryPointFuncDecl = entryPoint->getFuncDecl();
     CapabilitySet stageCapabilitySet{entryPoint->getProfile().getCapabilityName()};
     if (!entryPoint->isStructuralRayTracingEntryPoint() &&
-        isRaytracingStage(entryPoint->getStage()) &&
-        entryPoint->getStage() != Stage::RayGeneration)
+        isRaytracingStage(entryPoint->getStage()) && entryPoint->getStage() != Stage::RayGeneration)
     {
         // Shared stage names include Metal's portable roles. A native [shader("miss")] entry
         // still needs a target with a ray-tracing pipeline, unlike a portable IMissShader.

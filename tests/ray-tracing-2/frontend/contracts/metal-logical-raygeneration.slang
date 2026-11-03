@@ -58,6 +58,9 @@ void RayGeneration()
 {
 #if defined(TEST_LEGACY)
     output[0] = Tracer().trace() + DispatchRaysIndex().x;
+/*LEGACY:
+                                   ^^^^^^^^^^^^^^^^^ see using of 'DispatchRaysIndex'
+*/
 #elif defined(TEST_DIRECT)
     output[0] = Tracer().trace();
 #else
