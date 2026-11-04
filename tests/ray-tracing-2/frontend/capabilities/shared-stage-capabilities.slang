@@ -36,7 +36,8 @@ struct PortableMiss : rt::IMissShader
     }
 }
 
-// Portable stage requirements must not make native ray-tracing intrinsics available on Metal.
+// This entry's portable_miss profile permits Metal, but WorldRayOrigin requires native ray
+// tracing on CUDA, GLSL, HLSL, or SPIR-V. Its Metal compilation must therefore fail.
 struct NativeRayOriginMiss : rt::IMissShader
 {
     typealias Context = MissContext;
@@ -50,6 +51,8 @@ struct NativeRayOriginMiss : rt::IMissShader
     }
 }
 
+// The portable_miss profile permits Metal, but CallShader requires native ray tracing on
+// CUDA, GLSL, HLSL, or SPIR-V. Calling it still makes this entry unavailable on Metal.
 struct NativeCallableMiss : rt::IMissShader
 {
     typealias Context = MissContext;
@@ -64,7 +67,8 @@ struct NativeCallableMiss : rt::IMissShader
     }
 }
 
-// Requiring the native alias inside a portable stage still excludes Metal.
+// The native miss alias includes raytracing, which excludes Metal. Calling this helper must
+// therefore fail on Metal even though the entry's portable_miss profile permits that target.
 [require(miss)]
 void nativeMissOnlyHelper() {}
 
