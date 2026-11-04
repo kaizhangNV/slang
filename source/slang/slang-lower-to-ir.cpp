@@ -7,7 +7,6 @@
 #include "core/slang-performance-profiler.h"
 #include "core/slang-random-generator.h"
 #include "slang-check-impl.h"
-#include "slang-check-portable-ray-tracing.h"
 #include "slang-check.h"
 #include "slang-ir-autodiff.h"
 #include "slang-ir-bit-field-accessors.h"
@@ -41,6 +40,7 @@
 #include "slang-ir-validate.h"
 #include "slang-ir.h"
 #include "slang-mangle.h"
+#include "slang-portable-ray-tracing-utility.h"
 #include "slang-rich-diagnostics.h"
 #include "slang-type-layout.h"
 #include "slang-visitor.h"
@@ -1971,52 +1971,6 @@ static void _addPortableRTStageInputMetadata(
     builder->addDecoration(
         irType,
         kIROp_PortableRTStageInputDecoration,
-        operands,
-        SLANG_COUNT_OF(operands));
-}
-
-// Retains the canonical generic packs before an empty list struct is specialized. The host's
-// physical record count is unrelated to this list: its entries define the available programs.
-// Their witness pack is also an executable dependency, preserving the selected invoke methods.
-static void _addPortableRTShaderListMetadata(
-    IRGenContext* context,
-    AggTypeDecl* decl,
-    IRType* irType)
-{
-    auto role = _getPortableRTBuiltinRole(decl);
-    if (role != KnownBuiltinDeclName::RayTracingHitGroupList &&
-        role != KnownBuiltinDeclName::RayTracingMissShaderList &&
-        role != KnownBuiltinDeclName::RayTracingCallableShaderList)
-        return;
-
-    auto generic = as<GenericDecl>(decl->parentDecl);
-    SLANG_RELEASE_ASSERT(generic);
-    GenericTypePackParamDecl* typePack = nullptr;
-    GenericTypeConstraintDecl* witnessPack = nullptr;
-    for (auto member : generic->getDirectMemberDecls())
-    {
-        if (auto parameter = as<GenericTypePackParamDecl>(member))
-        {
-            SLANG_RELEASE_ASSERT(!typePack);
-            typePack = parameter;
-        }
-        else if (auto constraint = as<GenericTypeConstraintDecl>(member))
-        {
-            if (!constraint->isEqualityConstraint)
-            {
-                SLANG_RELEASE_ASSERT(!witnessPack);
-                witnessPack = constraint;
-            }
-        }
-    }
-    SLANG_RELEASE_ASSERT(typePack && witnessPack);
-    IRInst* operands[] = {
-        getSimpleVal(context, ensureDecl(context, typePack)),
-        getSimpleVal(context, ensureDecl(context, witnessPack)),
-    };
-    context->irBuilder->addDecoration(
-        irType,
-        kIROp_PortableRTShaderListDecoration,
         operands,
         SLANG_COUNT_OF(operands));
 }
@@ -12974,7 +12928,16 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
         IRGenContext metadataContext = *subContext;
         metadataContext.irBuilder = &metadataBuilder;
         _addPortableRTStageInputMetadata(&metadataContext, decl, irAggType);
-        _addPortableRTShaderListMetadata(&metadataContext, decl, irAggType);
+        PortableRT::addShaderListDecoration(
+            &metadataBuilder,
+            decl,
+            irAggType,
+            [](Decl* declaration, void* userData)
+            {
+                auto context = static_cast<IRGenContext*>(userData);
+                return getSimpleVal(context, ensureDecl(context, declaration));
+            },
+            &metadataContext);
 
         return LoweredValInfo::simple(finalFinishedVal);
     }

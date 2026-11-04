@@ -16,11 +16,14 @@ class ASTBuilder;
 class MagicTypeModifier;
 struct SemanticsVisitor;
 class EntryPoint;
+struct IRBuilder;
+struct IRInst;
+struct IRType;
 
 namespace PortableRT
 {
 
-// These checks inspect already-checked declarations, types, and expressions. The checks taking
+// These helpers inspect already-checked declarations, types, and expressions. The checks taking
 // a visitor use its existing diagnoseOnce state to avoid reporting the same error twice.
 
 /// Checks the additional stage-implementation restrictions after ordinary conformance checking.
@@ -75,6 +78,19 @@ Type* getAssociatedType(
 /// Returns the concrete type pack of a checked shader list, or null for an unresolved list.
 /// A non-null pack with no elements represents an actual empty list.
 ConcreteTypePack* getConcreteEntryTypes(Type* entryListType);
+
+/// Adds PortableRTShaderListDecoration to a recognized shader-list type, preserving its ordered
+/// entry-type pack and matching conformance-witness pack through ordinary specialization.
+/// Other aggregate declarations are unchanged. Context and its associated types are read later
+/// from the preserved conformances; this decoration does not select an invoke body for emission.
+/// The callback lowers each pack declaration synchronously in the caller's existing generic
+/// environment. The builder uses that environment's insertion location.
+void addShaderListDecoration(
+    IRBuilder* builder,
+    AggTypeDecl* decl,
+    IRType* irType,
+    IRInst* (*lowerDecl)(Decl*, void*),
+    void* userData);
 
 /// Returns this executable interface's `invoke` requirement, or null for other interfaces.
 FunctionDeclBase* getStageInvokeRequirement(InterfaceDecl* interfaceDecl);

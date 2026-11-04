@@ -1,7 +1,7 @@
 // slang-check-modifier.cpp
 #include "core/slang-char-util.h"
 #include "slang-check-impl.h"
-#include "slang-check-portable-ray-tracing.h"
+#include "slang-portable-ray-tracing-utility.h"
 #include "slang-rich-diagnostics.h"
 
 // This file implements semantic checking behavior for

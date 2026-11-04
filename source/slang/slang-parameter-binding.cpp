@@ -3,11 +3,11 @@
 
 #include "compiler-core/slang-artifact-desc-util.h"
 #include "slang-check-impl.h"
-#include "slang-check-portable-ray-tracing.h"
 #include "slang-compiler.h"
 #include "slang-ir-string-hash.h"
 #include "slang-ir-util.h"
 #include "slang-lookup.h"
+#include "slang-portable-ray-tracing-utility.h"
 #include "slang-rich-diagnostics.h"
 #include "slang-type-layout.h"
 #include "slang.h"

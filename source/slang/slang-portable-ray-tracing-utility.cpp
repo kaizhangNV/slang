@@ -1,7 +1,8 @@
-#include "slang-check-portable-ray-tracing.h"
+#include "slang-portable-ray-tracing-utility.h"
 
 #include "core/slang-string-util.h"
 #include "slang-check-impl.h"
+#include "slang-ir-insts.h"
 #include "slang-lookup.h"
 #include "slang-mangle.h"
 #include "slang-module.h"
@@ -13,9 +14,10 @@ namespace Slang
 namespace PortableRT
 {
 
-// This file owns the portable ray-tracing rules and their declaration identities.
+// This file owns the portable ray-tracing rules, their declaration identities, and the IR
+// decorations that preserve checked shader-list arguments for later target lowering.
 // Ordinary interfaces, associated-type constraints, overload resolution, and capability inference
-// remain in the normal checker. Their call sites delegate here only for the additional rules:
+// remain in the normal checker. Their call sites delegate here for the additional rules:
 // stage types and inputs, stage selection, schema entry uniqueness, and native entry signatures.
 // Each rule below states its example and the representation or API contract it preserves.
 //
@@ -378,6 +380,65 @@ ConcreteTypePack* getConcreteEntryTypes(Type* entryListType)
         }
     }
     return nullptr;
+}
+
+// Preserves the list's ordinary generic arguments before specialization replaces the application
+// with an empty struct type. Consider this example, where FirstGroup and SecondGroup conform to
+// IHitGroup:
+//
+//     typealias HitGroups = rt::HitGroupList<FirstGroup, SecondGroup>;
+//
+// HitGroupList has no instance fields, and IHitGroupList exposes only count. Neither identifies
+// the two group types or their order after specialization. The decoration's first operand is the
+// ordered entry-type pack; its second is the matching pack of IHitGroup conformance witnesses.
+// Miss and callable lists preserve their corresponding shader conformances in the same way.
+// The callback obtains these existing IR values in the list's generic environment, so ordinary
+// specialization substitutes them along with the struct. The later schema reader uses the
+// witnesses to obtain Context and its associated types. Keeping these contracts does not select
+// invoke bodies for emission; executable uses determine which methods are needed.
+void addShaderListDecoration(
+    IRBuilder* builder,
+    AggTypeDecl* decl,
+    IRType* irType,
+    IRInst* (*lowerDecl)(Decl*, void*),
+    void* userData)
+{
+    auto role = _getBuiltin(decl);
+    if (role != KnownBuiltinDeclName::RayTracingHitGroupList &&
+        role != KnownBuiltinDeclName::RayTracingMissShaderList &&
+        role != KnownBuiltinDeclName::RayTracingCallableShaderList)
+        return;
+
+    auto generic = as<GenericDecl>(decl->parentDecl);
+    SLANG_RELEASE_ASSERT(generic);
+    GenericTypePackParamDecl* typePack = nullptr;
+    GenericTypeConstraintDecl* witnessPack = nullptr;
+    for (auto member : generic->getDirectMemberDecls())
+    {
+        if (auto parameter = as<GenericTypePackParamDecl>(member))
+        {
+            SLANG_RELEASE_ASSERT(!typePack);
+            typePack = parameter;
+        }
+        else if (auto constraint = as<GenericTypeConstraintDecl>(member))
+        {
+            if (!constraint->isEqualityConstraint)
+            {
+                SLANG_RELEASE_ASSERT(!witnessPack);
+                witnessPack = constraint;
+            }
+        }
+    }
+    SLANG_RELEASE_ASSERT(typePack && witnessPack);
+    IRInst* operands[] = {
+        lowerDecl(typePack, userData),
+        lowerDecl(witnessPack, userData),
+    };
+    builder->addDecoration(
+        irType,
+        kIROp_PortableRTShaderListDecoration,
+        operands,
+        SLANG_COUNT_OF(operands));
 }
 
 // Returns the checked entry types used by the duplicate-entry diagnostic. The list's conformance

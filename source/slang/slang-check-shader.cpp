@@ -1,6 +1,6 @@
 // slang-check-shader.cpp
 #include "slang-check-impl.h"
-#include "slang-check-portable-ray-tracing.h"
+#include "slang-portable-ray-tracing-utility.h"
 
 // This file encapsulates semantic checking logic primarily
 // related to shaders, including validating entry points,

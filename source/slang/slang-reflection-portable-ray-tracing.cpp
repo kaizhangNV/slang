@@ -1,7 +1,7 @@
 #include "slang-reflection-portable-ray-tracing.h"
 
 #include "slang-check-impl.h"
-#include "slang-check-portable-ray-tracing.h"
+#include "slang-portable-ray-tracing-utility.h"
 #include "slang-type-layout.h"
 
 namespace Slang
