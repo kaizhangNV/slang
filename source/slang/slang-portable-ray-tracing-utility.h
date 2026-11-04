@@ -79,6 +79,22 @@ Type* getAssociatedType(
 /// A non-null pack with no elements represents an actual empty list.
 ConcreteTypePack* getConcreteEntryTypes(Type* entryListType);
 
+/// Adds PortableRTStageInputDecoration to the IR struct type for a recognized stage input.
+/// Its seven operands are the stage kind, context type, context witness, payload type (callable
+/// data for CallableInput), record type, primitive type, and attributes type. Non-hit inputs use
+/// void for the last two operands. Other aggregate declarations are unchanged.
+/// Both callbacks lower checked semantic values synchronously in the caller's existing generic
+/// environment. The builder uses that environment's insertion location.
+void addStageInputDecoration(
+    IRBuilder* builder,
+    Linkage* linkage,
+    ASTBuilder* astBuilder,
+    AggTypeDecl* decl,
+    IRType* irType,
+    IRInst* (*lowerDecl)(Decl*, void*),
+    IRType* (*lowerType)(Type*, void*),
+    void* userData);
+
 /// Adds PortableRTShaderListDecoration to a recognized shader-list type, preserving its ordered
 /// entry-type pack and matching conformance-witness pack through ordinary specialization.
 /// Other aggregate declarations are unchanged. Context and its associated types are read later

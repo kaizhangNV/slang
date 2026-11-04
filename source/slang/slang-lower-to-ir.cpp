@@ -1887,94 +1887,6 @@ static KnownBuiltinDeclName _getPortableRTBuiltinRole(Decl* decl)
     return value ? KnownBuiltinDeclName(value->getValue()) : KnownBuiltinDeclName::COUNT;
 }
 
-// Shares checked associated-type lookup with binding reflection. Its result is still ordinary
-// semantic data, so generic and extern contexts follow the normal lowering/specialization path.
-static Type* _getPortableRTAssociatedType(
-    IRGenContext* context,
-    Type* owner,
-    KnownBuiltinDeclName role)
-{
-    return PortableRT::getAssociatedType(context->getLinkage(), context->astBuilder, owner, role);
-}
-
-// Keeps the input's checked context information in its own generic environment. The source
-// struct remains an ordinary, empty value type; this decoration supplies the facts needed to
-// synthesize native parameters after specialization. Copying an input therefore does not create
-// payload storage, and an extern context need not have a concrete ABI during module compilation.
-static void _addPortableRTStageInputMetadata(
-    IRGenContext* context,
-    AggTypeDecl* decl,
-    IRType* irType)
-{
-    auto stage = PortableRT::getStageInputKind(decl);
-    if (stage == Stage::Unknown)
-        return;
-
-    auto generic = as<GenericDecl>(decl->parentDecl);
-    SLANG_RELEASE_ASSERT(generic);
-    GenericTypeParamDecl* contextParameter = nullptr;
-    GenericTypeConstraintDecl* contextConstraint = nullptr;
-    for (auto member : generic->getDirectMemberDecls())
-    {
-        if (auto parameter = as<GenericTypeParamDecl>(member))
-        {
-            SLANG_RELEASE_ASSERT(!contextParameter);
-            contextParameter = parameter;
-        }
-        else if (auto constraint = as<GenericTypeConstraintDecl>(member))
-        {
-            if (!constraint->isEqualityConstraint)
-            {
-                SLANG_RELEASE_ASSERT(!contextConstraint);
-                contextConstraint = constraint;
-            }
-        }
-    }
-    SLANG_RELEASE_ASSERT(contextParameter && contextConstraint);
-    auto contextType = DeclRefType::create(
-        context->astBuilder,
-        context->astBuilder->getDirectDeclRef(contextParameter));
-    auto payloadRole = stage == Stage::Callable
-                           ? KnownBuiltinDeclName::RayTracingContextCallableData
-                           : KnownBuiltinDeclName::RayTracingContextPayload;
-    auto payloadType = _getPortableRTAssociatedType(context, contextType, payloadRole);
-    auto recordType = _getPortableRTAssociatedType(
-        context,
-        contextType,
-        KnownBuiltinDeclName::RayTracingContextRecord);
-    auto builder = context->irBuilder;
-    IRType* primitiveType = builder->getVoidType();
-    IRType* attributesType = builder->getVoidType();
-    if (stage == Stage::ClosestHit || stage == Stage::AnyHit || stage == Stage::Intersection)
-    {
-        auto primitive = _getPortableRTAssociatedType(
-            context,
-            contextType,
-            KnownBuiltinDeclName::RayTracingContextPrimitive);
-        primitiveType = lowerType(context, primitive);
-        attributesType = lowerType(
-            context,
-            _getPortableRTAssociatedType(
-                context,
-                primitive,
-                KnownBuiltinDeclName::RayTracingPrimitiveAttributes));
-    }
-    IRInst* operands[] = {
-        builder->getIntValue(builder->getIntType(), IRIntegerValue(stage)),
-        lowerType(context, contextType),
-        getSimpleVal(context, ensureDecl(context, contextConstraint)),
-        lowerType(context, payloadType),
-        lowerType(context, recordType),
-        primitiveType,
-        attributesType,
-    };
-    builder->addDecoration(
-        irType,
-        kIROp_PortableRTStageInputDecoration,
-        operands,
-        SLANG_COUNT_OF(operands));
-}
-
 void getGenericTypeConformances(
     IRGenContext* context,
     ShortList<IRType*>& supTypes,
@@ -12921,23 +12833,33 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
 
         addTargetRequirementDecorations(irAggType, decl);
 
-        // Build metadata beside the nominal type, inside the same generic environment. Its
-        // operands are ordinary checked lookups and generic arguments, not reconstructed syntax.
-        IRBuilder metadataBuilder = *subBuilder;
-        metadataBuilder.setInsertBefore(irAggType);
-        IRGenContext metadataContext = *subContext;
-        metadataContext.irBuilder = &metadataBuilder;
-        _addPortableRTStageInputMetadata(&metadataContext, decl, irAggType);
-        PortableRT::addShaderListDecoration(
-            &metadataBuilder,
+        // Build decoration operands beside the nominal type, inside the same generic
+        // environment. The callbacks use ordinary lowering for checked types and declarations.
+        IRBuilder decorationBuilder = *subBuilder;
+        decorationBuilder.setInsertBefore(irAggType);
+        IRGenContext decorationContext = *subContext;
+        decorationContext.irBuilder = &decorationBuilder;
+        auto lowerDeclaration = [](Decl* declaration, void* userData)
+        {
+            auto context = static_cast<IRGenContext*>(userData);
+            return getSimpleVal(context, ensureDecl(context, declaration));
+        };
+        PortableRT::addStageInputDecoration(
+            &decorationBuilder,
+            decorationContext.getLinkage(),
+            decorationContext.astBuilder,
             decl,
             irAggType,
-            [](Decl* declaration, void* userData)
-            {
-                auto context = static_cast<IRGenContext*>(userData);
-                return getSimpleVal(context, ensureDecl(context, declaration));
-            },
-            &metadataContext);
+            lowerDeclaration,
+            [](Type* type, void* userData)
+            { return lowerType(static_cast<IRGenContext*>(userData), type); },
+            &decorationContext);
+        PortableRT::addShaderListDecoration(
+            &decorationBuilder,
+            decl,
+            irAggType,
+            lowerDeclaration,
+            &decorationContext);
 
         return LoweredValInfo::simple(finalFinishedVal);
     }

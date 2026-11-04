@@ -15,7 +15,8 @@ namespace PortableRT
 {
 
 // This file owns the portable ray-tracing rules, their declaration identities, and the IR
-// decorations that preserve checked shader-list arguments for later target lowering.
+// decorations that preserve checked stage-input types and shader-list arguments for later target
+// lowering.
 // Ordinary interfaces, associated-type constraints, overload resolution, and capability inference
 // remain in the normal checker. Their call sites delegate here for the additional rules:
 // stage types and inputs, stage selection, schema entry uniqueness, and native entry signatures.
@@ -380,6 +381,103 @@ ConcreteTypePack* getConcreteEntryTypes(Type* entryListType)
         }
     }
     return nullptr;
+}
+
+// Decorates the input's IRStructType with its checked context contract, so target lowering can
+// synthesize native parameters after specialization. Consider the builtin declaration:
+//
+//     struct MissInput<Context> where Context : IPayloadContext { /* Accessors omitted. */ }
+//
+// The IRStructType inside this generic has no fields. Its decoration has seven operands:
+// (Miss, Context, Context : IPayloadContext, Context.Payload, Context.Record, void, void).
+// The Context operand and its witness refer to the generic parameters; Payload and Record are
+// ordinary associated-type lookups using that witness. Specializing MissInput<MyContext>
+// substitutes MyContext and its conformance, and resolves the associated types through the
+// normal specialization path. The decoration remains attached to the specialized IRStructType.
+// Hit inputs also retain Context.Primitive and Context.Primitive.Attributes, while CallableInput
+// retains Context.CallableData in the payload slot. The source struct remains an empty value:
+// copying it does not create payload storage, and an extern context need not have a concrete ABI
+// during module compilation.
+void addStageInputDecoration(
+    IRBuilder* builder,
+    Linkage* linkage,
+    ASTBuilder* astBuilder,
+    AggTypeDecl* decl,
+    IRType* irType,
+    IRInst* (*lowerDecl)(Decl*, void*),
+    IRType* (*lowerType)(Type*, void*),
+    void* userData)
+{
+    auto stage = getStageInputKind(decl);
+    if (stage == Stage::Unknown)
+        return;
+
+    auto generic = as<GenericDecl>(decl->parentDecl);
+    SLANG_RELEASE_ASSERT(generic);
+    // Each builtin input declares one context parameter and its conformance constraint. These
+    // are parameter declarations, not the members or arguments of a concrete context type.
+    GenericTypeParamDecl* contextParameter = nullptr;
+    GenericTypeConstraintDecl* contextConstraint = nullptr;
+    for (auto member : generic->getDirectMemberDecls())
+    {
+        if (auto parameter = as<GenericTypeParamDecl>(member))
+        {
+            SLANG_RELEASE_ASSERT(!contextParameter);
+            contextParameter = parameter;
+        }
+        else if (auto constraint = as<GenericTypeConstraintDecl>(member))
+        {
+            if (!constraint->isEqualityConstraint)
+            {
+                SLANG_RELEASE_ASSERT(!contextConstraint);
+                contextConstraint = constraint;
+            }
+        }
+    }
+    SLANG_RELEASE_ASSERT(contextParameter && contextConstraint);
+    auto contextType =
+        DeclRefType::create(astBuilder, astBuilder->getDirectDeclRef(contextParameter));
+    auto payloadRole = stage == Stage::Callable
+                           ? KnownBuiltinDeclName::RayTracingContextCallableData
+                           : KnownBuiltinDeclName::RayTracingContextPayload;
+    auto payloadType = getAssociatedType(linkage, astBuilder, contextType, payloadRole);
+    auto recordType = getAssociatedType(
+        linkage,
+        astBuilder,
+        contextType,
+        KnownBuiltinDeclName::RayTracingContextRecord);
+    IRType* primitiveType = builder->getVoidType();
+    IRType* attributesType = builder->getVoidType();
+    if (stage == Stage::ClosestHit || stage == Stage::AnyHit || stage == Stage::Intersection)
+    {
+        auto primitive = getAssociatedType(
+            linkage,
+            astBuilder,
+            contextType,
+            KnownBuiltinDeclName::RayTracingContextPrimitive);
+        primitiveType = lowerType(primitive, userData);
+        attributesType = lowerType(
+            getAssociatedType(
+                linkage,
+                astBuilder,
+                primitive,
+                KnownBuiltinDeclName::RayTracingPrimitiveAttributes),
+            userData);
+    }
+    IRInst* operands[] = {
+        builder->getIntValue(builder->getIntType(), IRIntegerValue(stage)),
+        lowerType(contextType, userData),
+        lowerDecl(contextConstraint, userData),
+        lowerType(payloadType, userData),
+        lowerType(recordType, userData),
+        primitiveType,
+        attributesType,
+    };
+    builder->addDecoration(
+        irType,
+        kIROp_PortableRTStageInputDecoration,
+        operands,
+        SLANG_COUNT_OF(operands));
 }
 
 // Preserves the list's ordinary generic arguments before specialization replaces the application
