@@ -158,8 +158,8 @@ static ShaderList _readList(IRType* type)
     auto list = type->findDecoration<IRPortableRTShaderListDecoration>();
     SLANG_RELEASE_ASSERT(list);
     ShaderList result;
-    result.types = as<IRTypePack>(list->getEntryTypes());
-    result.witnesses = as<IRMakeWitnessPack>(list->getEntryWitnesses());
+    result.types = as<IRTypePack>(list->getTypepack());
+    result.witnesses = as<IRMakeWitnessPack>(list->getWitnessPack());
     SLANG_RELEASE_ASSERT(result.types && result.witnesses);
     SLANG_RELEASE_ASSERT(result.types->getOperandCount() == result.witnesses->getOperandCount());
     return result;

@@ -2617,7 +2617,7 @@ local insts = {
 				-- The nominal list is empty at runtime. Its ordinary type/witness packs
 				-- retain the program choices used by dispatch and reflection consumers.
 				PortableRTShaderListDecoration = {
-					operands = { { "entryTypes" }, { "entryWitnesses" } },
+					operands = { { "typepack" }, { "witnessPack" } },
 				},
 			},
 			{
