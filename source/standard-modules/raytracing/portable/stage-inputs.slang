@@ -87,12 +87,12 @@ __intrinsic_op(metalRTGetWorldToObject)
 internal float4x3 __metalRTGetWorldToObject();
 
 /// Rejects the current candidate and exits the source any-hit invocation, including its helpers.
-[require(metal, anyhit)]
+[require(metal, portable_anyhit)]
 __intrinsic_op(metalRTIgnoreHit)
 internal void __metalRTIgnoreHit();
 
 /// Accepts the candidate, exits the source any-hit invocation, and ends the traversal search.
-[require(metal, anyhit)]
+[require(metal, portable_anyhit)]
 __intrinsic_op(metalRTAcceptHitAndEndSearch)
 internal void __metalRTAcceptHitAndEndSearch();
 
@@ -100,7 +100,7 @@ internal void __metalRTAcceptHitAndEndSearch();
 ///
 /// The attributes retain their concrete type until the hit-group adapter supplies the candidate
 /// protocol. A successful report returns true; it does not itself end the intersection invocation.
-[require(metal, intersection)]
+[require(metal, portable_intersection)]
 __intrinsic_op(metalRTReportHit)
 internal bool __metalRTReportHit<Attributes>(float distance, uint hitKind, Attributes attributes);
 
@@ -604,7 +604,7 @@ public extension<Input : ICommonHitInput> Input
 /// parameter. Copying the view does not duplicate its payload or record storage.
 /// Applications cannot construct a fresh input, declare an uninitialized input local, use an input
 /// as a global shader parameter or field, or return one from a function.
-[require(closesthit)]
+[require(portable_closesthit)]
 [KnownBuiltin("RayTracingClosestHitInput")]
 public struct ClosestHitInput<Context> : ICommonHitInput
     where Context : IHitContext
@@ -832,7 +832,7 @@ public extension<Context> ClosestHitInput<Context>
 /// parameter. Copying the view does not duplicate its payload or record storage.
 /// Applications cannot construct a fresh input, declare an uninitialized input local, use an input
 /// as a global shader parameter or field, or return one from a function.
-[require(anyhit)]
+[require(portable_anyhit)]
 [KnownBuiltin("RayTracingAnyHitInput")]
 public struct AnyHitInput<Context> : ICommonHitInput
     where Context : IHitContext
@@ -1099,7 +1099,7 @@ public extension<Context> AnyHitInput<Context>
 /// as a global shader parameter or field, or return one from a function.
 /// An `IIntersectionShader` implementation additionally requires
 /// `Context.Primitive : ICustomIntersectionPrimitive`.
-[require(intersection)]
+[require(portable_intersection)]
 [KnownBuiltin("RayTracingIntersectionInput")]
 public struct IntersectionInput<Context> : ICommonHitInput
     where Context : IHitContext
@@ -1115,8 +1115,8 @@ public struct IntersectionInput<Context> : ICommonHitInput
     /// Available in intersection shaders on CUDA/OptiX and Metal.
     /// The `[nonmutating] ref` accessor leaves the view unchanged and exposes `Context.Payload`
     /// for mutation through an `in` parameter or immutable local copy.
-    [require(intersection, cuda)]
-    [require(intersection, metal)]
+    [require(portable_intersection, cuda)]
+    [require(portable_intersection, metal)]
     public property Context.Payload payload
     {
         __intrinsic_op(portableRTGetPayload)
@@ -1340,7 +1340,7 @@ public extension<Context> IntersectionInput<Context>
 /// parameter. Copying the view does not duplicate its payload or record storage.
 /// Applications cannot construct a fresh input, declare an uninitialized input local, use an input
 /// as a global shader parameter or field, or return one from a function.
-[require(miss)]
+[require(portable_miss)]
 [KnownBuiltin("RayTracingMissInput")]
 public struct MissInput<Context>
     where Context : IPayloadContext
@@ -1480,7 +1480,7 @@ public extension<Context> MissInput<Context>
 /// parameter. Copying the view does not duplicate its callable-data or record storage.
 /// Applications cannot construct a fresh input, declare an uninitialized input local, use an input
 /// as a global shader parameter or field, or return one from a function.
-[require(callable)]
+[require(portable_callable)]
 [KnownBuiltin("RayTracingCallableInput")]
 public struct CallableInput<Context>
     where Context : ICallableContext

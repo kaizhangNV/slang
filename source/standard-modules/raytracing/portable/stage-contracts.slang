@@ -10,10 +10,10 @@ namespace rt
 /// can forward an existing input to this method, using the caller's payload and shader record.
 ///
 /// @par Constraints
-/// Requires the `closesthit` capability.
+/// Requires the `portable_closesthit` capability.
 /// Implementations must be user-defined structs. Stage dispatch calls static `invoke` without
 /// constructing an object; per-invocation state is supplied through its input.
-[require(closesthit)]
+[require(portable_closesthit)]
 __magic_type(ClosestHitShaderType)
 public interface IClosestHitShader
 {
@@ -37,10 +37,10 @@ public interface IClosestHitShader
 /// control flow.
 ///
 /// @par Constraints
-/// Requires the `anyhit` capability.
+/// Requires the `portable_anyhit` capability.
 /// Implementations must be user-defined structs. Stage dispatch calls static `invoke` without
 /// constructing an object; per-invocation state is supplied through its input.
-[require(anyhit)]
+[require(portable_anyhit)]
 __magic_type(AnyHitShaderType)
 public interface IAnyHitShader
 {
@@ -96,10 +96,10 @@ public interface IIntersectionStage
 /// @par Constraints
 /// Inherits `Context : IHitContext` from `IIntersectionStage` and further requires
 /// `Context.Primitive : ICustomIntersectionPrimitive`. Requires the
-/// `intersection` capability.
+/// `portable_intersection` capability.
 /// Implementations must be user-defined structs. Stage dispatch calls static `invoke` without
 /// constructing an object; per-invocation state is supplied through its input.
-[require(intersection)]
+[require(portable_intersection)]
 __magic_type(IntersectionShaderType)
 public interface IIntersectionShader : IIntersectionStage
 {
@@ -116,10 +116,10 @@ public interface IIntersectionShader : IIntersectionStage
 /// native miss entry point or the corresponding structural dispatch function.
 ///
 /// @par Constraints
-/// Requires the `miss` capability.
+/// Requires the `portable_miss` capability.
 /// Implementations must be user-defined structs. Stage dispatch calls static `invoke` without
 /// constructing an object; per-invocation state is supplied through its input.
-[require(miss)]
+[require(portable_miss)]
 __magic_type(MissShaderType)
 public interface IMissShader
 {
@@ -141,10 +141,10 @@ public interface IMissShader
 /// native callable entry point or the corresponding structural dispatch function.
 ///
 /// @par Constraints
-/// Requires the `callable` capability.
+/// Requires the `portable_callable` capability.
 /// Implementations must be user-defined structs. Stage dispatch calls static `invoke` without
 /// constructing an object; per-invocation state is supplied through its input.
-[require(callable)]
+[require(portable_callable)]
 __magic_type(CallableShaderType)
 public interface ICallableShader
 {

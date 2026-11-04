@@ -27,7 +27,7 @@ struct TestHitContext : rt::IHitContext
     typealias Record = TestRecord;
 }
 
-[require(anyhit)]
+[require(portable_anyhit)]
 void invalidAnyHitHelper()
 {
     IgnoreHit();

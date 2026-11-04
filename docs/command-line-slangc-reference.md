@@ -1722,7 +1722,13 @@ A capability describes an optional feature that a target may or may not support.
 * `closesthit` 
 * `callable` 
 * `miss` 
-* `portable_raytracing_call_shader` 
+* `portable_closesthit`
+* `portable_anyhit`
+* `portable_anyhit_closesthit`
+* `portable_intersection`
+* `portable_miss`
+* `portable_callable`
+* `portable_call_shader`
 * `mesh` 
 * `task` 
 * `amplification` 

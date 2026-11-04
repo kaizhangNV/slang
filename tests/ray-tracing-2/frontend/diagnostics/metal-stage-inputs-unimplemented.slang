@@ -32,7 +32,7 @@ struct ProceduralContext : rt::IHitContext
 // native Metal entry-point check defines an invocation ABI for them. Source checking and module
 // serialization remain valid; native library emission needs a selected stage/schema to provide
 // these inputs. The target check runs after reachability, without restricting ordinary calls.
-[require(closesthit)]
+[require(portable_closesthit)]
 export float readClosestHitState(rt::ClosestHitInput<HitContext> input)
 {
     return float(input.rayFlags) + input.objectSpaceRay.Origin.x;
@@ -42,7 +42,7 @@ export float readClosestHitState(rt::ClosestHitInput<HitContext> input)
 //METAL: Metal ray-tracing operation has no stage invocation ABI
 }
 
-[require(anyhit)]
+[require(portable_anyhit)]
 export void handleAnyHit(rt::AnyHitInput<HitContext> input)
 {
     if (input.objectSpaceRay.Origin.x < 0.0)
@@ -57,7 +57,7 @@ export void handleAnyHit(rt::AnyHitInput<HitContext> input)
 //METAL: Metal ray-tracing operation has no stage invocation ABI
 }
 
-[require(intersection)]
+[require(portable_intersection)]
 export bool reportIntersection(rt::IntersectionInput<ProceduralContext> input)
 {
     return input.reportHit(1.0, float2(0.0));
@@ -65,7 +65,7 @@ export bool reportIntersection(rt::IntersectionInput<ProceduralContext> input)
 //METAL: Metal ray-tracing operation has no stage invocation ABI
 }
 
-[require(intersection)]
+[require(portable_intersection)]
 export bool reportIntersectionWithKind(rt::IntersectionInput<ProceduralContext> input)
 {
     return input.reportHit(2.0, 7, float2(0.0));
@@ -74,7 +74,7 @@ export bool reportIntersectionWithKind(rt::IntersectionInput<ProceduralContext> 
 }
 
 // An unbound triangle view likewise cannot manufacture the current invocation's front face.
-[require(anyhit_closesthit)]
+[require(portable_anyhit_closesthit)]
 export bool readFrontFacing()
 {
     rt::TriangleData attributes = {};
@@ -100,7 +100,7 @@ struct MotionHitContext : rt::IHitContext
 
 // CUDA still has a pending motion-time input. Keep its exported use out of the HLSL success case,
 // whose traversal API does not provide InstanceMotion.
-[require(cuda, closesthit)]
+[require(cuda, portable_closesthit)]
 export float readRayTime(rt::ClosestHitInput<MotionHitContext> input)
 {
     return input.time;

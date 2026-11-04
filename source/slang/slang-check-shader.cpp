@@ -1831,12 +1831,19 @@ static void validateEntryPointCapabilities(
     auto linkage = entryPoint->getLinkage();
     auto entryPointFuncDecl = entryPoint->getFuncDecl();
     CapabilitySet stageCapabilitySet{entryPoint->getProfile().getCapabilityName()};
-    if (!entryPoint->isStructuralRayTracingEntryPoint() &&
-        isRaytracingStage(entryPoint->getStage()))
+    if (entryPoint->isStructuralRayTracingEntryPoint())
     {
-        // Shared stage names include Metal's portable roles. A native [shader("miss")] entry
-        // still needs a target with a ray-tracing pipeline, unlike a portable IMissShader.
-        stageCapabilitySet.join(CapabilitySet{CapabilityName::raytracing});
+        // Consider selecting a struct that implements IMissShader. Its checked invoke method
+        // takes MissInput<Context>, whose portable_miss requirement includes Metal. The native
+        // miss profile requires raytracing instead. Use the input type's declared requirements
+        // for this selection; the method body and its Context are still checked below.
+        auto astBuilder = linkage->getASTBuilder();
+        auto parameters = getParameters(astBuilder, entryPoint->getFuncDeclRef());
+        SLANG_RELEASE_ASSERT(parameters.getCount() == 1);
+        auto inputType = unwrapModifiedType(getType(astBuilder, parameters[0]));
+        auto inputDecl = isDeclRefTypeOf<AggTypeDecl>(inputType).getDecl();
+        SLANG_RELEASE_ASSERT(inputDecl && inputDecl->inferredCapabilityRequirements);
+        stageCapabilitySet = CapabilitySet{inputDecl->inferredCapabilityRequirements};
     }
 
     for (auto target : linkage->targets)

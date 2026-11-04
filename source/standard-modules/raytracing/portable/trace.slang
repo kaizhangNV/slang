@@ -102,7 +102,7 @@ internal void __metalTraceRayMotion<Schema, Payload>(
 /// @param[in] descriptor Program and shader-record descriptor for the schema.
 /// @param[in] callableIndex Index of the runtime callable record to invoke.
 /// @param[in,out] data Storage shared with the selected callable invocation.
-[require(metal, portable_raytracing_call_shader)]
+[require(metal, portable_call_shader)]
 __intrinsic_op(metalRTCallShader)
 internal void __metalRTCallShader<Schema, Data>(
     TraceProgramDescriptor<Schema> descriptor,
@@ -308,7 +308,7 @@ public extension<Schema> RayTracer<Schema>
 /// @par Specialization
 /// Extends `RayTracer<Schema>` with these constraints:
 /// - `Schema : ITraceProgramSchema` supplies the trace context and shader lists.
-[require(portable_raytracing_call_shader)]
+[require(portable_call_shader)]
 public extension<Schema> RayTracer<Schema>
     where Schema : ITraceProgramSchema
 {

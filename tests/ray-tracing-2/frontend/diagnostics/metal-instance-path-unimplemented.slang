@@ -20,7 +20,7 @@ struct HitContext : rt::IHitContext
 // These exported helpers have no selected stage/schema to supply an instance path. Keep source
 // and module compilation legal, but diagnose native emission instead of inventing placeholder
 // IDs or letting an unbound logical getter reach the emitter.
-[require(metal, closesthit)]
+[require(metal, portable_closesthit)]
 export uint readInstanceCount(rt::ClosestHitInput<HitContext> input)
 {
     return input.instanceCount;
@@ -28,7 +28,7 @@ export uint readInstanceCount(rt::ClosestHitInput<HitContext> input)
 //CHECK: Metal ray-tracing operation has no stage invocation ABI
 }
 
-[require(metal, anyhit)]
+[require(metal, portable_anyhit)]
 export uint readInstanceIndex(rt::AnyHitInput<HitContext> input, uint level)
 {
     return input.getInstanceIndex(level);
@@ -36,7 +36,7 @@ export uint readInstanceIndex(rt::AnyHitInput<HitContext> input, uint level)
 //CHECK: Metal ray-tracing operation has no stage invocation ABI
 }
 
-[require(metal, intersection)]
+[require(metal, portable_intersection)]
 export uint readInstanceID(rt::IntersectionInput<HitContext> input, uint level)
 {
     return input.getInstanceID(level);

@@ -20,24 +20,24 @@ struct HitContext : rt::IHitContext
     typealias Record = MaterialRecord;
 }
 
-[require(closesthit)]
+[require(portable_closesthit)]
 void outputInput(out rt::ClosestHitInput<HitContext> input) { input = {}; }
 //CHECK:                                             ^^^^^ storage of a structural ray-tracing stage input
 //CHECK:                                             ^^^^^ ray-tracing stage input type 'rt.ClosestHitInput<HitContext>' may only be used as an 'in' parameter or an initialized local copy
 //CHECK:                                                              ^ declaration not accessible
 //CHECK:                                                              ^ 'ClosestHitInput.init' is not accessible from the current context.
 
-[require(closesthit)]
+[require(portable_closesthit)]
 void updateInput(inout rt::ClosestHitInput<HitContext> input) {}
 //CHECK:                                               ^^^^^ storage of a structural ray-tracing stage input
 //CHECK:                                               ^^^^^ ray-tracing stage input type 'rt.ClosestHitInput<HitContext>' may only be used as an 'in' parameter or an initialized local copy
 
-[require(closesthit)]
+[require(portable_closesthit)]
 void referenceInput(__ref rt::ClosestHitInput<HitContext> input) {}
 //CHECK:                                                  ^^^^^ storage of a structural ray-tracing stage input
 //CHECK:                                                  ^^^^^ ray-tracing stage input type 'rt.ClosestHitInput<HitContext>' may only be used as an 'in' parameter or an initialized local copy
 
-[require(closesthit)]
+[require(portable_closesthit)]
 void readInput(__constref rt::ClosestHitInput<HitContext> input) {}
 //CHECK:                                                  ^^^^^ storage of a structural ray-tracing stage input
 //CHECK:                                                  ^^^^^ ray-tracing stage input type 'rt.ClosestHitInput<HitContext>' may only be used as an 'in' parameter or an initialized local copy

@@ -256,7 +256,7 @@ public struct MultiLevelAccelerationStructure<let maxLevelCount : int>
 }
 
 /// Reads candidate or committed triangle orientation from the current Metal invocation.
-[require(metal, anyhit_closesthit)]
+[require(metal, portable_anyhit_closesthit)]
 __intrinsic_op(metalRTGetTriangleFrontFacing)
 internal bool __metalRTGetTriangleFrontFacing();
 
@@ -269,13 +269,13 @@ public struct TriangleData
     /// Reads the two barycentric coordinates supplied for the triangle hit.
     ///
     /// @par Constraints
-    /// Requires `anyhit_closesthit`, so access is available only in supported
+    /// Requires `portable_anyhit_closesthit`, so access is available only in supported
     /// any-hit and closest-hit stages. The coordinates describe built-in triangle intersection
     /// state, rather than application-defined procedural attributes.
     ///
     /// Native adapters read this value from their triangle hit attributes. Metal adapters obtain
     /// it from candidate or committed-hit state.
-    [require(anyhit_closesthit)]
+    [require(portable_anyhit_closesthit)]
     public property float2 barycentricCoord
     {
         __intrinsic_op(portableRTGetTriangleBarycentricCoord)
@@ -285,11 +285,11 @@ public struct TriangleData
     /// Reports whether the ray hit the triangle's front face according to native face orientation.
     ///
     /// @par Constraints
-    /// Requires `anyhit_closesthit`, so access is available only in supported
+    /// Requires `portable_anyhit_closesthit`, so access is available only in supported
     /// any-hit and closest-hit stages. Reads built-in triangle state for the current hit.
     ///
     /// Metal adapters supply candidate or committed-hit facing state independently of barycentrics.
-    [require(anyhit_closesthit)]
+    [require(portable_anyhit_closesthit)]
     public property bool frontFacing
     {
         get
