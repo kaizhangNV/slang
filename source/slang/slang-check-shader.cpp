@@ -915,7 +915,10 @@ void EntryPoint::_collectShaderParams()
                 return;
             }
 
-            m_shaderParams.add(shaderParamInfo);
+            // A portable stage's logical input is supplied by its generated adapter. It has no
+            // native parameter layout until that adapter is created.
+            if (!isStructuralRayTracingEntryPoint())
+                m_shaderParams.add(shaderParamInfo);
         }
     }
 }
@@ -1831,20 +1834,6 @@ static void validateEntryPointCapabilities(
     auto linkage = entryPoint->getLinkage();
     auto entryPointFuncDecl = entryPoint->getFuncDecl();
     CapabilitySet stageCapabilitySet{entryPoint->getProfile().getCapabilityName()};
-    if (entryPoint->isStructuralRayTracingEntryPoint())
-    {
-        // Consider selecting a struct that implements IMissShader. Its checked invoke method
-        // takes MissInput<Context>, whose portable_miss requirement includes Metal. The native
-        // miss profile requires raytracing instead. Use the input type's declared requirements
-        // for this selection; the method body and its Context are still checked below.
-        auto astBuilder = linkage->getASTBuilder();
-        auto parameters = getParameters(astBuilder, entryPoint->getFuncDeclRef());
-        SLANG_RELEASE_ASSERT(parameters.getCount() == 1);
-        auto inputType = unwrapModifiedType(getType(astBuilder, parameters[0]));
-        auto inputDecl = isDeclRefTypeOf<AggTypeDecl>(inputType).getDecl();
-        SLANG_RELEASE_ASSERT(inputDecl && inputDecl->inferredCapabilityRequirements);
-        stageCapabilitySet = CapabilitySet{inputDecl->inferredCapabilityRequirements};
-    }
 
     for (auto target : linkage->targets)
     {

@@ -565,7 +565,6 @@ DeclRef<FuncDecl> findEntryPointByName(
     else if (implementedStageCount == 1)
     {
         selectedStage = onlyImplementedStage;
-        ioProfile = Profile(selectedStage);
     }
     else
     {
@@ -589,6 +588,10 @@ DeclRef<FuncDecl> findEntryPointByName(
         return DeclRef<FuncDecl>();
     }
 
+    // Selecting an IMissShader implementation gives this entry a portable_miss profile.
+    // Its public stage is still Miss, but capability checks must use the portable contract
+    // instead of the native miss contract, which excludes Metal. Keep any requested version.
+    ioProfile.setPortableRayTracingStage(selectedStage);
     *outStageType = stageType;
     return invokeMethod;
 }
@@ -598,7 +601,7 @@ DeclRef<FuncDecl> findEntryPointByName(
 // derive the same target symbol from the stage type and select the same checked invoke method.
 void initializeEntryPoint(EntryPoint* entryPoint, Name* entryPointName, Type* stageType)
 {
-    entryPoint->markAsStructuralRayTracingEntryPoint();
+    SLANG_ASSERT(entryPoint->isStructuralRayTracingEntryPoint());
     entryPoint->setNameOverride(entryPointName);
     auto sourceTypeName = getSourceTypeName(entryPoint->getLinkage()->getASTBuilder(), stageType);
     entryPoint->setEntryPointNameOverride(
