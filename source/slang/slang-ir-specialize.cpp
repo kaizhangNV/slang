@@ -4098,6 +4098,7 @@ IRInst* specializeGenericImpl(
     builder->setInsertBefore(specializeInst);
 
     List<IRInst*> pendingWorkList;
+    List<IRInst*> pendingChildInsts;
     SLANG_DEFER({
         if (queueFollowUpWork)
         {
@@ -4137,6 +4138,23 @@ IRInst* specializeGenericImpl(
             //
             if (auto returnValInst = as<IRReturn>(ii))
             {
+                // All ordinary results now have replacements. Complete decorations and children
+                // before folding the returned value or queuing its specialization work.
+                for (auto originalInst : pendingChildInsts)
+                {
+                    auto clonedInst = lookUp(&env, originalInst);
+                    SLANG_ASSERT(clonedInst);
+                    if (shouldCloneInstDecorationsAndChildren(originalInst, clonedInst))
+                        cloneInstDecorationsAndChildren(&env, module, originalInst, clonedInst);
+                }
+                if (context)
+                {
+                    for (auto clonedInst : pendingWorkList)
+                        context->addSpecializationDepthDecorationsToClonedSpecializeInsts(
+                            clonedInst,
+                            specializationDepth + 1);
+                }
+
                 auto specializedVal = findCloneForOperand(&env, returnValInst->getVal());
 
                 // Clone decorations on the orignal `specialize` inst over to the newly
@@ -4164,10 +4182,15 @@ IRInst* specializeGenericImpl(
                 return specializedVal;
             }
 
-            // For any instruction other than a `return`, we will
-            // simply clone it completely into the global scope.
-            //
-            IRInst* clonedInst = cloneInst(&env, builder, ii);
+            // Decorations can refer forward within a generic. For example, a hoistable
+            // Ptr<T> can have a DependsOn decoration referencing a later type expression.
+            // Hoisting orders the pointer's operands, not that decoration's operands. Map all
+            // ordinary results before copying decorations, so they see the specialized values
+            // rather than retaining references into this generic's original body.
+            IRInst* clonedInst = cloneInstAndOperands(&env, builder, ii);
+            env.mapOldValToNew.add(ii, clonedInst);
+            if (ii->getFirstDecorationOrChild())
+                pendingChildInsts.add(ii);
 
             // Any new instructions we create during cloning were
             // not present when we initially built our work list,
@@ -4179,12 +4202,7 @@ IRInst* specializeGenericImpl(
             // to the second.
             //
             if (context)
-            {
-                context->addSpecializationDepthDecorationsToClonedSpecializeInsts(
-                    clonedInst,
-                    specializationDepth + 1);
                 pendingWorkList.add(clonedInst);
-            }
         }
     }
 
