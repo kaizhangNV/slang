@@ -12,8 +12,8 @@
 using namespace Slang;
 
 // Exercise the source producer, linker, specialization, and DCE boundary with and without an
-// IR-module roundtrip. Reached stage contracts remain available, while unselected invoke bodies
-// and their observable side effects must never become dependencies of the trace entry.
+// IR-module roundtrip. Associated-type projections must resolve to concrete packs, while
+// unselected invoke bodies and their side effects never become dependencies of the trace entry.
 static void _testSchemaReading(UnitTestContext* unitTestContext, bool serializeModule)
 {
     const char* source = R"(
@@ -27,8 +27,8 @@ static void _testSchemaReading(UnitTestContext* unitTestContext, bool serializeM
         }
 
         struct Payload { uint value; }
-        // One concrete type supplies both contracts, so its identity alone cannot choose
-        // between the trace-context and payload-context conformances.
+        // One concrete type supplies both contracts. Ordinary lookup expressions must use
+        // the declared conformance even when the concrete type also implements another interface.
         struct TraceContext : rt::ITraceContext, rt::IPayloadContext
         {
             typealias AccelerationStructure = rt::AccelerationStructure;
@@ -59,7 +59,8 @@ static void _testSchemaReading(UnitTestContext* unitTestContext, bool serializeM
             typealias Record = void;
             typealias Primitive = rt::BoundingBoxPrimitive<Attributes>;
         }
-        // Both group members name this type, but each must retain its own stage conformance.
+        // Both group members name this type. Projection preserves their separate stage slots
+        // without retaining either method implementation.
         struct SharedHit : rt::IClosestHitShader, rt::IAnyHitShader
         {
             typealias Context = HitContext;
@@ -139,6 +140,16 @@ static void _testSchemaReading(UnitTestContext* unitTestContext, bool serializeM
         }
         rt::TraceProgramDescriptor<Schema> program;
         RaytracingAccelerationStructure scene;
+
+        // This descriptor is first lowered with an unknown schema. Specializing the helper
+        // must reuse the concrete descriptor type above without losing its projected types.
+        [noinline]
+        rt::TraceProgramDescriptor<S> copyDescriptor<S : rt::ITraceProgramSchema>(
+            rt::TraceProgramDescriptor<S> descriptor)
+        {
+            return descriptor;
+        }
+
         struct TraceEntry : rt::IMissShader
         {
             typealias Context = MissContext;
@@ -146,6 +157,7 @@ static void _testSchemaReading(UnitTestContext* unitTestContext, bool serializeM
             {
                 rt::RayTracer<Schema> tracer;
                 tracer.trace({}, scene, program, input.payload);
+                tracer.trace({}, scene, copyDescriptor<Schema>(program), input.payload);
             }
         }
     )";
@@ -233,6 +245,7 @@ static void _testSchemaReading(UnitTestContext* unitTestContext, bool serializeM
     eliminateDeadCode(linkedIR.module);
 
     IRTraceProgramDescriptorType* descriptorType = nullptr;
+    IRFunc* descriptorCopy = nullptr;
     for (auto inst : linkedIR.module->getModuleInst()->getChildren())
     {
         if (auto descriptor = as<IRTraceProgramDescriptorType>(inst))
@@ -242,95 +255,117 @@ static void _testSchemaReading(UnitTestContext* unitTestContext, bool serializeM
         }
         if (auto name = inst->findDecoration<IRNameHintDecoration>())
         {
+            if (name->getName() == toSlice("copyDescriptor"))
+                if (auto function = as<IRFunc>(inst))
+                    descriptorCopy = function;
             SLANG_CHECK(name->getName().indexOf(toSlice("UnrelatedMiss")) < 0);
+            // Every schema stage calls this noinline helper. A retained invoke body would
+            // therefore also keep the helper and its output resource alive.
             SLANG_CHECK(name->getName().indexOf(toSlice("referencedStageBody")) < 0);
-        }
-        if (auto witness = as<IRWitnessTable>(inst))
-        {
-            auto interfaceType = getResolvedInstForDecorations(witness->getConformanceType());
-            if (auto contract =
-                    interfaceType->findDecoration<IRPortableRTStageContractDecoration>())
-                SLANG_CHECK(!findWitnessTableEntry(witness, contract->getInvokeKey()));
+            SLANG_CHECK(name->getName().indexOf(toSlice("stageBodyOutput")) < 0);
         }
     }
     SLANG_CHECK_ABORT(descriptorType);
+    SLANG_CHECK_ABORT(descriptorCopy);
+    auto descriptorCopyType = as<IRFuncType>(descriptorCopy->getDataType());
+    SLANG_CHECK_ABORT(descriptorCopyType);
+    SLANG_CHECK(descriptorCopyType->getResultType() == descriptorType);
+    SLANG_CHECK_ABORT(descriptorCopyType->getParamCount() == 1);
+    SLANG_CHECK(descriptorCopyType->getParamType(0) == descriptorType);
+    UInt programDecorationCount = 0;
+    for (auto decoration : descriptorType->getDecorations())
+        if (as<IRPortableRTProgramDecoration>(decoration))
+            ++programDecorationCount;
+    SLANG_CHECK(programDecorationCount == 1);
+    auto programTypes = descriptorType->findDecoration<IRPortableRTProgramDecoration>();
+    SLANG_CHECK_ABORT(programTypes);
+    auto hitList = getResolvedInstForDecorations(programTypes->getHitGroupsType())
+                       ->findDecoration<IRPortableRTShaderListDecoration>();
+    auto missList = getResolvedInstForDecorations(programTypes->getMissShadersType())
+                        ->findDecoration<IRPortableRTShaderListDecoration>();
+    auto callableList = getResolvedInstForDecorations(programTypes->getCallableShadersType())
+                            ->findDecoration<IRPortableRTShaderListDecoration>();
+    SLANG_CHECK_ABORT(hitList && missList && callableList);
+
+    // Every hit-group projection has one result per source group, including the group whose
+    // three stages are absent. No expansion or witness lookup may remain for the reader to run.
+    for (UInt operandIndex = 0; operandIndex < hitList->getOperandCount(); ++operandIndex)
+    {
+        auto pack = as<IRTypePack>(hitList->getOperand(operandIndex));
+        SLANG_CHECK_ABORT(pack);
+        SLANG_CHECK(pack->getOperandCount() == 3);
+    }
+    auto closestHitTypes = as<IRTypePack>(hitList->getClosestHitTypes());
+    auto anyHitTypes = as<IRTypePack>(hitList->getAnyHitTypes());
+    SLANG_CHECK(closestHitTypes->getOperand(0) == anyHitTypes->getOperand(0));
+    for (auto list : {missList, callableList})
+    {
+        auto entryTypes = as<IRTypePack>(list->getTypepack());
+        auto recordTypes = as<IRTypePack>(list->getRecordTypes());
+        SLANG_CHECK_ABORT(entryTypes && recordTypes);
+        SLANG_CHECK(entryTypes->getOperandCount() == 1);
+        SLANG_CHECK(recordTypes->getOperandCount() == 1);
+        IRInst* hitOnlyProjections[] = {
+            list->getPayloadTypes(),
+            list->getPrimitiveTypes(),
+            list->getAttributesTypes(),
+            list->getClosestHitTypes(),
+            list->getAnyHitTypes(),
+            list->getIntersectionTypes(),
+        };
+        for (auto projection : hitOnlyProjections)
+        {
+            auto pack = as<IRTypePack>(projection);
+            SLANG_CHECK_ABORT(pack);
+            SLANG_CHECK(pack->getOperandCount() == 0);
+        }
+    }
+
     PortableRT::Schema schema;
-    SLANG_CHECK_ABORT(PortableRT::readSchemaContract(descriptorType, schema));
-    SLANG_CHECK(schema.type == descriptorType->getSchema());
+    PortableRT::readSchemaContract(descriptorType, schema);
+    SLANG_CHECK(schema.accelerationStructure == programTypes->getAccelerationStructureType());
+    SLANG_CHECK(schema.motion == programTypes->getMotionType());
     SLANG_CHECK_ABORT(schema.hitGroups.getCount() == 3);
     SLANG_CHECK_ABORT(schema.missShaders.getCount() == 1);
     SLANG_CHECK_ABORT(schema.callableShaders.getCount() == 1);
     SLANG_CHECK(schema.hitGroups[0].closestHit.isPresent);
+    SLANG_CHECK(schema.hitGroups[0].closestHit.stage == Stage::ClosestHit);
     SLANG_CHECK(schema.hitGroups[0].anyHit.isPresent);
+    SLANG_CHECK(schema.hitGroups[0].anyHit.stage == Stage::AnyHit);
     SLANG_CHECK(!schema.hitGroups[0].intersection.isPresent);
-    auto& closestHit = schema.hitGroups[0].closestHit;
-    auto& anyHit = schema.hitGroups[0].anyHit;
-    SLANG_CHECK(closestHit.type == anyHit.type);
-    SLANG_CHECK_ABORT(closestHit.witness && anyHit.witness);
-    auto closestHitInterface =
-        getResolvedInstForDecorations(closestHit.witness->getConformanceType());
-    auto anyHitInterface = getResolvedInstForDecorations(anyHit.witness->getConformanceType());
-    SLANG_CHECK(closestHitInterface != anyHitInterface);
-    auto closestHitContract =
-        closestHitInterface->findDecoration<IRPortableRTStageContractDecoration>();
-    auto anyHitContract = anyHitInterface->findDecoration<IRPortableRTStageContractDecoration>();
-    SLANG_CHECK_ABORT(closestHitContract && anyHitContract);
-    SLANG_CHECK(
-        closestHitContract->getStageKind()->getValue() == IRIntegerValue(Stage::ClosestHit));
-    SLANG_CHECK(anyHitContract->getStageKind()->getValue() == IRIntegerValue(Stage::AnyHit));
     SLANG_CHECK(!schema.hitGroups[1].closestHit.isPresent);
     SLANG_CHECK(!schema.hitGroups[1].anyHit.isPresent);
     SLANG_CHECK(schema.hitGroups[1].intersection.isPresent);
+    SLANG_CHECK(schema.hitGroups[1].intersection.stage == Stage::Intersection);
+    SLANG_CHECK(schema.hitGroups[1].primitiveType != schema.hitGroups[0].primitiveType);
+    SLANG_CHECK(schema.hitGroups[1].attributesType != schema.hitGroups[0].attributesType);
     auto& opaque = schema.hitGroups[2];
     SLANG_CHECK(!opaque.closestHit.isPresent);
     SLANG_CHECK(!opaque.anyHit.isPresent);
     SLANG_CHECK(!opaque.intersection.isPresent);
-    SLANG_CHECK(opaque.payloadType == schema.hitGroups[0].closestHit.payloadType);
-    SLANG_CHECK(opaque.recordType == schema.hitGroups[0].closestHit.recordType);
-    SLANG_CHECK(opaque.primitiveType == schema.hitGroups[0].closestHit.primitiveType);
-    SLANG_CHECK(opaque.attributesType == schema.hitGroups[0].closestHit.attributesType);
+    SLANG_CHECK(opaque.payloadType == schema.hitGroups[0].payloadType);
+    SLANG_CHECK(opaque.recordType == schema.hitGroups[0].recordType);
+    SLANG_CHECK(opaque.primitiveType == schema.hitGroups[0].primitiveType);
+    SLANG_CHECK(opaque.attributesType == schema.hitGroups[0].attributesType);
     SLANG_CHECK(schema.missShaders[0].isPresent);
-    SLANG_CHECK(schema.missShaders[0].contextType == schema.traceContext);
-    SLANG_CHECK(schema.missShaders[0].payloadType == opaque.payloadType);
     SLANG_CHECK(as<IRUIntType>(schema.missShaders[0].recordType));
-    SLANG_CHECK(!schema.missShaders[0].primitiveType);
-    SLANG_CHECK(!schema.missShaders[0].attributesType);
     SLANG_CHECK(schema.callableShaders[0].isPresent);
-    auto callableData = as<IRVectorType>(schema.callableShaders[0].payloadType);
-    SLANG_CHECK_ABORT(callableData);
-    SLANG_CHECK(as<IRFloatType>(callableData->getElementType()));
-    SLANG_CHECK(as<IRIntLit>(callableData->getElementCount())->getValue() == 2);
     auto callableRecord = as<IRVectorType>(schema.callableShaders[0].recordType);
     SLANG_CHECK_ABORT(callableRecord);
     SLANG_CHECK(as<IRFloatType>(callableRecord->getElementType()));
     SLANG_CHECK(as<IRIntLit>(callableRecord->getElementCount())->getValue() == 4);
-    SLANG_CHECK(!schema.callableShaders[0].primitiveType);
-    SLANG_CHECK(!schema.callableShaders[0].attributesType);
 
     List<const PortableRT::SchemaStage*> stages;
     for (auto& group : schema.hitGroups)
     {
-        const PortableRT::SchemaStage* groupStages[] = {
-            &group.closestHit,
-            &group.anyHit,
-            &group.intersection,
-        };
-        for (auto stage : groupStages)
-        {
-            SLANG_CHECK(stage->contextType == group.contextType);
-            SLANG_CHECK(stage->payloadType == group.payloadType);
-            SLANG_CHECK(stage->recordType == group.recordType);
-            SLANG_CHECK(stage->primitiveType == group.primitiveType);
-            SLANG_CHECK(stage->attributesType == group.attributesType);
-            stages.add(stage);
-        }
+        stages.add(&group.closestHit);
+        stages.add(&group.anyHit);
+        stages.add(&group.intersection);
     }
     stages.add(&schema.missShaders[0]);
     stages.add(&schema.callableShaders[0]);
     for (auto stage : stages)
     {
-        SLANG_CHECK(stage->witness);
-        SLANG_CHECK(stage->contextWitness);
         SLANG_CHECK(!stage->invoke);
         SLANG_CHECK(!stage->input);
     }

@@ -2578,13 +2578,6 @@ local insts = {
 				},
 			},
 			{
-				-- Identifies the stage and its exact invoke requirement on an ordinary
-				-- IRInterfaceType. Separate declarations keep separate witness keys.
-				PortableRTStageContractDecoration = {
-					operands = { { "stageKind", "IRIntLit" }, { "invokeKey" } },
-				},
-			},
-			{
 				-- A selected native entry keeps its logical input until specialization
 				-- makes the dependent types concrete. The original method remains an
 				-- ordinary callable helper; sourceLayout owns its checked record binding.
@@ -2600,12 +2593,12 @@ local insts = {
 				-- Retains checked associated types in the input struct's own generic
 				-- environment, so target ABI synthesis does not rediscover AST context.
 				-- payloadType denotes callable data for CallableInput. Non-hit inputs
-				-- carry void for primitiveType and attributesType.
+				-- carry void for primitiveType and attributesType. The acceleration
+				-- structure is projected before linking, just like the other types.
 				PortableRTStageInputDecoration = {
 					operands = {
 						{ "stageKind", "IRIntLit" },
-						{ "contextType", "IRType" },
-						{ "contextWitness" },
+						{ "accelerationStructureType", "IRType" },
 						{ "payloadType", "IRType" },
 						{ "recordType", "IRType" },
 						{ "primitiveType", "IRType" },
@@ -2614,27 +2607,36 @@ local insts = {
 				},
 			},
 			{
-				-- The nominal list is empty at runtime. Its ordinary type/witness packs
-				-- retain the program choices used by dispatch and reflection consumers.
+				-- The nominal list is empty at runtime. These operands retain its entry
+				-- types and the associated types needed by backend synthesis. Projected
+				-- packs start as ordinary expansions and specialize to TypePack values.
+				-- Only hit-group lists use the operands after recordTypes; miss and
+				-- callable lists use empty packs in those slots.
 				PortableRTShaderListDecoration = {
-					operands = { { "typepack" }, { "witnessPack" } },
+					operands = {
+						{ "typepack" },
+						{ "recordTypes" },
+						{ "payloadTypes" },
+						{ "primitiveTypes" },
+						{ "attributesTypes" },
+						{ "closestHitTypes" },
+						{ "anyHitTypes" },
+						{ "intersectionTypes" },
+					},
 				},
 			},
 			{
-				-- Retain reached conformance/type entries for target synthesis even when
-				-- no source lookup uses them. This does not root witnesses or methods.
-				PortableRTReflectedInterfaceDecoration = {},
-			},
-			{
-				-- Distinguishes declared inheritance from associated-type conformances
-				-- when a reflected requirement is owned by a base interface.
-				PortableRTBaseInterfaceDecoration = {},
-			},
-			{
-				-- A concrete IIntersectionStage marker conformance preserves the checked
-				-- executable proof; NoIntersection deliberately has no such proof.
-				PortableRTIntersectionStageDecoration = {
-					operands = { { "executableWitness" } },
+				-- Attached to TraceProgramDescriptorType. Ordinary associated-type
+				-- lookups expose these dependencies to linking before specialization
+				-- supplies the concrete types used by backend synthesis.
+				PortableRTProgramDecoration = {
+					operands = {
+						{ "accelerationStructureType", "IRType" },
+						{ "motionType", "IRType" },
+						{ "hitGroupsType", "IRType" },
+						{ "missShadersType", "IRType" },
+						{ "callableShadersType", "IRType" },
+					},
 				},
 			},
 			{

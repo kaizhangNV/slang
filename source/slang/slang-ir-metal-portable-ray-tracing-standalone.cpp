@@ -39,16 +39,6 @@ List<VisibleAdapter> prepareMetalStandaloneStages(
         stage.isPresent = true;
         stage.invoke = cast<IRFunc>(adapter->getInvoke());
         stage.input = input;
-        stage.contextType = input->getContextType();
-        stage.contextWitness = cast<IRWitnessTable>(input->getContextWitness());
-        stage.payloadType = input->getPayloadType();
-        stage.recordType = input->getRecordType();
-        if (stage.stage == Stage::ClosestHit || stage.stage == Stage::AnyHit ||
-            stage.stage == Stage::Intersection)
-        {
-            stage.primitiveType = input->getPrimitiveType();
-            stage.attributesType = input->getAttributesType();
-        }
 
         auto symbolName = entry->getName()->getStringSlice();
         VisibleAdapter root;
@@ -63,7 +53,8 @@ List<VisibleAdapter> prepareMetalStandaloneStages(
         }
         else
         {
-            auto acceleration = PortableRT::getStageAccelerationStructure(input);
+            auto acceleration =
+                cast<IRRaytracingAccelerationStructureType>(input->getAccelerationStructureType());
             bool multiLevel =
                 acceleration->getOperandCount() && getIntVal(acceleration->getOperand(0)) != 0;
             auto requirements = getStageContractRequirements(stage.stage, multiLevel);

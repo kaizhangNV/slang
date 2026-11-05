@@ -14,6 +14,7 @@ class Decl;
 class Type;
 class ASTBuilder;
 class MagicTypeModifier;
+class TraceProgramDescriptorType;
 struct SemanticsVisitor;
 class EntryPoint;
 struct IRBuilder;
@@ -80,10 +81,10 @@ Type* getAssociatedType(
 ConcreteTypePack* getConcreteEntryTypes(Type* entryListType);
 
 /// Adds PortableRTStageInputDecoration to the IR struct type for a recognized stage input.
-/// Its seven operands are the stage kind, context type, context witness, payload type (callable
+/// Its six operands are the stage kind, acceleration-structure type, payload type (callable
 /// data for CallableInput), record type, primitive type, and attributes type. Non-hit inputs use
 /// void for the last two operands. Other aggregate declarations are unchanged.
-/// Both callbacks lower checked semantic values synchronously in the caller's existing generic
+/// The callback lowers checked semantic types synchronously in the caller's existing generic
 /// environment. The builder uses that environment's insertion location.
 void addStageInputDecoration(
     IRBuilder* builder,
@@ -91,21 +92,34 @@ void addStageInputDecoration(
     ASTBuilder* astBuilder,
     AggTypeDecl* decl,
     IRType* irType,
-    IRInst* (*lowerDecl)(Decl*, void*),
     IRType* (*lowerType)(Type*, void*),
     void* userData);
 
 /// Adds PortableRTShaderListDecoration to a recognized shader-list type, preserving its ordered
-/// entry-type pack and matching conformance-witness pack through ordinary specialization.
-/// Other aggregate declarations are unchanged. Context and its associated types are read later
-/// from the preserved conformances; this decoration does not select an invoke body for emission.
-/// The callback lowers each pack declaration synchronously in the caller's existing generic
-/// environment. The builder uses that environment's insertion location.
+/// entry-type pack followed by record, payload, primitive, attributes, closest-hit, any-hit, and
+/// intersection type packs. Each projected pack uses ordinary each/expand and associated-type
+/// lowering in the list's generic environment.
+/// Miss and callable lists retain record types; the other projected packs are empty for them.
+/// Other aggregate declarations are unchanged. No projection requests an invoke implementation.
 void addShaderListDecoration(
     IRBuilder* builder,
+    Linkage* linkage,
+    ASTBuilder* astBuilder,
     AggTypeDecl* decl,
     IRType* irType,
-    IRInst* (*lowerDecl)(Decl*, void*),
+    IRType* (*lowerType)(Type*, void*),
+    void* userData);
+
+/// Adds PortableRTProgramDecoration to a trace-program descriptor type, preserving its schema's
+/// acceleration-structure, motion, and three list types through ordinary associated-type lookups.
+/// The callback lowers those checked types in the descriptor's existing generic environment.
+void addProgramDecoration(
+    IRBuilder* builder,
+    Linkage* linkage,
+    ASTBuilder* astBuilder,
+    TraceProgramDescriptorType* descriptorType,
+    IRType* irType,
+    IRType* (*lowerType)(Type*, void*),
     void* userData);
 
 /// Returns this executable interface's `invoke` requirement, or null for other interfaces.

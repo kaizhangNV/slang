@@ -1858,14 +1858,6 @@ IRInst* getInterfaceRequirementKey(IRGenContext* context, Decl* requirementDecl)
     return requirementKey;
 }
 
-// Reads the checked role without matching a public source name or registering a module globally.
-static KnownBuiltinDeclName _getPortableRTBuiltinRole(Decl* decl)
-{
-    auto attribute = decl->findModifier<KnownBuiltinAttribute>();
-    auto value = attribute ? as<ConstantIntVal>(attribute->name) : nullptr;
-    return value ? KnownBuiltinDeclName(value->getValue()) : KnownBuiltinDeclName::COUNT;
-}
-
 void getGenericTypeConformances(
     IRGenContext* context,
     ShortList<IRType*>& supTypes,
@@ -2939,10 +2931,27 @@ struct ValLoweringVisitor : ValVisitor<ValLoweringVisitor, LoweredValInfo, Lower
                     SLANG_ASSERT(argVal);
                     operands.add(argVal);
                 });
-        return getBuilder()->getType(
-            op,
-            static_cast<UInt>(operands.getCount()),
-            operands.getBuffer());
+        auto irType =
+            getBuilder()->getType(op, static_cast<UInt>(operands.getCount()), operands.getBuffer());
+        if (auto descriptorType = as<TraceProgramDescriptorType>(type))
+        {
+            // Preserve the schema projections while this checked type and its generic
+            // environment are available. The descriptor's identity operands remain unchanged.
+            IRBuilder decorationBuilder = *getBuilder();
+            decorationBuilder.setInsertBefore(irType);
+            IRGenContext decorationContext = *context;
+            decorationContext.irBuilder = &decorationBuilder;
+            PortableRT::addProgramDecoration(
+                &decorationBuilder,
+                decorationContext.getLinkage(),
+                decorationContext.astBuilder,
+                descriptorType,
+                irType,
+                [](Type* projectedType, void* userData)
+                { return lowerType(static_cast<IRGenContext*>(userData), projectedType); },
+                &decorationContext);
+        }
+        return irType;
     }
 
     // The AST encodes a reference parameter's access in the class of its wrapper type, while
@@ -10930,37 +10939,6 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
 
             subBuilder->createWitnessTableEntry(irWitnessTable, irRequirementKey, irSatisfyingVal);
         }
-
-        // IHitGroup.Intersection accepts the hardware placeholder through IIntersectionStage.
-        // A real procedural stage additionally conforms to IIntersectionShader. That derived
-        // conformance cannot be recovered by walking the marker witness upward after linking.
-        // Retain the exact checked facet here, where its concrete implementation is known.
-        auto baseInterface = isDeclRefTypeOf<InterfaceDecl>(astWitnessTable->baseType);
-        if (baseInterface && _getPortableRTBuiltinRole(baseInterface.getDecl()) ==
-                                 KnownBuiltinDeclName::RayTracingIntersectionStage)
-        {
-            auto stageDecl = isDeclRefTypeOf<AggTypeDecl>(astWitnessTable->witnessedType);
-            if (stageDecl && _getPortableRTBuiltinRole(stageDecl.getDecl()) ==
-                                 KnownBuiltinDeclName::RayTracingNoIntersection)
-                return;
-            auto sharedSemantics = subContext->getLinkage()->getSemanticsForReflection();
-            SemanticsVisitor visitor{SemanticsContext(sharedSemantics)};
-            for (auto facet :
-                 visitor.getShared()->getInheritanceInfo(astWitnessTable->witnessedType).facets)
-            {
-                auto interfaceDecl = facet->origin.declRef.as<InterfaceDecl>();
-                if (!interfaceDecl ||
-                    PortableRT::getStageKind(interfaceDecl.getDecl()) != Stage::Intersection)
-                    continue;
-                IRInst* operands[] = {lowerSimpleVal(subContext, facet->subtypeWitness)};
-                subBuilder->addDecoration(
-                    irWitnessTable,
-                    kIROp_PortableRTIntersectionStageDecoration,
-                    operands,
-                    SLANG_COUNT_OF(operands));
-                break;
-            }
-        }
     }
 
     /// Lower a list of Val operands to their corresponding IR instructions.
@@ -12467,44 +12445,6 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
 
         addTargetIntrinsicDecorations(subContext, irInterface, decl);
 
-        // Backends reflect these ordinary interfaces instead of requiring executable source
-        // lookups for every member. Keep their reached witness tables complete at link time.
-        // This marker does not root an interface or any implementing type on its own.
-        bool isReflected = false;
-        for (auto requirement : decl->getDirectMemberDeclsOfType<AssocTypeDecl>())
-        {
-            auto role = _getPortableRTBuiltinRole(requirement);
-            if (role >= KnownBuiltinDeclName::RayTracingProgramHitGroups &&
-                role <= KnownBuiltinDeclName::RayTracingStageContext)
-                isReflected = true;
-        }
-        auto stage = PortableRT::getStageKind(decl);
-        if (stage != Stage::Unknown)
-        {
-            auto invokeRequirement = PortableRT::getStageInvokeRequirement(decl);
-            SLANG_RELEASE_ASSERT(invokeRequirement);
-            IRInst* operands[] = {
-                subBuilder->getIntValue(subBuilder->getIntType(), IRIntegerValue(stage)),
-                Slang::getInterfaceRequirementKey(subContext, invokeRequirement),
-            };
-            subBuilder->addDecoration(
-                irInterface,
-                kIROp_PortableRTStageContractDecoration,
-                operands,
-                SLANG_COUNT_OF(operands));
-            isReflected = true;
-        }
-        if (isReflected)
-        {
-            subBuilder->addDecoration(irInterface, kIROp_PortableRTReflectedInterfaceDecoration);
-            for (auto inheritance : decl->getDirectMemberDeclsOfType<InheritanceDecl>())
-            {
-                auto key = Slang::getInterfaceRequirementKey(subContext, inheritance);
-                if (!key->findDecoration<IRPortableRTBaseInterfaceDecoration>())
-                    subBuilder->addDecoration(key, kIROp_PortableRTBaseInterfaceDecoration);
-            }
-        }
-
         return LoweredValInfo::simple(finalVal);
     }
 
@@ -12813,31 +12753,28 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
         addTargetRequirementDecorations(irAggType, decl);
 
         // Build decoration operands beside the nominal type, inside the same generic
-        // environment. The callbacks use ordinary lowering for checked types and declarations.
+        // environment. The callback uses ordinary lowering for checked types.
         IRBuilder decorationBuilder = *subBuilder;
         decorationBuilder.setInsertBefore(irAggType);
         IRGenContext decorationContext = *subContext;
         decorationContext.irBuilder = &decorationBuilder;
-        auto lowerDeclaration = [](Decl* declaration, void* userData)
-        {
-            auto context = static_cast<IRGenContext*>(userData);
-            return getSimpleVal(context, ensureDecl(context, declaration));
-        };
+        auto lowerDecorationType = [](Type* type, void* userData)
+        { return lowerType(static_cast<IRGenContext*>(userData), type); };
         PortableRT::addStageInputDecoration(
             &decorationBuilder,
             decorationContext.getLinkage(),
             decorationContext.astBuilder,
             decl,
             irAggType,
-            lowerDeclaration,
-            [](Type* type, void* userData)
-            { return lowerType(static_cast<IRGenContext*>(userData), type); },
+            lowerDecorationType,
             &decorationContext);
         PortableRT::addShaderListDecoration(
             &decorationBuilder,
+            decorationContext.getLinkage(),
+            decorationContext.astBuilder,
             decl,
             irAggType,
-            lowerDeclaration,
+            lowerDecorationType,
             &decorationContext);
 
         return LoweredValInfo::simple(finalFinishedVal);

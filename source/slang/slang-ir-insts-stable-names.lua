@@ -897,12 +897,8 @@ return {
 	["portableRTGetHitAttributes"] = 916,
 	["portableRTGetTriangleBarycentricCoord"] = 917,
 	["portableRTGetCurveParameter"] = 918,
-	["Decoration.PortableRTStageContractDecoration"] = 919,
 	["Decoration.PortableRTStageInputDecoration"] = 920,
 	["Decoration.PortableRTShaderListDecoration"] = 921,
-	["Decoration.PortableRTReflectedInterfaceDecoration"] = 922,
-	["Decoration.PortableRTBaseInterfaceDecoration"] = 924,
-	["Decoration.PortableRTIntersectionStageDecoration"] = 925,
 	["Type.UntypedBufferResourceType.MetalIntersectionFunctionTable"] = 960,
 	["Type.UntypedBufferResourceType.MetalVisibleFunctionTable"] = 961,
 	["Decoration.metalVisibleFunction"] = 962,
@@ -940,5 +936,6 @@ return {
 	["metalRTIgnoreHit"] = 945,
 	["metalRTAcceptHitAndEndSearch"] = 946,
 	["metalRTReportHit"] = 947,
-	["metalRTCallShader"] = 948
+	["metalRTCallShader"] = 948,
+	["Decoration.PortableRTProgramDecoration"] = 980,
 }

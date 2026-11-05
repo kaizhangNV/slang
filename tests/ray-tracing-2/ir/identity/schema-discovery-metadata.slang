@@ -2,12 +2,15 @@
 
 import slang.raytracing.portable;
 
-// Schema discovery uses the same associated-type keys and conformance witnesses as ordinary
-// interface calls. No executable source call is needed to retain an entry in a shader list.
+// Schema discovery records ordinary associated-type projections before linking. Specialization
+// resolves these dependencies without retaining the shader implementations.
+// CHECK-DAG: Expand
 // CHECK-DAG: PortableRTShaderListDecoration(
-// CHECK-DAG: PortableRTStageContractDecoration(8 : Int, %rtx5FIIntersectionShaderx5Finvoke)
-// CHECK-DAG: PortableRTIntersectionStageDecoration(
 // CHECK-DAG: PortableRTStageInputDecoration(8 : Int,
+
+// The compact dumper folds descriptor types into their uses and omits their decorations.
+// Static schema tests inspect the program decoration and its concrete projections directly.
+// CHECK-DAG: TraceProgramDescriptor(%Schema,
 
 struct Payload { uint value; }
 struct Attributes { float distance; }

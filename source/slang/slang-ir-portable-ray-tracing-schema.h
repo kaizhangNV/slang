@@ -8,25 +8,16 @@ namespace Slang
 namespace PortableRT
 {
 
-/// A view of one specialized source stage. The canonical IR type/witness/function remain the
-/// owners of identity; this transient record only groups the values needed by target synthesis.
+/// The stage selection and record type needed by target synthesis. Selected entry points also
+/// supply their callable implementation and input contract; schema lists never select a body.
 struct SchemaStage
 {
     Stage stage = Stage::Unknown;
-    IRType* type = nullptr;
-    IRWitnessTable* witness = nullptr;
-    IRType* contextType = nullptr;
-    IRWitnessTable* contextWitness = nullptr;
-    // Callable stages use callable data in place of a ray payload. Primitive and attribute
-    // types are null for miss and callable stages, whose contracts have no such requirements.
-    IRType* payloadType = nullptr;
+    // Miss and callable lists supply this type. Hit-stage records belong to their group.
     IRType* recordType = nullptr;
-    IRType* primitiveType = nullptr;
-    IRType* attributesType = nullptr;
     bool isPresent = false;
 
-    // Only explicit stage selection populates executable information. Schema reading requires no
-    // invoke witness entry or input type instantiated by an implementation's signature.
+    // Only explicit entry-point selection populates executable information.
     IRFunc* invoke = nullptr;
     IRPortableRTStageInputDecoration* input = nullptr;
 };
@@ -35,8 +26,6 @@ struct SchemaStage
 /// function index; the host may put that function index in arbitrarily many runtime records.
 struct SchemaHitGroup
 {
-    IRType* type = nullptr;
-    IRType* contextType = nullptr;
     // These belong to the group's Context even when all three stages are No* placeholders.
     IRType* payloadType = nullptr;
     IRType* recordType = nullptr;
@@ -47,12 +36,10 @@ struct SchemaHitGroup
     SchemaStage intersection;
 };
 
-/// Reads the one canonical descriptor/schema witness into a target-local view after ordinary
-/// specialization. No independent IR manifest or alternate identity is introduced.
+/// The concrete program types used by target synthesis after ordinary specialization resolves
+/// the descriptor and list decorations. These fields reference the existing canonical IR types.
 struct Schema
 {
-    IRType* type = nullptr;
-    IRType* traceContext = nullptr;
     IRType* accelerationStructure = nullptr;
     IRType* motion = nullptr;
     List<SchemaHitGroup> hitGroups;
@@ -63,14 +50,10 @@ struct Schema
 /// Returns a declaration's checked semantic role, or COUNT when it has no builtin role.
 KnownBuiltinDeclName getBuiltinRole(IRInst* value);
 
-/// Reads the checked trace context's acceleration-structure type for a standalone stage.
-IRRaytracingAccelerationStructureType* getStageAccelerationStructure(
-    IRPortableRTStageInputDecoration* input);
-
 /// Reads a specialized descriptor's type contract without resolving stage implementations.
-/// Returns false only while its schema witness is unresolved; missing concrete associated-type
-/// requirements are IR invariant failures. Invoke entries may be absent or unresolved.
-bool readSchemaContract(IRTraceProgramDescriptorType* descriptorType, Schema& outSchema);
+/// The producer records ordinary associated-type projections before linking. This reader runs
+/// after specialization, so an unresolved pack or a missing decoration is an IR invariant failure.
+void readSchemaContract(IRTraceProgramDescriptorType* descriptorType, Schema& outSchema);
 
 } // namespace PortableRT
 } // namespace Slang

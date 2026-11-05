@@ -189,7 +189,7 @@ RefPtr<Program> createProgram(
     auto& program = *result;
     program.sourceType = type;
     program.index = programIndex;
-    SLANG_RELEASE_ASSERT(readSchemaContract(type, program.schema));
+    readSchemaContract(type, program.schema);
     TraceContextRequirements contextRequirements;
     if (!getTraceContextRequirements(program.schema, target, useSite, sink, contextRequirements))
         return nullptr;

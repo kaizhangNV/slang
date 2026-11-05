@@ -15,8 +15,8 @@ namespace PortableRT
 {
 
 // This file owns the portable ray-tracing rules, their declaration identities, and the IR
-// decorations that preserve checked stage-input types and shader-list arguments for later target
-// lowering.
+// decorations that preserve checked program, shader-list, and stage-input type projections for
+// later target lowering.
 // Ordinary interfaces, associated-type constraints, overload resolution, and capability inference
 // remain in the normal checker. Their call sites delegate here for the additional rules:
 // stage types and inputs, stage selection, schema entry uniqueness, and native entry signatures.
@@ -383,28 +383,23 @@ ConcreteTypePack* getConcreteEntryTypes(Type* entryListType)
     return nullptr;
 }
 
-// Decorates the input's IRStructType with its checked context contract, so target lowering can
-// synthesize native parameters after specialization. Consider the builtin declaration:
+// Decorates the input's IRStructType with the types needed to synthesize native parameters.
+// Consider the builtin declaration:
 //
 //     struct MissInput<Context> where Context : IPayloadContext { /* Accessors omitted. */ }
 //
-// The IRStructType inside this generic has no fields. Its decoration has seven operands:
-// (Miss, Context, Context : IPayloadContext, Context.Payload, Context.Record, void, void).
-// The Context operand and its witness refer to the generic parameters; Payload and Record are
-// ordinary associated-type lookups using that witness. Specializing MissInput<MyContext>
-// substitutes MyContext and its conformance, and resolves the associated types through the
-// normal specialization path. The decoration remains attached to the specialized IRStructType.
+// Its empty IRStructType receives the operands (Miss, Context.TraceContext.AccelerationStructure,
+// Context.Payload, Context.Record, void, void). These ordinary associated-type lookups expose
+// their dependencies to linking. Specializing MissInput<MyContext> resolves them to concrete
+// types before target synthesis, including when MyContext is supplied by another linked module.
 // Hit inputs also retain Context.Primitive and Context.Primitive.Attributes, while CallableInput
-// retains Context.CallableData in the payload slot. The source struct remains an empty value:
-// copying it does not create payload storage, and an extern context need not have a concrete ABI
-// during module compilation.
+// retains Context.CallableData in the payload slot. No later witness-table inspection is needed.
 void addStageInputDecoration(
     IRBuilder* builder,
     Linkage* linkage,
     ASTBuilder* astBuilder,
     AggTypeDecl* decl,
     IRType* irType,
-    IRInst* (*lowerDecl)(Decl*, void*),
     IRType* (*lowerType)(Type*, void*),
     void* userData)
 {
@@ -414,29 +409,27 @@ void addStageInputDecoration(
 
     auto generic = as<GenericDecl>(decl->parentDecl);
     SLANG_RELEASE_ASSERT(generic);
-    // Each builtin input declares one context parameter and its conformance constraint. These
-    // are parameter declarations, not the members or arguments of a concrete context type.
+    // Each builtin input declares one context parameter. Its checked constraints supply the
+    // canonical associated-type lookups, including inherited Record and TraceContext members.
     GenericTypeParamDecl* contextParameter = nullptr;
-    GenericTypeConstraintDecl* contextConstraint = nullptr;
-    for (auto member : generic->getDirectMemberDecls())
+    for (auto parameter : generic->getDirectMemberDeclsOfType<GenericTypeParamDecl>())
     {
-        if (auto parameter = as<GenericTypeParamDecl>(member))
-        {
-            SLANG_RELEASE_ASSERT(!contextParameter);
-            contextParameter = parameter;
-        }
-        else if (auto constraint = as<GenericTypeConstraintDecl>(member))
-        {
-            if (!constraint->isEqualityConstraint)
-            {
-                SLANG_RELEASE_ASSERT(!contextConstraint);
-                contextConstraint = constraint;
-            }
-        }
+        SLANG_RELEASE_ASSERT(!contextParameter);
+        contextParameter = parameter;
     }
-    SLANG_RELEASE_ASSERT(contextParameter && contextConstraint);
+    SLANG_RELEASE_ASSERT(contextParameter);
     auto contextType =
         DeclRefType::create(astBuilder, astBuilder->getDirectDeclRef(contextParameter));
+    auto traceContextType = getAssociatedType(
+        linkage,
+        astBuilder,
+        contextType,
+        KnownBuiltinDeclName::RayTracingContextTraceContext);
+    auto accelerationStructureType = getAssociatedType(
+        linkage,
+        astBuilder,
+        traceContextType,
+        KnownBuiltinDeclName::RayTracingTraceAccelerationStructure);
     auto payloadRole = stage == Stage::Callable
                            ? KnownBuiltinDeclName::RayTracingContextCallableData
                            : KnownBuiltinDeclName::RayTracingContextPayload;
@@ -466,8 +459,7 @@ void addStageInputDecoration(
     }
     IRInst* operands[] = {
         builder->getIntValue(builder->getIntType(), IRIntegerValue(stage)),
-        lowerType(contextType, userData),
-        lowerDecl(contextConstraint, userData),
+        lowerType(accelerationStructureType, userData),
         lowerType(payloadType, userData),
         lowerType(recordType, userData),
         primitiveType,
@@ -480,25 +472,25 @@ void addStageInputDecoration(
         SLANG_COUNT_OF(operands));
 }
 
-// Preserves the list's ordinary generic arguments before specialization replaces the application
-// with an empty struct type. Consider this example, where FirstGroup and SecondGroup conform to
-// IHitGroup:
+// Preserves the list's ordered types and the exact type projections used by target synthesis.
+// Consider this example, where FirstGroup and SecondGroup conform to IHitGroup:
 //
 //     typealias HitGroups = rt::HitGroupList<FirstGroup, SecondGroup>;
 //
-// HitGroupList has no instance fields, and IHitGroupList exposes only count. Neither identifies
-// the two group types or their order after specialization. The decoration's first operand is the
-// ordered entry-type pack; its second is the matching pack of IHitGroup conformance witnesses.
-// Miss and callable lists preserve their corresponding shader conformances in the same way.
-// The callback obtains these existing IR values in the list's generic environment, so ordinary
-// specialization substitutes them along with the struct. The later schema reader uses the
-// witnesses to obtain Context and its associated types. Keeping these contracts does not select
-// invoke bodies for emission; executable uses determine which methods are needed.
+// The list has no instance fields, and IHitGroupList exposes only count. Before specialization,
+// we attach its existing Group pack and expansions such as `expand (each Group).Context.Record`.
+// Each expansion has an ordinary lookup expression as its body; linking sees the requirement
+// keys even while Group is unresolved. Specialization yields a type pack with one result per
+// group, preserving order. Target synthesis reads those results without walking witness tables.
+// Miss and callable lists need only their record-type projection. The unused projected packs
+// are empty, and no projection selects an invoke implementation.
 void addShaderListDecoration(
     IRBuilder* builder,
+    Linkage* linkage,
+    ASTBuilder* astBuilder,
     AggTypeDecl* decl,
     IRType* irType,
-    IRInst* (*lowerDecl)(Decl*, void*),
+    IRType* (*lowerType)(Type*, void*),
     void* userData)
 {
     auto role = _getBuiltin(decl);
@@ -509,32 +501,173 @@ void addShaderListDecoration(
 
     auto generic = as<GenericDecl>(decl->parentDecl);
     SLANG_RELEASE_ASSERT(generic);
-    GenericTypePackParamDecl* typePack = nullptr;
-    GenericTypeConstraintDecl* witnessPack = nullptr;
-    for (auto member : generic->getDirectMemberDecls())
+    GenericTypePackParamDecl* typePackParameter = nullptr;
+    for (auto parameter : generic->getDirectMemberDeclsOfType<GenericTypePackParamDecl>())
     {
-        if (auto parameter = as<GenericTypePackParamDecl>(member))
-        {
-            SLANG_RELEASE_ASSERT(!typePack);
-            typePack = parameter;
-        }
-        else if (auto constraint = as<GenericTypeConstraintDecl>(member))
-        {
-            if (!constraint->isEqualityConstraint)
-            {
-                SLANG_RELEASE_ASSERT(!witnessPack);
-                witnessPack = constraint;
-            }
-        }
+        SLANG_RELEASE_ASSERT(!typePackParameter);
+        typePackParameter = parameter;
     }
-    SLANG_RELEASE_ASSERT(typePack && witnessPack);
+    SLANG_RELEASE_ASSERT(typePackParameter);
+    Type* typePack =
+        DeclRefType::create(astBuilder, astBuilder->getDirectDeclRef(typePackParameter));
+    auto eachEntry = astBuilder->getEachType(typePack);
+    const bool isHitGroupList = role == KnownBuiltinDeclName::RayTracingHitGroupList;
+    auto contextType = getAssociatedType(
+        linkage,
+        astBuilder,
+        eachEntry,
+        isHitGroupList ? KnownBuiltinDeclName::RayTracingHitGroupContext
+                       : KnownBuiltinDeclName::RayTracingStageContext);
+    auto recordType = getAssociatedType(
+        linkage,
+        astBuilder,
+        contextType,
+        KnownBuiltinDeclName::RayTracingContextRecord);
+
+    // All projections expand the same checked type-pack parameter. Their associated-type
+    // witnesses come from ordinary lookup lowering, not a second stored witness-pack contract.
+    Val* captures[] = {typePack};
+    auto lowerExpansion = [&](Type* pattern)
+    { return lowerType(astBuilder->getExpandType(pattern, makeArrayView(captures)), userData); };
+    auto emptyPack = builder->getTypePack(0, nullptr);
+    IRInst* payloadTypes = emptyPack;
+    IRInst* primitiveTypes = emptyPack;
+    IRInst* attributesTypes = emptyPack;
+    IRInst* closestHitTypes = emptyPack;
+    IRInst* anyHitTypes = emptyPack;
+    IRInst* intersectionTypes = emptyPack;
+    if (isHitGroupList)
+    {
+        auto payloadType = getAssociatedType(
+            linkage,
+            astBuilder,
+            contextType,
+            KnownBuiltinDeclName::RayTracingContextPayload);
+        auto primitiveType = getAssociatedType(
+            linkage,
+            astBuilder,
+            contextType,
+            KnownBuiltinDeclName::RayTracingContextPrimitive);
+        auto attributesType = getAssociatedType(
+            linkage,
+            astBuilder,
+            primitiveType,
+            KnownBuiltinDeclName::RayTracingPrimitiveAttributes);
+        payloadTypes = lowerExpansion(payloadType);
+        primitiveTypes = lowerExpansion(primitiveType);
+        attributesTypes = lowerExpansion(attributesType);
+        closestHitTypes = lowerExpansion(getAssociatedType(
+            linkage,
+            astBuilder,
+            eachEntry,
+            KnownBuiltinDeclName::RayTracingHitGroupClosestHit));
+        anyHitTypes = lowerExpansion(getAssociatedType(
+            linkage,
+            astBuilder,
+            eachEntry,
+            KnownBuiltinDeclName::RayTracingHitGroupAnyHit));
+        intersectionTypes = lowerExpansion(getAssociatedType(
+            linkage,
+            astBuilder,
+            eachEntry,
+            KnownBuiltinDeclName::RayTracingHitGroupIntersection));
+    }
     IRInst* operands[] = {
-        lowerDecl(typePack, userData),
-        lowerDecl(witnessPack, userData),
+        lowerType(typePack, userData),
+        lowerExpansion(recordType),
+        payloadTypes,
+        primitiveTypes,
+        attributesTypes,
+        closestHitTypes,
+        anyHitTypes,
+        intersectionTypes,
     };
     builder->addDecoration(
         irType,
         kIROp_PortableRTShaderListDecoration,
+        operands,
+        SLANG_COUNT_OF(operands));
+}
+
+// Records the schema values needed by descriptor synthesis while checked lookups are available.
+// Consider TraceProgramDescriptor<Schema>, with Schema supplied by another module at link time.
+// The descriptor retains its ordinary Schema and conformance identity operands. This decoration
+// separately references Schema.TraceContext.AccelerationStructure, Schema.TraceContext.Motion,
+// and the three schema lists. Their unresolved IR lookups make normal linking copy the needed
+// requirement entries; normal specialization supplies the concrete types before target synthesis.
+void addProgramDecoration(
+    IRBuilder* builder,
+    Linkage* linkage,
+    ASTBuilder* astBuilder,
+    TraceProgramDescriptorType* descriptorType,
+    IRType* irType,
+    IRType* (*lowerType)(Type*, void*),
+    void* userData)
+{
+    // Intrinsic types are uniqued by their identity operands. Another lowering request can
+    // return the same descriptor type, whose projections have already been attached.
+    if (irType->findDecoration<IRPortableRTProgramDecoration>())
+        return;
+    auto declRef = descriptorType->getDeclRef();
+    auto generic = as<GenericDecl>(declRef.getDecl()->parentDecl);
+    SLANG_RELEASE_ASSERT(generic);
+    auto application = SubstitutionSet(declRef).findGenericAppDeclRef(generic);
+    SLANG_RELEASE_ASSERT(application);
+    Type* schemaType = nullptr;
+    for (auto argument : application->getArgs())
+    {
+        if (auto type = as<Type>(argument->resolve()))
+        {
+            SLANG_RELEASE_ASSERT(!schemaType);
+            schemaType = type;
+        }
+    }
+    SLANG_RELEASE_ASSERT(schemaType);
+    auto traceContextType = getAssociatedType(
+        linkage,
+        astBuilder,
+        schemaType,
+        KnownBuiltinDeclName::RayTracingProgramTraceContext);
+    IRInst* operands[] = {
+        lowerType(
+            getAssociatedType(
+                linkage,
+                astBuilder,
+                traceContextType,
+                KnownBuiltinDeclName::RayTracingTraceAccelerationStructure),
+            userData),
+        lowerType(
+            getAssociatedType(
+                linkage,
+                astBuilder,
+                traceContextType,
+                KnownBuiltinDeclName::RayTracingTraceMotion),
+            userData),
+        lowerType(
+            getAssociatedType(
+                linkage,
+                astBuilder,
+                schemaType,
+                KnownBuiltinDeclName::RayTracingProgramHitGroups),
+            userData),
+        lowerType(
+            getAssociatedType(
+                linkage,
+                astBuilder,
+                schemaType,
+                KnownBuiltinDeclName::RayTracingProgramMissShaders),
+            userData),
+        lowerType(
+            getAssociatedType(
+                linkage,
+                astBuilder,
+                schemaType,
+                KnownBuiltinDeclName::RayTracingProgramCallableShaders),
+            userData),
+    };
+    builder->addDecoration(
+        irType,
+        kIROp_PortableRTProgramDecoration,
         operands,
         SLANG_COUNT_OF(operands));
 }
