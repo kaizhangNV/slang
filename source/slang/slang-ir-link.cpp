@@ -814,16 +814,16 @@ bool shouldDeepCloneWitnessTable(IRSpecContextBase* context, IRWitnessTable* tab
     return false;
 }
 
-// A schema such as MissShaderList<Miss> needs Miss.Context and that context's Payload/Record
-// witnesses to fix its dispatch ABI. It does not call Miss.invoke. The source producer marks
-// associated-type requirements and their declared conformance/inheritance edges explicitly;
-// retain those canonical entries while ordinary executable lookups control method retention.
+// A schema such as MissShaderList<Miss> needs the conformance of Miss.Context and that context's
+// Payload/Record type entries to fix its dispatch ABI. It does not call Miss.invoke. On a reflected
+// interface, retain the associated-type requirements identified by their builtin roles and all
+// entries whose values are conformance witnesses. Their ordinary IR types identify these edges even
+// before specialization resolves a generic witness. Method retention still follows source calls.
 static bool isPortableRTContractEntry(IRWitnessTableEntry* entry)
 {
-    auto key = entry->getRequirementKey();
-    if (key->findDecoration<IRPortableRTAssociatedTypeWitnessDecoration>() ||
-        key->findDecoration<IRPortableRTBaseInterfaceDecoration>())
+    if (as<IRWitnessTableTypeBase>(entry->getSatisfyingVal()->getDataType()))
         return true;
+    auto key = entry->getRequirementKey();
     auto builtin = key->findDecoration<IRKnownBuiltinDecoration>();
     if (!builtin)
         return false;

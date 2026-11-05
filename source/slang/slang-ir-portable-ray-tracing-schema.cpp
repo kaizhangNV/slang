@@ -54,24 +54,56 @@ static IRType* _getAssociatedType(IRWitnessTable* witness, KnownBuiltinDeclName 
     return type;
 }
 
-// Retrieves the proof attached to a particular associated-type requirement. Context and
-// Context : IHitContext are separate entries; their explicit key relationship survives entry
-// reordering, serialization, and a specialized implementation supplied by another module.
-static IRWitnessTable* _getAssociatedWitness(IRWitnessTable* witness, KnownBuiltinDeclName role)
+// Retrieves a conformance of the associated type that supplies the caller's next contract role.
+// Consider a miss Context that is also its own TraceContext. Both conformance tables have the
+// same concrete type, but only the ITraceContext table supplies AccelerationStructure. The type
+// requirement selects the concrete type, and requiredRole selects the needed contract through
+// its existing inherited requirements. Only direct conformance entries of the owning table are
+// considered; associated-type edges are not recursively searched, so self references cannot loop.
+//
+// A hit group may use one struct for both ClosestHit and AnyHit. Both stage interfaces supply
+// Context, so those calls also require the stage recorded on the conformance's interface. The
+// intersection member instead conforms to the marked IIntersectionStage interface, which covers
+// both procedural shaders and NoIntersection. No source name or sibling-entry position is needed.
+static IRWitnessTable* _getAssociatedWitness(
+    IRWitnessTable* witness,
+    KnownBuiltinDeclName role,
+    KnownBuiltinDeclName requiredRole,
+    Stage requiredStage = Stage::Unknown)
 {
     auto requirement = _findRequirement(witness, role);
     SLANG_RELEASE_ASSERT(requirement.key);
+    auto type = as<IRType>(findWitnessTableEntry(requirement.witness, requirement.key));
+    SLANG_RELEASE_ASSERT(type);
+    IRWitnessTable* result = nullptr;
     for (auto entry : requirement.witness->getEntries())
     {
-        auto bound = entry->getRequirementKey()
-                         ->findDecoration<IRPortableRTAssociatedTypeWitnessDecoration>();
-        if (!bound || bound->getTypeKey() != requirement.key)
+        auto candidate = as<IRWitnessTable>(entry->getSatisfyingVal());
+        if (!candidate || candidate->getConcreteType() != type)
             continue;
-        auto result = as<IRWitnessTable>(entry->getSatisfyingVal());
-        SLANG_RELEASE_ASSERT(result);
-        return result;
+        if (!_findRequirement(candidate, requiredRole).key)
+            continue;
+        if (requiredStage != Stage::Unknown)
+        {
+            auto interfaceType = getResolvedInstForDecorations(candidate->getConformanceType());
+            auto stage =
+                getBuiltinRole(interfaceType) == KnownBuiltinDeclName::RayTracingIntersectionStage
+                    ? Stage::Intersection
+                    : Stage::Unknown;
+            if (auto contract =
+                    interfaceType->findDecoration<IRPortableRTStageContractDecoration>())
+                stage = Stage(contract->getStageKind()->getValue());
+            if (stage != requiredStage)
+                continue;
+        }
+        // The fixed library interface owning role has one bound supplying the requested
+        // contract. Repeated entries may share that canonical witness, but cannot select a
+        // different conformance merely because it occurs first in the table.
+        SLANG_RELEASE_ASSERT(!result || result == candidate);
+        result = candidate;
     }
-    SLANG_UNEXPECTED("portable ray-tracing associated type has no conformance witness");
+    SLANG_RELEASE_ASSERT(result);
+    return result;
 }
 
 static bool _isPlaceholder(IRType* stageType, Stage stage)
@@ -102,15 +134,19 @@ static SchemaStage _readStageContract(IRType* type, IRWitnessTable* witness, Sta
     result.type = type;
     result.witness = witness;
     result.contextType = _getAssociatedType(witness, KnownBuiltinDeclName::RayTracingStageContext);
-    result.contextWitness =
-        _getAssociatedWitness(witness, KnownBuiltinDeclName::RayTracingStageContext);
+    bool isHitStage =
+        stage == Stage::ClosestHit || stage == Stage::AnyHit || stage == Stage::Intersection;
     auto payloadRole = stage == Stage::Callable
                            ? KnownBuiltinDeclName::RayTracingContextCallableData
                            : KnownBuiltinDeclName::RayTracingContextPayload;
+    result.contextWitness = _getAssociatedWitness(
+        witness,
+        KnownBuiltinDeclName::RayTracingStageContext,
+        isHitStage ? KnownBuiltinDeclName::RayTracingContextPrimitive : payloadRole);
     result.payloadType = _getAssociatedType(result.contextWitness, payloadRole);
     result.recordType =
         _getAssociatedType(result.contextWitness, KnownBuiltinDeclName::RayTracingContextRecord);
-    if (stage == Stage::ClosestHit || stage == Stage::AnyHit || stage == Stage::Intersection)
+    if (isHitStage)
     {
         result.primitiveType = _getAssociatedType(
             result.contextWitness,
@@ -118,7 +154,8 @@ static SchemaStage _readStageContract(IRType* type, IRWitnessTable* witness, Sta
         result.attributesType = _getAssociatedType(
             _getAssociatedWitness(
                 result.contextWitness,
-                KnownBuiltinDeclName::RayTracingContextPrimitive),
+                KnownBuiltinDeclName::RayTracingContextPrimitive,
+                KnownBuiltinDeclName::RayTracingPrimitiveAttributes),
             KnownBuiltinDeclName::RayTracingPrimitiveAttributes);
     }
     result.isPresent = !_isPlaceholder(type, stage);
@@ -130,7 +167,8 @@ IRRaytracingAccelerationStructureType* getStageAccelerationStructure(
 {
     auto traceWitness = _getAssociatedWitness(
         cast<IRWitnessTable>(input->getContextWitness()),
-        KnownBuiltinDeclName::RayTracingContextTraceContext);
+        KnownBuiltinDeclName::RayTracingContextTraceContext,
+        KnownBuiltinDeclName::RayTracingTraceAccelerationStructure);
     return cast<IRRaytracingAccelerationStructureType>(_getAssociatedType(
         traceWitness,
         KnownBuiltinDeclName::RayTracingTraceAccelerationStructure));
@@ -143,7 +181,11 @@ static SchemaStage _readGroupStageContract(
 {
     return _readStageContract(
         _getAssociatedType(groupWitness, role),
-        _getAssociatedWitness(groupWitness, role),
+        _getAssociatedWitness(
+            groupWitness,
+            role,
+            KnownBuiltinDeclName::RayTracingStageContext,
+            stage),
         stage);
 }
 
@@ -175,8 +217,10 @@ bool readSchemaContract(IRTraceProgramDescriptorType* descriptorType, Schema& ou
     result.type = descriptorType->getSchema();
     result.traceContext =
         _getAssociatedType(witness, KnownBuiltinDeclName::RayTracingProgramTraceContext);
-    auto traceWitness =
-        _getAssociatedWitness(witness, KnownBuiltinDeclName::RayTracingProgramTraceContext);
+    auto traceWitness = _getAssociatedWitness(
+        witness,
+        KnownBuiltinDeclName::RayTracingProgramTraceContext,
+        KnownBuiltinDeclName::RayTracingTraceAccelerationStructure);
     result.accelerationStructure = _getAssociatedType(
         traceWitness,
         KnownBuiltinDeclName::RayTracingTraceAccelerationStructure);
@@ -190,8 +234,10 @@ bool readSchemaContract(IRTraceProgramDescriptorType* descriptorType, Schema& ou
         auto groupWitness = cast<IRWitnessTable>(hitList.witnesses->getOperand(i));
         group.contextType =
             _getAssociatedType(groupWitness, KnownBuiltinDeclName::RayTracingHitGroupContext);
-        auto contextWitness =
-            _getAssociatedWitness(groupWitness, KnownBuiltinDeclName::RayTracingHitGroupContext);
+        auto contextWitness = _getAssociatedWitness(
+            groupWitness,
+            KnownBuiltinDeclName::RayTracingHitGroupContext,
+            KnownBuiltinDeclName::RayTracingContextPrimitive);
         group.payloadType =
             _getAssociatedType(contextWitness, KnownBuiltinDeclName::RayTracingContextPayload);
         group.recordType =
@@ -199,7 +245,10 @@ bool readSchemaContract(IRTraceProgramDescriptorType* descriptorType, Schema& ou
         group.primitiveType =
             _getAssociatedType(contextWitness, KnownBuiltinDeclName::RayTracingContextPrimitive);
         group.attributesType = _getAssociatedType(
-            _getAssociatedWitness(contextWitness, KnownBuiltinDeclName::RayTracingContextPrimitive),
+            _getAssociatedWitness(
+                contextWitness,
+                KnownBuiltinDeclName::RayTracingContextPrimitive,
+                KnownBuiltinDeclName::RayTracingPrimitiveAttributes),
             KnownBuiltinDeclName::RayTracingPrimitiveAttributes);
         group.closestHit = _readGroupStageContract(
             groupWitness,

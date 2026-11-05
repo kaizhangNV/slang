@@ -2621,16 +2621,9 @@ local insts = {
 				},
 			},
 			{
-				-- Link reached conformances completely: target synthesis reads entries
-				-- that need not appear in a source lookup. This does not root witnesses.
+				-- Retain reached conformance/type entries for target synthesis even when
+				-- no source lookup uses them. This does not root witnesses or methods.
 				PortableRTReflectedInterfaceDecoration = {},
-			},
-			{
-				-- Relates an associated-type bound key to its exact type key without
-				-- relying on adjacency or ordering of interface/witness entries.
-				PortableRTAssociatedTypeWitnessDecoration = {
-					operands = { { "typeKey" } },
-				},
 			},
 			{
 				-- Distinguishes declared inheritance from associated-type conformances

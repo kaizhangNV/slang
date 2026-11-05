@@ -901,7 +901,6 @@ return {
 	["Decoration.PortableRTStageInputDecoration"] = 920,
 	["Decoration.PortableRTShaderListDecoration"] = 921,
 	["Decoration.PortableRTReflectedInterfaceDecoration"] = 922,
-	["Decoration.PortableRTAssociatedTypeWitnessDecoration"] = 923,
 	["Decoration.PortableRTBaseInterfaceDecoration"] = 924,
 	["Decoration.PortableRTIntersectionStageDecoration"] = 925,
 	["Type.UntypedBufferResourceType.MetalIntersectionFunctionTable"] = 960,

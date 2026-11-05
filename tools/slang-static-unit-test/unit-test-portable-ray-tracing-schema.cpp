@@ -27,10 +27,15 @@ static void _testSchemaReading(UnitTestContext* unitTestContext, bool serializeM
         }
 
         struct Payload { uint value; }
-        struct TraceContext : rt::ITraceContext
+        // One concrete type supplies both contracts, so its identity alone cannot choose
+        // between the trace-context and payload-context conformances.
+        struct TraceContext : rt::ITraceContext, rt::IPayloadContext
         {
             typealias AccelerationStructure = rt::AccelerationStructure;
             typealias Motion = rt::NoMotion;
+            typealias TraceContext = ::TraceContext;
+            typealias Payload = ::Payload;
+            typealias Record = uint;
         }
         struct HitContext : rt::IHitContext
         {
@@ -39,12 +44,7 @@ static void _testSchemaReading(UnitTestContext* unitTestContext, bool serializeM
             typealias Record = void;
             typealias Primitive = rt::TrianglePrimitive;
         }
-        struct MissContext : rt::IPayloadContext
-        {
-            typealias TraceContext = ::TraceContext;
-            typealias Payload = ::Payload;
-            typealias Record = uint;
-        }
+        typealias MissContext = TraceContext;
         struct CallableContext : rt::ICallableContext
         {
             typealias TraceContext = ::TraceContext;
@@ -59,7 +59,8 @@ static void _testSchemaReading(UnitTestContext* unitTestContext, bool serializeM
             typealias Record = void;
             typealias Primitive = rt::BoundingBoxPrimitive<Attributes>;
         }
-        struct ClosestHit : rt::IClosestHitShader
+        // Both group members name this type, but each must retain its own stage conformance.
+        struct SharedHit : rt::IClosestHitShader, rt::IAnyHitShader
         {
             typealias Context = HitContext;
             static void invoke(rt::ClosestHitInput<Context> input)
@@ -67,12 +68,17 @@ static void _testSchemaReading(UnitTestContext* unitTestContext, bool serializeM
                 referencedStageBody();
                 input.payload.value = 1;
             }
+            static void invoke(rt::AnyHitInput<Context> input)
+            {
+                referencedStageBody();
+                input.payload.value = 4;
+            }
         }
         struct HitGroup : rt::IHitGroup
         {
             typealias Context = HitContext;
-            typealias ClosestHit = ::ClosestHit;
-            typealias AnyHit = rt::NoAnyHit<Context>;
+            typealias ClosestHit = SharedHit;
+            typealias AnyHit = SharedHit;
             typealias Intersection = rt::NoIntersection<Context>;
         }
         struct Intersection : rt::IIntersectionShader
@@ -255,8 +261,23 @@ static void _testSchemaReading(UnitTestContext* unitTestContext, bool serializeM
     SLANG_CHECK_ABORT(schema.missShaders.getCount() == 1);
     SLANG_CHECK_ABORT(schema.callableShaders.getCount() == 1);
     SLANG_CHECK(schema.hitGroups[0].closestHit.isPresent);
-    SLANG_CHECK(!schema.hitGroups[0].anyHit.isPresent);
+    SLANG_CHECK(schema.hitGroups[0].anyHit.isPresent);
     SLANG_CHECK(!schema.hitGroups[0].intersection.isPresent);
+    auto& closestHit = schema.hitGroups[0].closestHit;
+    auto& anyHit = schema.hitGroups[0].anyHit;
+    SLANG_CHECK(closestHit.type == anyHit.type);
+    SLANG_CHECK_ABORT(closestHit.witness && anyHit.witness);
+    auto closestHitInterface =
+        getResolvedInstForDecorations(closestHit.witness->getConformanceType());
+    auto anyHitInterface = getResolvedInstForDecorations(anyHit.witness->getConformanceType());
+    SLANG_CHECK(closestHitInterface != anyHitInterface);
+    auto closestHitContract =
+        closestHitInterface->findDecoration<IRPortableRTStageContractDecoration>();
+    auto anyHitContract = anyHitInterface->findDecoration<IRPortableRTStageContractDecoration>();
+    SLANG_CHECK_ABORT(closestHitContract && anyHitContract);
+    SLANG_CHECK(
+        closestHitContract->getStageKind()->getValue() == IRIntegerValue(Stage::ClosestHit));
+    SLANG_CHECK(anyHitContract->getStageKind()->getValue() == IRIntegerValue(Stage::AnyHit));
     SLANG_CHECK(!schema.hitGroups[1].closestHit.isPresent);
     SLANG_CHECK(!schema.hitGroups[1].anyHit.isPresent);
     SLANG_CHECK(schema.hitGroups[1].intersection.isPresent);
@@ -269,6 +290,7 @@ static void _testSchemaReading(UnitTestContext* unitTestContext, bool serializeM
     SLANG_CHECK(opaque.primitiveType == schema.hitGroups[0].closestHit.primitiveType);
     SLANG_CHECK(opaque.attributesType == schema.hitGroups[0].closestHit.attributesType);
     SLANG_CHECK(schema.missShaders[0].isPresent);
+    SLANG_CHECK(schema.missShaders[0].contextType == schema.traceContext);
     SLANG_CHECK(schema.missShaders[0].payloadType == opaque.payloadType);
     SLANG_CHECK(as<IRUIntType>(schema.missShaders[0].recordType));
     SLANG_CHECK(!schema.missShaders[0].primitiveType);

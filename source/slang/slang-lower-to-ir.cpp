@@ -1855,27 +1855,6 @@ IRInst* getInterfaceRequirementKey(IRGenContext* context, Decl* requirementDecl)
     addLinkageDecoration(context, requirementKey, requirementDecl, sb.getUnownedSlice());
     addNameHint(context, requirementKey, requirementDecl);
 
-    // addLinkageDecoration preserves KnownBuiltin on this declaration's ordinary key. Separate
-    // stage contracts may use the same semantic role, but retain their distinct mangled keys.
-    // Connect an associated-type bound to that exact type key, not to the role alone.
-    if (auto constraint = as<GenericTypeConstraintDecl>(requirementDecl);
-        constraint && !constraint->isEqualityConstraint)
-    {
-        // Associated types and their conformance requirements have distinct ordinary keys.
-        // Link the two by semantic role, so a schema reader can select Context : IHitContext
-        // without assuming that its witness follows the Context type in the entry array.
-        auto associatedType = isDeclRefTypeOf<AssocTypeDecl>(constraint->sub.type);
-        if (associatedType && associatedType.getDecl()->findModifier<KnownBuiltinAttribute>())
-        {
-            IRInst* operands[] = {getInterfaceRequirementKey(context, associatedType.getDecl())};
-            builder->addDecoration(
-                requirementKey,
-                kIROp_PortableRTAssociatedTypeWitnessDecoration,
-                operands,
-                SLANG_COUNT_OF(operands));
-        }
-    }
-
     return requirementKey;
 }
 

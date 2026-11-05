@@ -4,9 +4,6 @@ import slang.raytracing.portable;
 
 // Schema discovery uses the same associated-type keys and conformance witnesses as ordinary
 // interface calls. No executable source call is needed to retain an entry in a shader list.
-// CHECK-DAG: PortableRTAssociatedTypeWitnessDecoration(%rtx5FIHitGroupx5FContext)
-// CHECK-DAG: PortableRTAssociatedTypeWitnessDecoration(%rtx5FIHitGroupx5FIntersection)
-// CHECK-DAG: PortableRTAssociatedTypeWitnessDecoration(%rtx5FITraceProgramSchemax5FTraceContext)
 // CHECK-DAG: PortableRTShaderListDecoration(
 // CHECK-DAG: PortableRTStageContractDecoration(8 : Int, %rtx5FIIntersectionShaderx5Finvoke)
 // CHECK-DAG: PortableRTIntersectionStageDecoration(
