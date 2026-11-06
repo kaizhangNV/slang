@@ -155,47 +155,47 @@ SLANG_UNIT_TEST(portableRayTracingD3DRecordBindingAndReflection)
     // No target code has been requested. This is the same public layout API used by a host.
     auto layout = linked->getLayout(0, diagnostics.writeRef());
     SLANG_CHECK_ABORT(layout != nullptr);
-    SLANG_CHECK_ABORT(layout->getParameterCount() == 2);
-    SLANG_CHECK_ABORT(layout->getEntryPointCount() == 6);
+    SLANG_CHECK_ABORT(layout->getParameterCount() == 2);  // globalMaterial and reservedSpace.
+    SLANG_CHECK_ABORT(layout->getEntryPointCount() == 6); // The six selected miss shaders.
     const auto cbuffer = slang::ParameterCategory::ConstantBuffer;
     const auto shaderRecord = slang::ParameterCategory::ShaderRecord;
     const auto uniform = slang::ParameterCategory::Uniform;
-    // Parameter 0 is globalMaterial, declared as register(b3, space0) above. In the
-    // ConstantBuffer category, getOffset() is the register index, not a byte offset.
-    // Although the selected entries also use Material as their Record, this ordinary
-    // global must have no ShaderRecord usage. Creating entry record layouts must not
-    // change its classification.
+    // Get: ConstantBuffer<Material> globalMaterial : register(b3, space0);
     auto global = layout->getParameterByIndex(0);
     auto globalType = global->getTypeLayout();
-    SLANG_CHECK(global->getOffset(cbuffer) == 3);
-    SLANG_CHECK(global->getBindingSpace(cbuffer) == 0);
-    SLANG_CHECK(globalType->getSize(shaderRecord) == 0);
-    // ConstantBuffer<Material> has a Material element layout. Use it as the reference
-    // for the record size and field-offset comparisons below.
+    SLANG_CHECK(global->getOffset(cbuffer) == 3);        // Register b3.
+    SLANG_CHECK(global->getBindingSpace(cbuffer) == 0);  // Space 0.
+    SLANG_CHECK(globalType->getSize(shaderRecord) == 0); // No shader-record role on this global.
+    // Get Material's layout inside ConstantBuffer<Material>.
     auto materialLayout = globalType->getElementTypeLayout();
     SLANG_CHECK_ABORT(materialLayout != nullptr);
 
+    // MaterialMiss and OtherMaterialMiss each need their own Material record.
     slang::VariableLayoutReflection* recordBindings[2];
     for (int i = 0; i < 2; ++i)
     {
         auto entryLayout = layout->getEntryPointByIndex(i);
-        SLANG_CHECK_ABORT(entryLayout->getParameterCount() == 1);
+        SLANG_CHECK_ABORT(entryLayout->getParameterCount() == 1); // One generated record parameter.
         auto record = entryLayout->getParameterByIndex(0);
         recordBindings[i] = record;
-        SLANG_CHECK(record->getVariable() == nullptr);
-        SLANG_CHECK(record->getName() == nullptr);
-        SLANG_CHECK(record->getBindingSpace(cbuffer) != 0);
-        SLANG_CHECK(record->getBindingSpace(cbuffer) != 1);
+        SLANG_CHECK(record->getVariable() == nullptr); // Generated record has no source variable.
+        SLANG_CHECK(record->getName() == nullptr);     // The generated parameter is anonymous.
+        SLANG_CHECK(record->getBindingSpace(cbuffer) != 0); // Space 0 is used by globalMaterial.
+        SLANG_CHECK(record->getBindingSpace(cbuffer) != 1); // Space 1 is used by reservedSpace.
         auto recordType = record->getTypeLayout();
+        // D3D stores Material's data in a constant buffer.
         SLANG_CHECK(recordType->getKind() == slang::TypeReflection::Kind::ConstantBuffer);
-        SLANG_CHECK(recordType->getSize(cbuffer) == 1);
-        SLANG_CHECK(recordType->getSize(shaderRecord) == 1);
-        SLANG_CHECK(recordType->getBindingRangeCount() == 1);
+        SLANG_CHECK(recordType->getSize(cbuffer) == 1);       // One b register.
+        SLANG_CHECK(recordType->getSize(shaderRecord) == 1);  // One shader-record role.
+        SLANG_CHECK(recordType->getBindingRangeCount() == 1); // One resource binding range.
+        // That range describes the constant buffer.
         SLANG_CHECK(recordType->getBindingRangeType(0) == slang::BindingType::ConstantBuffer);
+        // The buffer container also carries the shader-record role.
         SLANG_CHECK(
             recordType->getContainerVarLayout()->getTypeLayout()->getSize(shaderRecord) == 1);
         auto element = recordType->getElementTypeLayout();
         SLANG_CHECK_ABORT(element != nullptr);
+        // Material has the same byte size, fields, and field offsets as in globalMaterial.
         SLANG_CHECK(element->getSize(uniform) == materialLayout->getSize(uniform));
         SLANG_CHECK_ABORT(element->getFieldCount() == materialLayout->getFieldCount());
         for (unsigned fieldIndex = 0; fieldIndex < element->getFieldCount(); ++fieldIndex)
@@ -205,26 +205,32 @@ SLANG_UNIT_TEST(portableRayTracingD3DRecordBindingAndReflection)
                 materialLayout->getFieldByIndex(fieldIndex)->getOffset(uniform));
         }
     }
+    // Both records share the generated space, with a different b register for each entry.
     SLANG_CHECK(
         recordBindings[0]->getBindingSpace(cbuffer) == recordBindings[1]->getBindingSpace(cbuffer));
     SLANG_CHECK(recordBindings[0]->getOffset(cbuffer) != recordBindings[1]->getOffset(cbuffer));
+    // NoRecordMiss uses void; EmptyRecordMiss uses an empty struct. Neither needs a record binding.
     SLANG_CHECK(layout->getEntryPointByIndex(2)->getParameterCount() == 0);
     SLANG_CHECK(layout->getEntryPointByIndex(3)->getParameterCount() == 0);
     const auto shaderResource = slang::ParameterCategory::ShaderResource;
+    // ResourceRecordMiss and MixedRecordMiss both have a StructuredBuffer named values.
     slang::VariableLayoutReflection* resourceBindings[2];
     for (int i = 0; i < 2; ++i)
     {
         auto entry = layout->getEntryPointByIndex(4 + i);
-        SLANG_CHECK_ABORT(entry->getParameterCount() == 1);
+        SLANG_CHECK_ABORT(entry->getParameterCount() == 1); // One generated record parameter.
         auto record = entry->getParameterByIndex(0);
         resourceBindings[i] = record;
         auto type = record->getTypeLayout();
-        SLANG_CHECK(type->getSize(shaderRecord) == 1);
-        SLANG_CHECK(type->getSize(shaderResource) == 1);
+        SLANG_CHECK(type->getSize(shaderRecord) == 1);   // One shader-record role.
+        SLANG_CHECK(type->getSize(shaderResource) == 1); // One t register for values.
+        // Only MixedRecord needs a constant buffer, for its factor field.
         SLANG_CHECK(type->getSize(cbuffer) == size_t(i));
+        // Resource fields use the same generated space as the Material record buffers.
         SLANG_CHECK(
             record->getBindingSpace(shaderResource) == recordBindings[0]->getBindingSpace(cbuffer));
     }
+    // Each entry's values field gets a different t register.
     SLANG_CHECK(
         resourceBindings[0]->getOffset(shaderResource) !=
         resourceBindings[1]->getOffset(shaderResource));
@@ -242,8 +248,9 @@ SLANG_UNIT_TEST(portableRayTracingD3DRecordBindingAndReflection)
         StringBuilder expectedBinding;
         expectedBinding << "register(b" << UInt64(recordBindings[i]->getOffset(cbuffer))
                         << ", space" << UInt64(recordBindings[i]->getBindingSpace(cbuffer)) << ")";
+        // Emitted HLSL uses this entry's reflected b register and space.
         SLANG_CHECK(codeText.indexOf(expectedBinding.getUnownedSlice()) >= 0);
-        SLANG_CHECK(codeText.indexOf("cbuffer") >= 0);
+        SLANG_CHECK(codeText.indexOf("cbuffer") >= 0); // The record buffer is emitted.
 
         // Calling another selected stage as a static helper must not read that stage's own
         // SBT record. In particular, OtherMaterialMiss must use its binding for both calls.
@@ -253,6 +260,7 @@ SLANG_UNIT_TEST(portableRayTracingD3DRecordBindingAndReflection)
                           << UInt64(otherRecord->getBindingSpace(cbuffer)) << ")";
         SLANG_CHECK(codeText.indexOf(unexpectedBinding.getUnownedSlice()) < 0);
     }
+    // EmptyRecordMiss must still compile when it passes its empty record to a helper.
     ComPtr<slang::IBlob> emptyRecordCode;
     SLANG_CHECK_ABORT(SLANG_SUCCEEDED(
         linked->getEntryPointCode(3, 0, emptyRecordCode.writeRef(), diagnostics.writeRef())));
@@ -269,6 +277,7 @@ SLANG_UNIT_TEST(portableRayTracingD3DRecordBindingAndReflection)
         expectedBinding << "register(t" << UInt64(resourceBindings[i]->getOffset(shaderResource))
                         << ", space" << UInt64(resourceBindings[i]->getBindingSpace(shaderResource))
                         << ")";
+        // Emitted HLSL uses this entry's reflected t register and space for values.
         SLANG_CHECK(text.indexOf(expectedBinding.getUnownedSlice()) >= 0);
     }
 }
