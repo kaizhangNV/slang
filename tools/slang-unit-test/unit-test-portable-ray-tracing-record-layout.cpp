@@ -160,11 +160,18 @@ SLANG_UNIT_TEST(portableRayTracingD3DRecordBindingAndReflection)
     const auto cbuffer = slang::ParameterCategory::ConstantBuffer;
     const auto shaderRecord = slang::ParameterCategory::ShaderRecord;
     const auto uniform = slang::ParameterCategory::Uniform;
+    // Parameter 0 is globalMaterial, declared as register(b3, space0) above. In the
+    // ConstantBuffer category, getOffset() is the register index, not a byte offset.
+    // Although the selected entries also use Material as their Record, this ordinary
+    // global must have no ShaderRecord usage. Creating entry record layouts must not
+    // change its classification.
     auto global = layout->getParameterByIndex(0);
     auto globalType = global->getTypeLayout();
     SLANG_CHECK(global->getOffset(cbuffer) == 3);
     SLANG_CHECK(global->getBindingSpace(cbuffer) == 0);
     SLANG_CHECK(globalType->getSize(shaderRecord) == 0);
+    // ConstantBuffer<Material> has a Material element layout. Use it as the reference
+    // for the record size and field-offset comparisons below.
     auto materialLayout = globalType->getElementTypeLayout();
     SLANG_CHECK_ABORT(materialLayout != nullptr);
 
