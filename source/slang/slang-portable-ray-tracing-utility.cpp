@@ -616,12 +616,40 @@ void addShaderListDecoration(
         SLANG_COUNT_OF(operands));
 }
 
-// Records the schema values needed by descriptor synthesis while checked lookups are available.
-// Consider TraceProgramDescriptor<Schema>, with Schema supplied by another module at link time.
-// The descriptor retains its ordinary Schema and conformance identity operands. This decoration
-// separately references Schema.TraceContext.AccelerationStructure, Schema.TraceContext.Motion,
-// and the three schema lists. Their unresolved IR lookups make normal linking copy the needed
-// requirement entries; normal specialization supplies the concrete types before target synthesis.
+// Adds a decoration to IRTraceProgramDescriptorType with the schema types needed by the backend.
+// Consider this declaration, where Schema conforms to ITraceProgramSchema:
+//
+//     rt::TraceProgramDescriptor<Schema> descriptor;
+//
+// The decoration belongs to the descriptor's IR type and conceptually looks like:
+//
+//     PortableRTProgramDecoration
+//     {
+//         accelerationStructureType = Schema.TraceContext.AccelerationStructure
+//         motionType                = Schema.TraceContext.Motion
+//         hitGroupsType             = Schema.HitGroups
+//         missShadersType           = Schema.MissShaders
+//         callableShadersType       = Schema.CallableShaders
+//     }
+//
+// Each expression is a symbolic associated-type lookup through Schema's conformance witness.
+// The first two also look up the TraceContext conformance to find its associated types.
+// This uses the same ordinary witness lookup instructions as addShaderListDecoration. There is
+// no IRExpand here: we look up five values from one schema, without iterating its list members.
+//
+// Schema may still be generic or supplied by another module. Once linking and specialization
+// resolve these lookups, the decoration refers to concrete types. For example, if Schema.HitGroups
+// is HitGroupList<FirstGroup, SecondGroup>, hitGroupsType refers to that specialized list struct.
+// Its own shader-list decoration supplies the member-type packs described above. The acceleration
+// structure and motion types tell Metal how to configure traversal; the three list types tell it
+// which groups, miss shaders, and callable shaders belong to the program.
+//
+// We need these explicit lookups because the descriptor's existing Schema and conformance
+// operands identify its type, but do not request the associated-type entries needed by synthesis.
+// Storing the conformance alone would leave the backend to follow tables whose entries the linker
+// may not have copied. The lookup instructions request the required entries before specialization,
+// avoiding the need to recursively copy complete tables and unused method implementations.
+// The backend then reads the resulting types directly. The decoration adds no runtime fields.
 void addTraceProgramDescriptorDecoration(
     IRBuilder* builder,
     Linkage* linkage,
