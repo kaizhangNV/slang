@@ -2590,11 +2590,11 @@ local insts = {
 				},
 			},
 			{
-				-- Retains checked associated types in the input struct's own generic
-				-- environment, so target ABI synthesis does not rediscover AST context.
-				-- payloadType denotes callable data for CallableInput. Non-hit inputs
-				-- carry void for primitiveType and attributesType. The acceleration
-				-- structure is projected before linking, just like the other types.
+				-- Decorates the IR struct type of a logical RT stage input, such as
+				-- ClosestHitInput<Context> or MissInput<Context>. These inputs have no
+				-- fields and lower to empty IR structs. The backend still needs types
+				-- from Context to generate the entry adapter and input operations,
+				-- so this decoration preserves those types and the input's stage kind.
 				PortableRTStageInputDecoration = {
 					operands = {
 						{ "stageKind", "IRIntLit" },
