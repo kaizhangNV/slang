@@ -2941,7 +2941,7 @@ struct ValLoweringVisitor : ValVisitor<ValLoweringVisitor, LoweredValInfo, Lower
             decorationBuilder.setInsertBefore(irType);
             IRGenContext decorationContext = *context;
             decorationContext.irBuilder = &decorationBuilder;
-            PortableRT::addProgramDecoration(
+            PortableRT::addTraceProgramDescriptorDecoration(
                 &decorationBuilder,
                 decorationContext.getLinkage(),
                 decorationContext.astBuilder,

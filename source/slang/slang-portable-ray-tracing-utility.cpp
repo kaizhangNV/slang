@@ -472,18 +472,45 @@ void addStageInputDecoration(
         SLANG_COUNT_OF(operands));
 }
 
-// Preserves the list's ordered types and the exact type projections used by target synthesis.
+// Adds a decoration to the shader-list IRStructType with the types needed for backend synthesis.
 // Consider this example, where FirstGroup and SecondGroup conform to IHitGroup:
 //
 //     typealias HitGroups = rt::HitGroupList<FirstGroup, SecondGroup>;
 //
-// The list has no instance fields, and IHitGroupList exposes only count. Before specialization,
-// we attach its existing Group pack and expansions such as `expand (each Group).Context.Record`.
-// Each expansion has an ordinary lookup expression as its body; linking sees the requirement
-// keys even while Group is unresolved. Specialization yields a type pack with one result per
-// group, preserving order. Target synthesis reads those results without walking witness tables.
-// Miss and callable lists need only their record-type projection. The unused projected packs
-// are empty, and no projection selects an invoke implementation.
+// Before the concrete groups are known, the decoration on HitGroupList conceptually looks like:
+//
+//     PortableRTShaderListDecoration
+//     {
+//         typepack          = Group
+//         recordTypes       = expand (each Group).Context.Record
+//         payloadTypes      = expand (each Group).Context.Payload
+//         primitiveTypes    = expand (each Group).Context.Primitive
+//         attributesTypes   = expand (each Group).Context.Primitive.Attributes
+//         closestHitTypes   = expand (each Group).ClosestHit
+//         anyHitTypes       = expand (each Group).AnyHit
+//         intersectionTypes = expand (each Group).Intersection
+//     }
+//
+// Group is the list's generic type pack. The expression `expand (each Group).Context.Record`
+// means a symbolic witness lookup for each type in that pack. It lowers to an IRExpand whose
+// body follows Context and then Record with ordinary witness lookup instructions. These use the
+// list's existing generic conformance witnesses.
+// After specialization, these expressions become concrete type packs in the original order.
+// For example, if the two groups use FirstRecord and SecondRecord, recordTypes becomes
+// [FirstRecord, SecondRecord]. The backend can then read that list directly.
+//
+// We need the decoration because the list has no fields, and IHitGroupList exposes only count.
+// Storing the groups' conformance tables would still require the backend to follow other tables,
+// such as the Context conformance and its base-interface conformances, to find Record. Keeping
+// a table alive does not keep all its entries: the linker copies entries requested by IR uses.
+// Preserving everything instead would require recursively copying those tables and their entries,
+// including unused shader methods such as invoke and the code they depend on. These explicit
+// lookups tell the normal linker which entries are needed, even before the groups are concrete.
+// Specialization resolves the lookups, so backend synthesis needs no witness-table traversal.
+//
+// Miss and callable lists store their entry pack and expanded record types; the remaining packs
+// are empty. The three hit-stage packs let the backend recognize No* placeholders; none of these
+// lookups requests an invoke implementation.
 void addShaderListDecoration(
     IRBuilder* builder,
     Linkage* linkage,
@@ -524,8 +551,8 @@ void addShaderListDecoration(
         contextType,
         KnownBuiltinDeclName::RayTracingContextRecord);
 
-    // All projections expand the same checked type-pack parameter. Their associated-type
-    // witnesses come from ordinary lookup lowering, not a second stored witness-pack contract.
+    // Each expansion uses the same checked type-pack parameter. Ordinary lookup lowering supplies
+    // the conformance witnesses; the decoration stores the resulting types.
     Val* captures[] = {typePack};
     auto lowerExpansion = [&](Type* pattern)
     { return lowerType(astBuilder->getExpandType(pattern, makeArrayView(captures)), userData); };
@@ -595,7 +622,7 @@ void addShaderListDecoration(
 // separately references Schema.TraceContext.AccelerationStructure, Schema.TraceContext.Motion,
 // and the three schema lists. Their unresolved IR lookups make normal linking copy the needed
 // requirement entries; normal specialization supplies the concrete types before target synthesis.
-void addProgramDecoration(
+void addTraceProgramDescriptorDecoration(
     IRBuilder* builder,
     Linkage* linkage,
     ASTBuilder* astBuilder,

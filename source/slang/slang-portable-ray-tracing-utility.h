@@ -97,10 +97,10 @@ void addStageInputDecoration(
 
 /// Adds PortableRTShaderListDecoration to a recognized shader-list type, preserving its ordered
 /// entry-type pack followed by record, payload, primitive, attributes, closest-hit, any-hit, and
-/// intersection type packs. Each projected pack uses ordinary each/expand and associated-type
+/// intersection type packs. Each computed pack uses ordinary each/expand and associated-type
 /// lowering in the list's generic environment.
-/// Miss and callable lists retain record types; the other projected packs are empty for them.
-/// Other aggregate declarations are unchanged. No projection requests an invoke implementation.
+/// Miss and callable lists retain record types; the other computed packs are empty for them.
+/// Other aggregate declarations are unchanged. No lookup requests an invoke implementation.
 void addShaderListDecoration(
     IRBuilder* builder,
     Linkage* linkage,
@@ -113,7 +113,7 @@ void addShaderListDecoration(
 /// Adds PortableRTProgramDecoration to a trace-program descriptor type, preserving its schema's
 /// acceleration-structure, motion, and three list types through ordinary associated-type lookups.
 /// The callback lowers those checked types in the descriptor's existing generic environment.
-void addProgramDecoration(
+void addTraceProgramDescriptorDecoration(
     IRBuilder* builder,
     Linkage* linkage,
     ASTBuilder* astBuilder,
