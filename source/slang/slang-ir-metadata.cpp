@@ -3,6 +3,7 @@
 
 #include "compiler-core/slang-artifact-associated-impl.h"
 #include "slang-ir-insts.h"
+#include "slang-ir-metal-portable-ray-tracing-metadata.h"
 #include "slang-ir.h"
 #include "slang-rich-diagnostics.h"
 #include "slang-target-program.h"
@@ -318,6 +319,7 @@ void collectMetadata(
         collectMetadataFromInst(param, outMetadata);
     }
     outMetadata.m_usesBindlessResourceHeap = usesBindlessResourceHeap;
+    collectMetalRTMetadata(irModule, outMetadata);
 }
 
 static SlangScalarType _getScalarTypeFromIRType(IRType* type)

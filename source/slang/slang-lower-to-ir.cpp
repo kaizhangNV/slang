@@ -40,6 +40,7 @@
 #include "slang-ir-validate.h"
 #include "slang-ir.h"
 #include "slang-mangle.h"
+#include "slang-portable-ray-tracing-utility.h"
 #include "slang-rich-diagnostics.h"
 #include "slang-type-layout.h"
 #include "slang-visitor.h"
@@ -2930,10 +2931,30 @@ struct ValLoweringVisitor : ValVisitor<ValLoweringVisitor, LoweredValInfo, Lower
                     SLANG_ASSERT(argVal);
                     operands.add(argVal);
                 });
-        return getBuilder()->getType(
-            op,
-            static_cast<UInt>(operands.getCount()),
-            operands.getBuffer());
+        auto irType =
+            getBuilder()->getType(op, static_cast<UInt>(operands.getCount()), operands.getBuffer());
+        if (auto descriptorType = as<TraceProgramDescriptorType>(type))
+        {
+            // Decorate TraceProgramDescriptorType with the schema's list, acceleration-structure,
+            // and motion types needed for backend code synthesis. The descriptor already refers
+            // to Schema and its conformance, but those operands do not request the associated-type
+            // entries during linking. The decoration references the required lookups, so the
+            // linker copies their entries and DCE keeps their results while the descriptor is live.
+            IRBuilder decorationBuilder = *getBuilder();
+            decorationBuilder.setInsertBefore(irType);
+            IRGenContext decorationContext = *context;
+            decorationContext.irBuilder = &decorationBuilder;
+            PortableRT::addTraceProgramDescriptorDecoration(
+                &decorationBuilder,
+                decorationContext.getLinkage(),
+                decorationContext.astBuilder,
+                descriptorType,
+                irType,
+                [](Type* projectedType, void* userData)
+                { return lowerType(static_cast<IRGenContext*>(userData), projectedType); },
+                &decorationContext);
+        }
+        return irType;
     }
 
     // The AST encodes a reference parameter's access in the class of its wrapper type, while
@@ -12734,6 +12755,31 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
 
         addTargetRequirementDecorations(irAggType, decl);
 
+        // Build decoration operands beside the nominal type, inside the same generic
+        // environment. The callback uses ordinary lowering for checked types.
+        IRBuilder decorationBuilder = *subBuilder;
+        decorationBuilder.setInsertBefore(irAggType);
+        IRGenContext decorationContext = *subContext;
+        decorationContext.irBuilder = &decorationBuilder;
+        auto lowerDecorationType = [](Type* type, void* userData)
+        { return lowerType(static_cast<IRGenContext*>(userData), type); };
+        PortableRT::addStageInputDecoration(
+            &decorationBuilder,
+            decorationContext.getLinkage(),
+            decorationContext.astBuilder,
+            decl,
+            irAggType,
+            lowerDecorationType,
+            &decorationContext);
+        PortableRT::addShaderListDecoration(
+            &decorationBuilder,
+            decorationContext.getLinkage(),
+            decorationContext.astBuilder,
+            decl,
+            irAggType,
+            lowerDecorationType,
+            &decorationContext);
+
         return LoweredValInfo::simple(finalFinishedVal);
     }
 
@@ -16138,6 +16184,34 @@ static SourceLoc _getTypeNestingDiagnosticPos(TypeLayout* typeLayout)
     return SourceLoc();
 }
 
+/// Lowers the checked schema's public identity for a trace program descriptor layout.
+/// Consider TraceProgramDescriptor<Schema<int>>: the checked application carries Schema<int>
+/// and its conformance witness. Use its type argument and the same declaration mangling as
+/// ISession::getTypeRTTIMangledName so Metal can match its tables to the reflected schema.
+static IRStringLit* _lowerTraceProgramDescriptorSchemaName(
+    IRLayoutGenContext* context,
+    TraceProgramDescriptorType* type)
+{
+    auto declRef = type->getDeclRef();
+    auto generic = as<GenericDecl>(declRef.getDecl()->parentDecl);
+    SLANG_RELEASE_ASSERT(generic);
+    auto application = SubstitutionSet(declRef).findGenericAppDeclRef(generic);
+    SLANG_RELEASE_ASSERT(application);
+    Type* schemaType = nullptr;
+    for (auto argument : application->getArgs())
+    {
+        if (auto argumentType = as<Type>(argument->resolve()))
+        {
+            SLANG_RELEASE_ASSERT(!schemaType);
+            schemaType = argumentType;
+        }
+    }
+    auto schema = as<DeclRefType>(schemaType);
+    SLANG_RELEASE_ASSERT(schema);
+    return context->irBuilder->getStringValue(
+        getMangledName(context->astBuilder, schema->getDeclRef()).getUnownedSlice());
+}
+
 IRTypeLayout* lowerTypeLayout(IRLayoutGenContext* context, TypeLayout* typeLayout)
 {
     static constexpr UInt kMaxIRLayoutLoweringRecursionDepth = 128;
@@ -16166,7 +16240,14 @@ IRTypeLayout* lowerTypeLayout(IRLayoutGenContext* context, TypeLayout* typeLayou
     // one of the cases that requires a dedicated sub-type
     // of IR type layout.
     //
-    if (auto paramGroupTypeLayout = as<ParameterGroupTypeLayout>(typeLayout))
+    if (auto descriptor = as<TraceProgramDescriptorType>(typeLayout->getType()))
+    {
+        IRTraceProgramDescriptorTypeLayout::Builder builder(
+            context->irBuilder,
+            _lowerTraceProgramDescriptorSchemaName(context, descriptor));
+        return _lowerTypeLayoutCommon(&builder, typeLayout);
+    }
+    else if (auto paramGroupTypeLayout = as<ParameterGroupTypeLayout>(typeLayout))
     {
         IRParameterGroupTypeLayout::Builder builder(context->irBuilder);
 
@@ -16389,7 +16470,26 @@ IREntryPointLayout* lowerEntryPointLayout(
     IRLayoutGenContext* context,
     EntryPointLayout* entryPointLayout)
 {
-    auto irParamsLayout = lowerVarLayout(context, entryPointLayout->parametersLayout);
+    IRVarLayout* irParamsLayout = nullptr;
+    if (entryPointLayout->portableRTRecordLayout)
+    {
+        // A portable stage's reflected record is an anonymous compiler-provided parameter.
+        // It is not a source field or a tuple element, so generate its entry-local key here,
+        // where that identity is owned. Adapter synthesis consumes this exact resource layout
+        // before replacing the logical signature with native payload/attribute parameters.
+        IRStructTypeLayout::Builder parameters(context->irBuilder);
+        parameters.addField(
+            context->irBuilder->createStructKey(),
+            lowerVarLayout(context, entryPointLayout->portableRTRecordLayout));
+        auto typeLayout = _lowerTypeLayoutCommon(
+            &parameters,
+            entryPointLayout->parametersLayout->getTypeLayout());
+        irParamsLayout = lowerVarLayout(context, entryPointLayout->parametersLayout, typeLayout);
+    }
+    else
+    {
+        irParamsLayout = lowerVarLayout(context, entryPointLayout->parametersLayout);
+    }
     auto irResultLayout = lowerEntryPointResultLayout(context, entryPointLayout->resultLayout);
 
     return context->irBuilder->getEntryPointLayout(irParamsLayout, irResultLayout);

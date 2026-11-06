@@ -4647,6 +4647,69 @@ err(
     span { loc = "location", message = "~section entry '~entry:Type' is listed more than once in schema '~schema:Type'" }
 )
 
+err(
+    "metal-ray-tracing-candidate-global-variable",
+    38094,
+    "global variable is unavailable from a Metal intersection function",
+    span { loc = "location", message = "move mutable global state used by intersection or any-hit logic into a bindable buffer resource" }
+)
+
+err(
+    "metal-ray-tracing-candidate-resource-kind",
+    38095,
+    "resource cannot be passed directly to a Metal intersection function",
+    span { loc = "location", message = "Metal intersection functions accept device or constant buffer parameters, not direct texture or sampler parameters" }
+)
+
+err(
+    "invalid-metal-ray-tracing-max-levels",
+    38096,
+    "invalid Metal acceleration-structure topology",
+    span { loc = "location", message = "MultiLevelAccelerationStructure requires a level count in [1, 32], not '~levelCount:Int'" }
+)
+
+err(
+    "metal-ray-tracing-multilevel-requires-metallib31",
+    38097,
+    "multi-level Metal ray tracing requires Metal 3.1",
+    span { loc = "location", message = "select metallib_3_1 or newer to trace a MultiLevelAccelerationStructure with two or more levels" }
+)
+
+err(
+    "metal-ray-tracing-instance-motion-requires-instancing",
+    38098,
+    "instance motion requires an instanced acceleration structure",
+    span { loc = "location", message = "MultiLevelAccelerationStructure<1> has no instances and cannot use instance motion" }
+)
+
+err(
+    "metal-ray-tracing-acceleration-structure-motion-conflict",
+    38099,
+    "incompatible Metal acceleration-structure requirements",
+    span { loc = "location", message = "traces sharing this acceleration-structure value or storage require incompatible native motion types" }
+)
+
+err(
+    "metal-ray-tracing-unbound-invocation",
+    38111,
+    "Metal ray-tracing operation has no stage invocation ABI; compile into a selected stage/schema or serialize the module for later linking",
+    span { loc = "location", message = "operation '~operation' in an exported helper has no invocation state provider" }
+)
+
+err(
+    "metal-ray-tracing-standalone-candidate",
+    38112,
+    "standalone Metal AnyHit/Intersection requires a trace schema",
+    span { loc = "location", message = "compile through a trace schema to provide the candidate-state and AnyHit callback ABI" }
+)
+
+err(
+    "metal-ray-tracing-record-layout",
+    38113,
+    "Metal ray-tracing Record requires a fixed-size inline storage layout supported by the descriptor ABI",
+    span { loc = "location", message = "Record must have a supported storage layout, alignment at most 16 bytes, and a record stride representable in 32 bits" }
+)
+
 
 err(
     "specialization-parameter-of-name-not-specialized",

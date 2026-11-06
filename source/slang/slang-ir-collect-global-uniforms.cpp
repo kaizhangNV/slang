@@ -2,6 +2,8 @@
 #include "slang-ir-collect-global-uniforms.h"
 
 #include "slang-ir-insts.h"
+#include "slang-ir-metal-portable-ray-tracing-context.h"
+#include "slang-ir-util.h"
 
 namespace Slang
 {
@@ -63,6 +65,20 @@ struct CollectGlobalUniformParametersContext
         default:
             return nullptr;
         }
+    }
+
+    // Preserves the checked value type before a layout's global key becomes an untyped key.
+    // A global parameter already has its value type; a lowered varying can instead be a load
+    // of that value or the backing global variable, whose pointer must be unwrapped once.
+    IRType* getGlobalLayoutFieldValueType(IRBuilder* builder, IRInst* key)
+    {
+        if (auto globalParam = _getGlobalParamFromLayoutFieldKey(key))
+            return globalParam->getFullType();
+        auto type = key->getDataType();
+        SLANG_RELEASE_ASSERT(type);
+        if (auto valueType = tryGetPointedToType(builder, type))
+            return valueType;
+        return type;
     }
 
     // This is a relatively simple pass, and it is all driven
@@ -229,10 +245,32 @@ struct CollectGlobalUniformParametersContext
             // layout so that the "key" for the field is the corresponding
             // global shader parameter.
 
-            // Save the original global param before replacement.
-            auto globalParam = _getGlobalParamFromLayoutFieldKey(fieldLayoutAttr->getFieldKey());
+            // Save the original key while it still carries its checked type. Layout-only
+            // resources have no nominal GlobalParams field from which to recover that type.
+            auto originalFieldKey = fieldLayoutAttr->getFieldKey();
+            auto globalParam = _getGlobalParamFromLayoutFieldKey(originalFieldKey);
 
             auto globalParamLayout = fieldLayoutAttr->getLayout();
+
+            // The uniform wrapper replaces these ProgramLayout-owned parameters. Carry the
+            // earliest declaration coordinate so its physical resource leaves keep a stable
+            // place in the independently compiled Metal shader resource context.
+            if (globalParam &&
+                globalParamLayout->getTypeLayout()->findSizeAttr(LayoutResourceKind::Uniform))
+            {
+                if (auto resource =
+                        globalParam->findDecoration<IRMetalRTGlobalResourceDecoration>())
+                {
+                    if (!wrapperParam->findDecoration<IRMetalRTGlobalResourceDecoration>())
+                    {
+                        builder->addDecoration(
+                            wrapperParam,
+                            kIROp_MetalRTGlobalResourceDecoration,
+                            resource->getOperand(0));
+                        builder->addKeepAliveDecoration(wrapperParam);
+                    }
+                }
+            }
 
             // Set insert position to a valid instruction under the global parent scope so we can
             // create struct keys.
@@ -262,7 +300,27 @@ struct CollectGlobalUniformParametersContext
             // passes can handle that case, since they would need to do so in general.
             //
             if (!globalParamLayout->getTypeLayout()->findSizeAttr(LayoutResourceKind::Uniform))
+            {
+                builder->addDecoration(
+                    fieldKey,
+                    kIROp_LayoutFieldTypeDecoration,
+                    getGlobalLayoutFieldValueType(builder, originalFieldKey));
+
+                // The element and offset-element layouts can use distinct field-layout attrs.
+                // Replace both here, while the original symbol and its checked type are known.
+                // Leaving one live global key would make later metadata rewrites appear to be
+                // executable global references during explicit-global-context legalization.
+                List<IRStructFieldLayoutAttr*> pairedFieldLayouts;
+                for (auto use = originalFieldKey->firstUse; use; use = use->nextUse)
+                {
+                    if (auto field = as<IRStructFieldLayoutAttr>(use->getUser()))
+                        if (field->getFieldKey() == originalFieldKey)
+                            pairedFieldLayouts.add(field);
+                }
+                for (auto field : pairedFieldLayouts)
+                    builder->replaceOperand(field->getOperands(), fieldKey);
                 continue;
+            }
 
             SLANG_ASSERT(globalParam);
 
@@ -387,6 +445,38 @@ struct CollectGlobalUniformParametersContext
         }
     }
 };
+
+void preserveMetalPortableRayTracingGlobalParameters(
+    IRModule* module,
+    IRVarLayout* globalScopeVarLayout)
+{
+    if (!globalScopeVarLayout)
+        return;
+    auto typeLayout = globalScopeVarLayout->getTypeLayout();
+    if (auto group = as<IRParameterGroupTypeLayout>(typeLayout))
+        typeLayout = group->getElementVarLayout()->getTypeLayout();
+    auto structure = cast<IRStructTypeLayout>(typeLayout);
+    CollectGlobalUniformParametersContext context;
+    IRBuilder builder(module);
+    IRIntegerValue layoutIndex = 0;
+    // The linker has cloned the complete component layout. Its declaration sequence survives
+    // even when a shader reads no globals or two declarations intentionally alias one binding.
+    for (auto field : structure->getFieldLayoutAttrs())
+    {
+        auto parameter = context._getGlobalParamFromLayoutFieldKey(field->getFieldKey());
+        if (parameter &&
+            !field->getLayout()->findOffsetAttr(LayoutResourceKind::SpecializationConstant))
+        {
+            builder.addDecoration(
+                parameter,
+                kIROp_MetalRTGlobalResourceDecoration,
+                builder.getIntValue(builder.getIntType(), layoutIndex));
+            if (!parameter->findDecoration<IRKeepAliveDecoration>())
+                builder.addKeepAliveDecoration(parameter);
+        }
+        ++layoutIndex;
+    }
+}
 
 void collectGlobalUniformParameters(
     IRModule* module,

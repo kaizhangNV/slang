@@ -25,7 +25,7 @@ struct TestClosestHit : rt::IClosestHitShader
     static void invoke(rt::ClosestHitInput<TestHitContext> input) {}
 }
 
-[require(closesthit)]
+[require(portable_closesthit)]
 void invalidStorage(
         TestClosestHit stage,
         rt::ClosestHitInput<TestHitContext> input)
@@ -45,7 +45,7 @@ rt::ClosestHitInput<TestHitContext> invalidResult();
     ^^^^^^^^^^^^^^^ ray-tracing stage input type 'rt.ClosestHitInput<TestHitContext>' may only be used as an 'in' parameter or an initialized local copy
 */
 
-[require(closesthit)]
+[require(portable_closesthit)]
 void invalidInterfaceValue(rt::IClosestHitShader stage) {}
 //CHECK:                                         ^^^^^ runtime use of a structural ray-tracing stage type
 //CHECK:                                         ^^^^^ structural ray-tracing stage type 'rt.IClosestHitShader' has no runtime representation

@@ -7,6 +7,7 @@
 #include "slang-compiler.h"
 #include "slang-deprecated.h"
 #include "slang-lookup.h"
+#include "slang-reflection-portable-ray-tracing.h"
 #include "slang-syntax.h"
 #include "slang-type-layout.h"
 #include "slang.h"
@@ -1181,6 +1182,207 @@ SLANG_API SlangReflectionType* spReflection_FindTypeByName(
         return nullptr;
     }
 #endif
+}
+
+SLANG_API SlangReflectionTraceProgramSchema* spReflection_findTraceProgramSchema(
+    SlangReflection* reflection,
+    const char* name)
+{
+    return (SlangReflectionTraceProgramSchema*)PortableRT::findSchemaReflection(
+        convert(reflection),
+        name);
+}
+
+SLANG_API SlangReflectionType* spReflectionTraceProgramSchema_getType(
+    SlangReflectionTraceProgramSchema* schema)
+{
+    auto value = (PortableRT::SchemaReflection*)schema;
+    return value ? convert(value->type) : nullptr;
+}
+
+SLANG_API SlangReflectionType* spReflectionTraceProgramSchema_getTraceContextType(
+    SlangReflectionTraceProgramSchema* schema)
+{
+    auto value = (PortableRT::SchemaReflection*)schema;
+    return value ? convert(value->traceContextType) : nullptr;
+}
+
+SLANG_API SlangUInt
+spReflectionTraceProgramSchema_getHitGroupCount(SlangReflectionTraceProgramSchema* schema)
+{
+    auto value = (PortableRT::SchemaReflection*)schema;
+    return value ? SlangUInt(value->hitGroups.getCount()) : 0;
+}
+
+SLANG_API SlangReflectionRayTracingHitGroup* spReflectionTraceProgramSchema_getHitGroup(
+    SlangReflectionTraceProgramSchema* schema,
+    SlangUInt index)
+{
+    auto value = (PortableRT::SchemaReflection*)schema;
+    return value && index < SlangUInt(value->hitGroups.getCount())
+               ? (SlangReflectionRayTracingHitGroup*)value->hitGroups[index].Ptr()
+               : nullptr;
+}
+
+SLANG_API SlangUInt
+spReflectionTraceProgramSchema_getMissShaderCount(SlangReflectionTraceProgramSchema* schema)
+{
+    auto value = (PortableRT::SchemaReflection*)schema;
+    return value ? SlangUInt(value->missShaders.getCount()) : 0;
+}
+
+SLANG_API SlangReflectionRayTracingMissShader* spReflectionTraceProgramSchema_getMissShader(
+    SlangReflectionTraceProgramSchema* schema,
+    SlangUInt index)
+{
+    auto value = (PortableRT::SchemaReflection*)schema;
+    return value && index < SlangUInt(value->missShaders.getCount())
+               ? (SlangReflectionRayTracingMissShader*)value->missShaders[index].Ptr()
+               : nullptr;
+}
+
+SLANG_API SlangUInt
+spReflectionTraceProgramSchema_getCallableShaderCount(SlangReflectionTraceProgramSchema* schema)
+{
+    auto value = (PortableRT::SchemaReflection*)schema;
+    return value ? SlangUInt(value->callableShaders.getCount()) : 0;
+}
+
+SLANG_API SlangReflectionRayTracingCallableShader* spReflectionTraceProgramSchema_getCallableShader(
+    SlangReflectionTraceProgramSchema* schema,
+    SlangUInt index)
+{
+    auto value = (PortableRT::SchemaReflection*)schema;
+    return value && index < SlangUInt(value->callableShaders.getCount())
+               ? (SlangReflectionRayTracingCallableShader*)value->callableShaders[index].Ptr()
+               : nullptr;
+}
+
+SLANG_API SlangUInt
+spReflectionRayTracingEntry_getFunctionIndex(SlangReflectionRayTracingEntry* entry)
+{
+    auto value = (PortableRT::EntryReflection*)entry;
+    return value ? value->functionIndex : 0;
+}
+
+SLANG_API SlangReflectionType* spReflectionRayTracingEntry_getType(
+    SlangReflectionRayTracingEntry* entry)
+{
+    auto value = (PortableRT::EntryReflection*)entry;
+    return value ? convert(value->type) : nullptr;
+}
+
+SLANG_API SlangReflectionType* spReflectionRayTracingEntry_getContextType(
+    SlangReflectionRayTracingEntry* entry)
+{
+    auto value = (PortableRT::EntryReflection*)entry;
+    return value ? convert(value->contextType) : nullptr;
+}
+
+SLANG_API SlangReflectionType* spReflectionRayTracingEntry_getRecordType(
+    SlangReflectionRayTracingEntry* entry)
+{
+    auto value = (PortableRT::EntryReflection*)entry;
+    return value ? convert(value->recordType) : nullptr;
+}
+
+SLANG_API SlangReflectionTypeLayout* spReflectionRayTracingEntry_getRecordTypeLayout(
+    SlangReflectionRayTracingEntry* entry)
+{
+    auto value = (PortableRT::EntryReflection*)entry;
+    return value ? convert(value->recordTypeLayout) : nullptr;
+}
+
+SLANG_API SlangReflectionType* spReflectionRayTracingHitGroup_getPayloadType(
+    SlangReflectionRayTracingHitGroup* group)
+{
+    auto value = (PortableRT::HitGroupReflection*)group;
+    return value ? convert(value->payloadType) : nullptr;
+}
+
+SLANG_API SlangReflectionType* spReflectionRayTracingHitGroup_getPrimitiveType(
+    SlangReflectionRayTracingHitGroup* group)
+{
+    auto value = (PortableRT::HitGroupReflection*)group;
+    return value ? convert(value->primitiveType) : nullptr;
+}
+
+SLANG_API SlangReflectionType* spReflectionRayTracingHitGroup_getIntersectionAttributesType(
+    SlangReflectionRayTracingHitGroup* group)
+{
+    auto value = (PortableRT::HitGroupReflection*)group;
+    return value ? convert(value->attributesType) : nullptr;
+}
+
+SLANG_API SlangReflectionRayTracingStage* spReflectionRayTracingHitGroup_getClosestHit(
+    SlangReflectionRayTracingHitGroup* group)
+{
+    auto value = (PortableRT::HitGroupReflection*)group;
+    return value ? (SlangReflectionRayTracingStage*)value->closestHit.Ptr() : nullptr;
+}
+
+SLANG_API SlangReflectionRayTracingStage* spReflectionRayTracingHitGroup_getAnyHit(
+    SlangReflectionRayTracingHitGroup* group)
+{
+    auto value = (PortableRT::HitGroupReflection*)group;
+    return value ? (SlangReflectionRayTracingStage*)value->anyHit.Ptr() : nullptr;
+}
+
+SLANG_API SlangReflectionRayTracingStage* spReflectionRayTracingHitGroup_getIntersection(
+    SlangReflectionRayTracingHitGroup* group)
+{
+    auto value = (PortableRT::HitGroupReflection*)group;
+    return value ? (SlangReflectionRayTracingStage*)value->intersection.Ptr() : nullptr;
+}
+
+SLANG_API SlangReflectionType* spReflectionRayTracingMissShader_getPayloadType(
+    SlangReflectionRayTracingMissShader* shader)
+{
+    auto value = (PortableRT::MissShaderReflection*)shader;
+    return value ? convert(value->payloadType) : nullptr;
+}
+
+SLANG_API SlangReflectionRayTracingStage* spReflectionRayTracingMissShader_getMiss(
+    SlangReflectionRayTracingMissShader* shader)
+{
+    auto value = (PortableRT::MissShaderReflection*)shader;
+    return value ? (SlangReflectionRayTracingStage*)value->miss.Ptr() : nullptr;
+}
+
+SLANG_API SlangReflectionType* spReflectionRayTracingCallableShader_getDataType(
+    SlangReflectionRayTracingCallableShader* shader)
+{
+    auto value = (PortableRT::CallableShaderReflection*)shader;
+    return value ? convert(value->callableDataType) : nullptr;
+}
+
+SLANG_API SlangReflectionRayTracingStage* spReflectionRayTracingCallableShader_getCallable(
+    SlangReflectionRayTracingCallableShader* shader)
+{
+    auto value = (PortableRT::CallableShaderReflection*)shader;
+    return value ? (SlangReflectionRayTracingStage*)value->callable.Ptr() : nullptr;
+}
+
+SLANG_API SlangReflectionType* spReflectionRayTracingStage_getType(
+    SlangReflectionRayTracingStage* stage)
+{
+    auto value = (PortableRT::StageReflection*)stage;
+    return value ? convert(value->type) : nullptr;
+}
+
+SLANG_API SlangStage spReflectionRayTracingStage_getStage(SlangReflectionRayTracingStage* stage)
+{
+    auto value = (PortableRT::StageReflection*)stage;
+    return value ? SlangStage(value->stage) : SLANG_STAGE_NONE;
+}
+
+SLANG_API const char* spReflectionRayTracingStage_getEntryPointName(
+    SlangReflectionRayTracingStage* stage)
+{
+    auto value = (PortableRT::StageReflection*)stage;
+    return value && value->defaultEntryPointName.getLength()
+               ? value->defaultEntryPointName.getBuffer()
+               : nullptr;
 }
 
 

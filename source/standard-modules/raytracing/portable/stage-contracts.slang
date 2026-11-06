@@ -10,10 +10,10 @@ namespace rt
 /// can forward an existing input to this method, using the caller's payload and shader record.
 ///
 /// @par Constraints
-/// Requires the `closesthit` capability.
+/// Requires the `portable_closesthit` capability.
 /// Implementations must be user-defined structs. Stage dispatch calls static `invoke` without
 /// constructing an object; per-invocation state is supplied through its input.
-[require(closesthit)]
+[require(portable_closesthit)]
 __magic_type(ClosestHitShaderType)
 public interface IClosestHitShader
 {
@@ -22,6 +22,7 @@ public interface IClosestHitShader
     /// @par Constraints
     /// Must conform to `IHitContext`. A hit group using this shader requires this type to equal
     /// the group's `Context`.
+    [KnownBuiltin("RayTracingStageContext")]
     associatedtype Context : IHitContext;
 
     /// Implements the closest-hit stage selected for the committed hit.
@@ -36,10 +37,10 @@ public interface IClosestHitShader
 /// control flow.
 ///
 /// @par Constraints
-/// Requires the `anyhit` capability.
+/// Requires the `portable_anyhit` capability.
 /// Implementations must be user-defined structs. Stage dispatch calls static `invoke` without
 /// constructing an object; per-invocation state is supplied through its input.
-[require(anyhit)]
+[require(portable_anyhit)]
 __magic_type(AnyHitShaderType)
 public interface IAnyHitShader
 {
@@ -48,6 +49,7 @@ public interface IAnyHitShader
     /// @par Constraints
     /// Must conform to `IHitContext`. A hit group using this shader requires this type to equal
     /// the group's `Context`.
+    [KnownBuiltin("RayTracingStageContext")]
     associatedtype Context : IHitContext;
 
     /// Implements the any-hit stage for an intersection candidate.
@@ -70,6 +72,7 @@ public interface IAnyHitShader
 /// intersection shader for a builtin primitive. Sealing this interface prevents user-defined
 /// placeholders from bypassing the procedural shader contract.
 [sealed]
+[KnownBuiltin("RayTracingIntersectionStage")]
 public interface IIntersectionStage
 {
     /// Defines the shared context for procedural or hardware intersection.
@@ -77,6 +80,7 @@ public interface IIntersectionStage
     /// @par Constraints
     /// Must conform to `IHitContext`. A hit group using this stage requires this type to equal
     /// the group's `Context`.
+    [KnownBuiltin("RayTracingStageContext")]
     associatedtype Context : IHitContext;
 }
 
@@ -92,10 +96,10 @@ public interface IIntersectionStage
 /// @par Constraints
 /// Inherits `Context : IHitContext` from `IIntersectionStage` and further requires
 /// `Context.Primitive : ICustomIntersectionPrimitive`. Requires the
-/// `intersection` capability.
+/// `portable_intersection` capability.
 /// Implementations must be user-defined structs. Stage dispatch calls static `invoke` without
 /// constructing an object; per-invocation state is supplied through its input.
-[require(intersection)]
+[require(portable_intersection)]
 __magic_type(IntersectionShaderType)
 public interface IIntersectionShader : IIntersectionStage
 {
@@ -112,10 +116,10 @@ public interface IIntersectionShader : IIntersectionStage
 /// native miss entry point or the corresponding structural dispatch function.
 ///
 /// @par Constraints
-/// Requires the `miss` capability.
+/// Requires the `portable_miss` capability.
 /// Implementations must be user-defined structs. Stage dispatch calls static `invoke` without
 /// constructing an object; per-invocation state is supplied through its input.
-[require(miss)]
+[require(portable_miss)]
 __magic_type(MissShaderType)
 public interface IMissShader
 {
@@ -123,6 +127,7 @@ public interface IMissShader
     ///
     /// @par Constraints
     /// Must conform to `IPayloadContext`.
+    [KnownBuiltin("RayTracingStageContext")]
     associatedtype Context : IPayloadContext;
 
     /// Implements the miss stage for a trace that finds no accepted hit.
@@ -136,10 +141,10 @@ public interface IMissShader
 /// native callable entry point or the corresponding structural dispatch function.
 ///
 /// @par Constraints
-/// Requires the `callable` capability.
+/// Requires the `portable_callable` capability.
 /// Implementations must be user-defined structs. Stage dispatch calls static `invoke` without
 /// constructing an object; per-invocation state is supplied through its input.
-[require(callable)]
+[require(portable_callable)]
 __magic_type(CallableShaderType)
 public interface ICallableShader
 {
@@ -147,6 +152,7 @@ public interface ICallableShader
     ///
     /// @par Constraints
     /// Must conform to `ICallableContext`.
+    [KnownBuiltin("RayTracingStageContext")]
     associatedtype Context : ICallableContext;
 
     /// Implements the callable stage selected by `RayTracer.callShader`.
@@ -162,6 +168,7 @@ public interface ICallableShader
 ///
 /// @par Constraints
 /// `C` must conform to `IHitContext`. This type conforms to `IClosestHitShader` with `Context = C`.
+[KnownBuiltin("RayTracingNoClosestHit")]
 public struct NoClosestHit<C> : IClosestHitShader
     where C : IHitContext
 {
@@ -184,6 +191,7 @@ public struct NoClosestHit<C> : IClosestHitShader
 ///
 /// @par Constraints
 /// `C` must conform to `IHitContext`. This type conforms to `IAnyHitShader` with `Context = C`.
+[KnownBuiltin("RayTracingNoAnyHit")]
 public struct NoAnyHit<C> : IAnyHitShader
     where C : IHitContext
 {
@@ -208,6 +216,7 @@ public struct NoAnyHit<C> : IAnyHitShader
 /// `C` must conform to `IHitContext`, and `C.Primitive` must conform to
 /// `IBuiltinIntersectionPrimitive`, selecting hardware triangle or curve intersection. This type
 /// conforms to `IIntersectionStage` with `Context = C`.
+[KnownBuiltin("RayTracingNoIntersection")]
 public struct NoIntersection<C> : IIntersectionStage
     where C : IHitContext
     where C.Primitive : IBuiltinIntersectionPrimitive

@@ -219,12 +219,29 @@ enum class SyntheticResourceKnownID : uint32_t
     Coverage = 1,
 };
 
+/// Owns emitted names independently of the IR module and source reflection's lifetime.
+struct MetalRTFunctionMetadata
+{
+    String entryPointName;
+    slang::MetalRayTracingFunctionInfo info;
+};
+
+/// Records one concrete descriptor's final physical ABI, after target lowering and DCE.
+struct MetalRTProgramMetadata
+{
+    String schemaTypeMangledName;
+    slang::MetalRayTracingProgramInfo info;
+    List<slang::MetalRayTracingResourceInfo> resources;
+    List<MetalRTFunctionMetadata> functions;
+};
+
 class ArtifactPostEmitMetadata : public ComBaseObject,
                                  public IArtifactPostEmitMetadata,
                                  public slang::IBindlessResourceMetadata,
                                  public slang::ICoverageTracingMetadata,
                                  public slang::ISyntheticResourceMetadata,
-                                 public slang::ICooperativeTypesMetadata
+                                 public slang::ICooperativeTypesMetadata,
+                                 public slang::IMetalRayTracingMetadata
 {
 public:
     typedef ArtifactPostEmitMetadata ThisType;
@@ -268,6 +285,23 @@ public:
     getResourceInfo(uint32_t index, slang::SyntheticResourceInfo* outInfo) SLANG_OVERRIDE;
     SLANG_NO_THROW virtual SlangResult SLANG_MCALL
     findResourceIndexByID(uint32_t id, uint32_t* outIndex) SLANG_OVERRIDE;
+
+    // IMetalRayTracingMetadata
+    SLANG_NO_THROW uint32_t SLANG_MCALL getProgramCount() SLANG_OVERRIDE;
+    SLANG_NO_THROW SlangResult SLANG_MCALL getProgramInfo(
+        uint32_t programIndex,
+        slang::MetalRayTracingProgramInfo* outInfo) SLANG_OVERRIDE;
+    SLANG_NO_THROW SlangResult SLANG_MCALL findProgramBySchemaTypeMangledName(
+        const char* schemaTypeMangledName,
+        uint32_t* outProgramIndex) SLANG_OVERRIDE;
+    SLANG_NO_THROW SlangResult SLANG_MCALL getProgramResourceInfo(
+        uint32_t programIndex,
+        uint32_t resourceIndex,
+        slang::MetalRayTracingResourceInfo* outInfo) SLANG_OVERRIDE;
+    SLANG_NO_THROW SlangResult SLANG_MCALL getProgramFunctionInfo(
+        uint32_t programIndex,
+        uint32_t functionIndex,
+        slang::MetalRayTracingFunctionInfo* outInfo) SLANG_OVERRIDE;
 
     // ICooperativeTypesMetadata
     SLANG_NO_THROW virtual SlangUInt SLANG_MCALL getCooperativeMatrixTypeCount() SLANG_OVERRIDE;
@@ -334,6 +368,7 @@ public:
     // read-only and may return raw `const char*` pointers into the
     // stored `String`s.
     List<SyntheticResourceRecord> m_syntheticResources;
+    List<MetalRTProgramMetadata> m_metalRayTracingPrograms;
 };
 
 } // namespace Slang

@@ -1,6 +1,6 @@
 // slang-check-shader.cpp
 #include "slang-check-impl.h"
-#include "slang-check-portable-ray-tracing.h"
+#include "slang-portable-ray-tracing-utility.h"
 
 // This file encapsulates semantic checking logic primarily
 // related to shaders, including validating entry points,
@@ -915,7 +915,10 @@ void EntryPoint::_collectShaderParams()
                 return;
             }
 
-            m_shaderParams.add(shaderParamInfo);
+            // A portable stage's logical input is supplied by its generated adapter. It has no
+            // native parameter layout until that adapter is created.
+            if (!isStructuralRayTracingEntryPoint())
+                m_shaderParams.add(shaderParamInfo);
         }
     }
 }
@@ -1831,13 +1834,6 @@ static void validateEntryPointCapabilities(
     auto linkage = entryPoint->getLinkage();
     auto entryPointFuncDecl = entryPoint->getFuncDecl();
     CapabilitySet stageCapabilitySet{entryPoint->getProfile().getCapabilityName()};
-    if (!entryPoint->isStructuralRayTracingEntryPoint() &&
-        isRaytracingStage(entryPoint->getStage()))
-    {
-        // Shared stage names include Metal's portable roles. A native [shader("miss")] entry
-        // still needs a target with a ray-tracing pipeline, unlike a portable IMissShader.
-        stageCapabilitySet.join(CapabilitySet{CapabilityName::raytracing});
-    }
 
     for (auto target : linkage->targets)
     {
