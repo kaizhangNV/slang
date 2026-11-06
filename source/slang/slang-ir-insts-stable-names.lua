@@ -938,4 +938,5 @@ return {
 	["metalRTReportHit"] = 947,
 	["metalRTCallShader"] = 948,
 	["Decoration.PortableRTProgramDecoration"] = 980,
+	["Layout.TypeLayout.traceProgramDescriptorTypeLayout"] = 981,
 }

@@ -16184,45 +16184,33 @@ static SourceLoc _getTypeNestingDiagnosticPos(TypeLayout* typeLayout)
     return SourceLoc();
 }
 
-/// Keeps the source schema identity in layout operands, where ordinary canonical uniquing can
-/// distinguish otherwise identical descriptor layouts. Consider two fields of types
-/// TraceProgramDescriptor<Schema<int>> and TraceProgramDescriptor<Schema<float>>. Both occupy
-/// one binding, but the host must match their generated tables to different reflected schemas.
-/// This boundary still owns the checked AST type, so it can use precisely the same declaration
-/// mangling as ISession::getTypeRTTIMangledName instead of interpreting specialized IR symbols.
-struct PortableRTDescriptorLayoutBuilder : IRTypeLayout::Builder
+/// Lowers the checked schema's public identity for a trace program descriptor layout.
+/// Consider TraceProgramDescriptor<Schema<int>>: the checked application carries Schema<int>
+/// and its conformance witness. Use its type argument and the same declaration mangling as
+/// ISession::getTypeRTTIMangledName so Metal can match its tables to the reflected schema.
+static IRStringLit* _lowerTraceProgramDescriptorSchemaName(
+    IRLayoutGenContext* context,
+    TraceProgramDescriptorType* type)
 {
-    IRStringLit* schemaName;
-
-    PortableRTDescriptorLayoutBuilder(IRLayoutGenContext* context, TraceProgramDescriptorType* type)
-        : IRTypeLayout::Builder(context->irBuilder)
+    auto declRef = type->getDeclRef();
+    auto generic = as<GenericDecl>(declRef.getDecl()->parentDecl);
+    SLANG_RELEASE_ASSERT(generic);
+    auto application = SubstitutionSet(declRef).findGenericAppDeclRef(generic);
+    SLANG_RELEASE_ASSERT(application);
+    Type* schemaType = nullptr;
+    for (auto argument : application->getArgs())
     {
-        auto declRef = type->getDeclRef();
-        auto generic = as<GenericDecl>(declRef.getDecl()->parentDecl);
-        SLANG_RELEASE_ASSERT(generic);
-        auto application = SubstitutionSet(declRef).findGenericAppDeclRef(generic);
-        SLANG_RELEASE_ASSERT(application);
-        Type* schemaType = nullptr;
-        for (auto argument : application->getArgs())
+        if (auto argumentType = as<Type>(argument->resolve()))
         {
-            if (auto argumentType = as<Type>(argument->resolve()))
-            {
-                SLANG_RELEASE_ASSERT(!schemaType);
-                schemaType = argumentType;
-            }
+            SLANG_RELEASE_ASSERT(!schemaType);
+            schemaType = argumentType;
         }
-        auto schema = as<DeclRefType>(schemaType);
-        SLANG_RELEASE_ASSERT(schema);
-        schemaName = context->irBuilder->getStringValue(
-            getMangledName(context->astBuilder, schema->getDeclRef()).getUnownedSlice());
     }
-
-    void addAttrsImpl(List<IRInst*>& operands) SLANG_OVERRIDE
-    {
-        IRInst* args[] = {schemaName};
-        operands.add(getIRBuilder()->getAttr(kIROp_PortableRTSchemaNameAttr, 1, args));
-    }
-};
+    auto schema = as<DeclRefType>(schemaType);
+    SLANG_RELEASE_ASSERT(schema);
+    return context->irBuilder->getStringValue(
+        getMangledName(context->astBuilder, schema->getDeclRef()).getUnownedSlice());
+}
 
 IRTypeLayout* lowerTypeLayout(IRLayoutGenContext* context, TypeLayout* typeLayout)
 {
@@ -16254,7 +16242,9 @@ IRTypeLayout* lowerTypeLayout(IRLayoutGenContext* context, TypeLayout* typeLayou
     //
     if (auto descriptor = as<TraceProgramDescriptorType>(typeLayout->getType()))
     {
-        PortableRTDescriptorLayoutBuilder builder(context, descriptor);
+        IRTraceProgramDescriptorTypeLayout::Builder builder(
+            context->irBuilder,
+            _lowerTraceProgramDescriptorSchemaName(context, descriptor));
         return _lowerTypeLayoutCommon(&builder, typeLayout);
     }
     else if (auto paramGroupTypeLayout = as<ParameterGroupTypeLayout>(typeLayout))

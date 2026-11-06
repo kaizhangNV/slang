@@ -3234,6 +3234,11 @@ local insts = {
 					{
 						typeLayout = { struct_name = "TypeLayoutBase" },
 					},
+					{
+						traceProgramDescriptorTypeLayout = {
+							operands = { { "schemaTypeMangledName", "IRStringLit" } },
+						},
+					},
 					{ parameterGroupTypeLayout = { min_operands = 2 } },
 					{
 						arrayTypeLayout = { min_operands = 1 },
@@ -3261,12 +3266,6 @@ local insts = {
 	{
 		Attr = {
 			hoistable = true,
-			{
-				PortableRTSchemaName = {
-					struct_name = "PortableRTSchemaNameAttr",
-					operands = { { "schemaTypeMangledName", "IRStringLit" } },
-				},
-			},
 			{ stage = { struct_name = "StageAttr", operands = { { "stageOperand", "IRIntLit" } } } },
 			{
 				structFieldLayout = {
