@@ -405,55 +405,65 @@ SLANG_UNIT_TEST(portableRayTracingSPIRVRecordBindingAndReflection)
     // No adapter or target code has been requested when the host obtains these layouts.
     auto layout = linked->getLayout(0, diagnostics.writeRef());
     SLANG_CHECK_ABORT(layout != nullptr);
-    SLANG_CHECK_ABORT(layout->getParameterCount() == 2);
-    SLANG_CHECK_ABORT(layout->getEntryPointCount() == 4);
+    SLANG_CHECK_ABORT(layout->getParameterCount() == 2);  // globalMaterial and nativeRecord.
+    SLANG_CHECK_ABORT(layout->getEntryPointCount() == 4); // The four selected miss shaders.
     const auto shaderRecord = slang::ParameterCategory::ShaderRecord;
     const auto descriptor = slang::ParameterCategory::DescriptorTableSlot;
     const auto uniform = slang::ParameterCategory::Uniform;
+    // Get: ConstantBuffer<Material> globalMaterial;
     auto globalType = layout->getParameterByIndex(0)->getTypeLayout();
-    SLANG_CHECK(globalType->getSize(shaderRecord) == 0);
-    SLANG_CHECK(globalType->getSize(descriptor) == 1);
+    SLANG_CHECK(globalType->getSize(shaderRecord) == 0); // No shader-record role on this global.
+    SLANG_CHECK(globalType->getSize(descriptor) == 1);   // One descriptor for the ordinary buffer.
+    // Get: [[vk::shader_record]] ConstantBuffer<Material> nativeRecord;
     auto nativeRecordType = layout->getParameterByIndex(1)->getTypeLayout();
-    SLANG_CHECK(nativeRecordType->getSize(shaderRecord) == 1);
-    SLANG_CHECK(nativeRecordType->getSize(descriptor) == 0);
+    SLANG_CHECK(nativeRecordType->getSize(shaderRecord) == 1); // One shader-record role.
+    SLANG_CHECK(nativeRecordType->getSize(descriptor) == 0);   // SBT data needs no descriptor.
+    // Get Material's layout inside nativeRecord.
     auto nativeRecordElement = nativeRecordType->getElementTypeLayout();
     SLANG_CHECK_ABORT(nativeRecordElement != nullptr);
+    // Material has weights, scale, color, and opacity.
     SLANG_CHECK_ABORT(nativeRecordElement->getFieldCount() == 4);
 
+    // MaterialMiss and OtherMaterialMiss each expose a generated Material record.
     slang::TypeLayoutReflection* recordElements[2];
     for (int i = 0; i < 2; ++i)
     {
         auto entry = layout->getEntryPointByIndex(i);
-        SLANG_CHECK_ABORT(entry->getParameterCount() == 1);
+        SLANG_CHECK_ABORT(entry->getParameterCount() == 1); // One generated record parameter.
         auto record = entry->getParameterByIndex(0);
-        SLANG_CHECK(record->getVariable() == nullptr);
-        SLANG_CHECK(record->getName() == nullptr);
+        SLANG_CHECK(record->getVariable() == nullptr); // Generated record has no source variable.
+        SLANG_CHECK(record->getName() == nullptr);     // The generated parameter is anonymous.
         auto type = record->getTypeLayout();
+        // The record is reflected as ConstantBuffer<Material>.
         SLANG_CHECK(type->getKind() == slang::TypeReflection::Kind::ConstantBuffer);
-        SLANG_CHECK(type->getSize(shaderRecord) == 1);
-        SLANG_CHECK(type->getSize(descriptor) == 0);
+        SLANG_CHECK(type->getSize(shaderRecord) == 1); // One shader-record role.
+        SLANG_CHECK(type->getSize(descriptor) == 0);   // SBT data needs no descriptor.
+        // No constant-buffer register is allocated.
         SLANG_CHECK(type->getSize(slang::ParameterCategory::ConstantBuffer) == 0);
+        // The buffer container also carries the shader-record role.
         SLANG_CHECK(type->getContainerVarLayout()->getTypeLayout()->getSize(shaderRecord) == 1);
         auto element = type->getElementTypeLayout();
         SLANG_CHECK_ABORT(element != nullptr);
         recordElements[i] = element;
 
-        // The portable record must follow the same rules as an explicitly declared shader
-        // record, including the array stride and vector padding within its application data.
+        // Material has the same byte size as in nativeRecord.
         SLANG_CHECK(element->getSize(uniform) == nativeRecordElement->getSize(uniform));
-        SLANG_CHECK_ABORT(element->getFieldCount() == 4);
+        SLANG_CHECK_ABORT(element->getFieldCount() == 4); // weights, scale, color, and opacity.
+        // Each Material field has the same byte offset as in nativeRecord.
         for (unsigned field = 0; field < 4; ++field)
         {
             SLANG_CHECK(
                 element->getFieldByIndex(field)->getOffset(uniform) ==
                 nativeRecordElement->getFieldByIndex(field)->getOffset(uniform));
         }
+        // The byte stride between weights[0] and weights[1] also matches nativeRecord.
         SLANG_CHECK(
             element->getFieldByIndex(0)->getTypeLayout()->getElementStride(
                 SLANG_PARAMETER_CATEGORY_UNIFORM) ==
             nativeRecordElement->getFieldByIndex(0)->getTypeLayout()->getElementStride(
                 SLANG_PARAMETER_CATEGORY_UNIFORM));
     }
+    // NoRecordMiss uses void; EmptyRecordMiss uses an empty struct. Neither needs a record binding.
     SLANG_CHECK(layout->getEntryPointByIndex(2)->getParameterCount() == 0);
     SLANG_CHECK(layout->getEntryPointByIndex(3)->getParameterCount() == 0);
 
@@ -465,13 +475,14 @@ SLANG_UNIT_TEST(portableRayTracingSPIRVRecordBindingAndReflection)
         SLANG_CHECK_ABORT(code != nullptr);
         String text(
             UnownedStringSlice((const char*)code->getBufferPointer(), code->getBufferSize()));
-        // The globals are unused. The remaining shader-record resource must not introduce a
-        // descriptor that the host would have to bind in addition to writing the SBT bytes.
-        SLANG_CHECK(text.indexOf(" DescriptorSet ") < 0);
-        SLANG_CHECK(text.indexOf(" Binding ") < 0);
+        // Unused globals are removed; SBT bytes need no descriptor.
+        SLANG_CHECK(text.indexOf(" DescriptorSet ") < 0); // No descriptor set decoration.
+        SLANG_CHECK(text.indexOf(" Binding ") < 0);       // No descriptor binding decoration.
         if (i < 2)
         {
+            // MaterialMiss and OtherMaterialMiss read their Material data from the SBT.
             SLANG_CHECK(text.indexOf("ShaderRecordBufferKHR") >= 0);
+            // Emitted Material field offsets match reflection.
             for (unsigned field = 0; field < 4; ++field)
             {
                 StringBuilder decoration;
@@ -484,10 +495,12 @@ SLANG_UNIT_TEST(portableRayTracingSPIRVRecordBindingAndReflection)
                 << "ArrayStride "
                 << UInt64(recordElements[i]->getFieldByIndex(0)->getTypeLayout()->getElementStride(
                        SLANG_PARAMETER_CATEGORY_UNIFORM));
+            // Emitted weights array stride matches reflection.
             SLANG_CHECK(text.indexOf(arrayStride.getUnownedSlice()) >= 0);
         }
         else
         {
+            // NoRecordMiss and EmptyRecordMiss need no shader-record storage.
             SLANG_CHECK(text.indexOf("ShaderRecordBufferKHR") < 0);
         }
     }
@@ -561,13 +574,17 @@ SLANG_UNIT_TEST(portableRayTracingSPIRVGenericRecordReflection)
     // T remains unresolved. Query the partial layout without linking or requesting target code.
     auto layout = composite->getLayout(0, diagnostics.writeRef());
     SLANG_CHECK_ABORT(layout != nullptr);
-    SLANG_CHECK_ABORT(layout->getEntryPointCount() == 1);
+    SLANG_CHECK_ABORT(layout->getEntryPointCount() == 1); // GenericRecordMiss.
     auto entry = layout->getEntryPointByIndex(0);
-    SLANG_CHECK_ABORT(entry->getParameterCount() == 1);
+    SLANG_CHECK_ABORT(entry->getParameterCount() == 1); // One generated record parameter.
     auto recordType = entry->getParameterByIndex(0)->getTypeLayout();
+    // The generated parameter retains its shader-record role.
     SLANG_CHECK(recordType->getSize(slang::ParameterCategory::ShaderRecord) == 1);
+    // Record is T, so its resource needs remain unresolved.
     SLANG_CHECK(recordType->getSize(slang::ParameterCategory::GenericResource) == 1);
+    // No descriptor binding is allocated before T is known.
     SLANG_CHECK(recordType->getSize(slang::ParameterCategory::DescriptorTableSlot) == 0);
+    // Entry totals preserve the same unresolved requirement and no descriptor binding.
     SLANG_CHECK(entry->getTypeLayout()->getSize(slang::ParameterCategory::GenericResource) == 1);
     SLANG_CHECK(
         entry->getTypeLayout()->getSize(slang::ParameterCategory::DescriptorTableSlot) == 0);
