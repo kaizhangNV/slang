@@ -3364,13 +3364,15 @@ static void removePerEntryPointParameterKinds(VarLayout* varLayout)
     varLayout->removeResourceUsage(LayoutResourceKind::ExistentialTypeParam);
 }
 
-/// Computes the ordinary constant-buffer layout behind a selected stage's record property.
+/// Computes the target-specific buffer layout behind a selected stage's record property.
 ///
 /// Consider a static Miss::invoke(MissInput<C> input) with C.Record = Material. Its checked
 /// parameter retains C, including any generic substitutions on the selected invoke method. The
 /// canonical associated-type lookup supplies Material without caching another conformance model.
-/// The fresh parameter-group layout uses the same packing rules as ConstantBuffer<Material>;
-/// ShaderRecord is an additional role, not a replacement for its ConstantBuffer binding.
+/// Reflection describes the generated record buffer, without assigning a physical layout to the
+/// logical MissInput<C> parameter. D3D retains an ordinary constant-buffer binding with the
+/// ShaderRecord role; Vulkan uses shader-record storage instead of a descriptor binding. The
+/// target adapter later consumes this exact layout when it creates the buffer.
 static RefPtr<VarLayout> _createPortableRTRecordLayout(
     ParameterBindingContext* context,
     DeclRef<FuncDecl> entryPoint,
@@ -3401,9 +3403,12 @@ static RefPtr<VarLayout> _createPortableRTRecordLayout(
     auto bufferType = as<ConstantBufferType>(
         visitor.getConstantBufferType(recordType, astBuilder->getDefaultLayoutType()));
     SLANG_RELEASE_ASSERT(bufferType);
-    auto rules = context->getRulesFamily()->getConstantBufferRules(
-        context->getTargetRequest()->getOptionSet(),
-        bufferType);
+    auto rulesFamily = context->getRulesFamily();
+    auto rules = isKhronosTarget(context->getTargetRequest())
+                     ? rulesFamily->getShaderRecordConstantBufferRules()
+                     : rulesFamily->getConstantBufferRules(
+                           context->getTargetRequest()->getOptionSet(),
+                           bufferType);
     auto bufferLayout =
         createParameterGroupTypeLayout(context->layoutContext.with(rules), bufferType);
 
@@ -3414,12 +3419,12 @@ static RefPtr<VarLayout> _createPortableRTRecordLayout(
 
     // This wrapper is new, unlike its shared application-data layout. Attaching the role here
     // must not turn an ordinary ConstantBuffer<Material> elsewhere in the program into a record.
-    bufferLayout->addResourceUsage(LayoutResourceKind::ShaderRecord, LayoutSize(1));
+    bufferLayout->findOrAddResourceInfo(LayoutResourceKind::ShaderRecord)->count = LayoutSize(1);
     auto groupLayout = as<ParameterGroupTypeLayout>(bufferLayout);
     SLANG_RELEASE_ASSERT(groupLayout);
-    groupLayout->containerVarLayout->typeLayout->addResourceUsage(
-        LayoutResourceKind::ShaderRecord,
-        LayoutSize(1));
+    groupLayout->containerVarLayout->typeLayout
+        ->findOrAddResourceInfo(LayoutResourceKind::ShaderRecord)
+        ->count = LayoutSize(1);
     groupLayout->containerVarLayout->findOrAddResourceInfo(LayoutResourceKind::ShaderRecord);
 
     RefPtr<VarLayout> recordLayout = new VarLayout();
@@ -3429,10 +3434,11 @@ static RefPtr<VarLayout> _createPortableRTRecordLayout(
     return recordLayout;
 }
 
-/// Allocates local-root record bindings after ordinary user bindings have claimed their spaces.
+/// Exposes record layouts and allocates their resource bindings after ordinary user bindings.
 ///
-/// Two selected miss stages may share the same Record type but still need separate registers.
-/// Reserving a compiler-owned space prevents collisions with globals and parameter blocks. Each
+/// Two selected D3D miss stages may share the same Record type but need separate registers.
+/// Reserving a compiler-owned space prevents collisions with globals and parameter blocks. A
+/// Vulkan record containing only ordinary data needs no descriptor or register space. Each
 /// entry exposes its exact allocated layout through the ordinary parameter reflection API before
 /// target adapters exist; the entry-owned handle also identifies this parameter during IR lowering.
 static void _allocatePortableRTRecordBindings(ParameterBindingContext* context)
@@ -3443,15 +3449,30 @@ static void _allocatePortableRTRecordBindings(ParameterBindingContext* context)
         auto recordLayout = entryPointLayout->portableRTRecordLayout;
         if (!recordLayout)
             continue;
-        if (recordSpace < 0)
-            recordSpace = Int(allocateUnusedSpaces(context, 1));
-
         // Seed the role as already bound: ShaderRecord describes where the arguments come
         // from, not another hardware register. The normal allocator handles every real resource
         // category, including a record containing only textures and no ordinary cbuffer data.
         ParameterBindingInfo bindingInfos[kLayoutResourceKindCount];
         copyExistingBindingInfoFromParameter(recordLayout, bindingInfos);
-        completeBindingsForParameterImpl(context, recordLayout, bindingInfos, UInt(recordSpace));
+        bool needsResourceBindings = false;
+        for (auto resourceInfo : recordLayout->typeLayout->resourceInfos)
+        {
+            if (resourceInfo.kind != LayoutResourceKind::ShaderRecord &&
+                resourceInfo.kind != LayoutResourceKind::GenericResource)
+                needsResourceBindings = true;
+        }
+        if (needsResourceBindings)
+        {
+            if (recordSpace < 0)
+                recordSpace = Int(allocateUnusedSpaces(context, 1));
+        }
+        // The normal allocator also preserves GenericResource when Record is not yet
+        // specialized. That marker needs no register space, but must remain in reflection.
+        completeBindingsForParameterImpl(
+            context,
+            recordLayout,
+            bindingInfos,
+            needsResourceBindings ? UInt(recordSpace) : 0);
         applyBindingInfoToParameter(recordLayout, bindingInfos, true);
 
         // These logical stages have no source shader parameters. The anonymous field describes
@@ -3530,7 +3551,8 @@ static RefPtr<EntryPointLayout> collectEntryPointParameters(
     entryPointLayout->entryPoint = entryPointFuncDeclRef;
     entryPointLayout->program = context->getTargetProgram()->getProgram();
 
-    if (entryPoint->isStructuralRayTracingEntryPoint() && isD3DTarget(context->getTargetRequest()))
+    if (entryPoint->isStructuralRayTracingEntryPoint() &&
+        (isD3DTarget(context->getTargetRequest()) || isKhronosTarget(context->getTargetRequest())))
     {
         entryPointLayout->portableRTRecordLayout =
             _createPortableRTRecordLayout(context, entryPointFuncDeclRef, entryPoint->getStage());

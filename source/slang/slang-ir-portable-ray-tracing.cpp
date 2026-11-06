@@ -472,23 +472,11 @@ void lowerRecords(
             auto record = builder.createGlobalParam(bufferType);
             builder.addNameHintDecoration(record, UnownedTerminatedStringSlice("record"));
             builder.addEntryPointParamDecoration(record, stage.adapter);
-            if (isD3DTarget(target))
-            {
-                // Binding allocation already assigned this constant buffer its ordinary b/space
-                // register and its independent ShaderRecord role. Preserve that exact reflected
-                // layout rather than reconstruct packing or allocate a second binding here.
-                SLANG_RELEASE_ASSERT(stage.recordLayout);
-                builder.addLayoutDecoration(record, stage.recordLayout);
-            }
-            else
-            {
-                IRTypeLayout::Builder typeLayout(&builder);
-                typeLayout.addResourceUsage(LayoutResourceKind::ShaderRecord, LayoutSize(1));
-                IRVarLayout::Builder layout(&builder, typeLayout.build());
-                layout.findOrAddResourceInfo(LayoutResourceKind::ShaderRecord);
-                layout.setStage(Stage(stage.input->getStageKind()->getValue()));
-                builder.addLayoutDecoration(record, layout.build());
-            }
+            // The host can query this layout before code generation. Keep the same record
+            // storage, field packing, and D3D register binding on the generated buffer so the
+            // shader reads the bytes the host wrote using reflection.
+            SLANG_RELEASE_ASSERT(stage.recordLayout);
+            builder.addLayoutDecoration(record, stage.recordLayout);
             builder.setInsertBefore(stage.adapter->getFirstBlock()->getFirstOrdinaryInst());
             parameter.bind(stage.adapter, builder.emitLoad(record));
         }
