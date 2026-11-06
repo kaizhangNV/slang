@@ -2935,8 +2935,11 @@ struct ValLoweringVisitor : ValVisitor<ValLoweringVisitor, LoweredValInfo, Lower
             getBuilder()->getType(op, static_cast<UInt>(operands.getCount()), operands.getBuffer());
         if (auto descriptorType = as<TraceProgramDescriptorType>(type))
         {
-            // Preserve the schema projections while this checked type and its generic
-            // environment are available. The descriptor's identity operands remain unchanged.
+            // Decorate TraceProgramDescriptorType with the schema's list, acceleration-structure,
+            // and motion types needed for backend code synthesis. The descriptor already refers
+            // to Schema and its conformance, but those operands do not request the associated-type
+            // entries during linking. The decoration references the required lookups, so the
+            // linker copies their entries and DCE keeps their results while the descriptor is live.
             IRBuilder decorationBuilder = *getBuilder();
             decorationBuilder.setInsertBefore(irType);
             IRGenContext decorationContext = *context;
