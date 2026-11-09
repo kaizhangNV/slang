@@ -10,7 +10,7 @@ import slang.raytracing.portable;
 // Check the imported MissShaderList generic, which has one expansion for Context.Record.
 // Follow its witness lookup to the yielded type, then check that the list decoration uses
 // this expansion and the original type pack. The six unused operands must be empty packs.
-// Static schema tests check the populated hit-group packs after specialization.
+// schema-contract.slang checks the concrete list operands after specialization.
 // CHECK: [TypeConstraintDecoration(%rtx5FIMissShader)]
 // CHECK: param [[TYPES:%[A-Za-z0-9_]+]] : TypeParameterPack,
 // CHECK: param [[WITNESSES:%[A-Za-z0-9_]+]] : witness_table_t(%rtx5FIMissShader)):
@@ -29,8 +29,8 @@ import slang.raytracing.portable;
 // CHECK-NEXT: [nameHint("rt.MissShaderList")]
 // CHECK-NEXT: struct {{%[A-Za-z0-9_]+}} : Type;
 
-// The compact dumper folds descriptor types into their uses and omits their decorations.
-// Static schema tests inspect the program decoration and its concrete types directly.
+// The descriptor retains its schema identity. schema-contract.slang also checks its
+// decoration and the concrete types it contains after specialization.
 // CHECK: TraceProgramDescriptor(%Schema,
 
 struct Payload { uint value; }
