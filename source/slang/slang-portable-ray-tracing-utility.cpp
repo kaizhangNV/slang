@@ -727,6 +727,31 @@ void addTraceProgramDescriptorDecoration(
         SLANG_COUNT_OF(operands));
 }
 
+IRStringLit* lowerTraceProgramDescriptorSchemaName(
+    IRBuilder* builder,
+    ASTBuilder* astBuilder,
+    TraceProgramDescriptorType* type)
+{
+    auto declRef = type->getDeclRef();
+    auto generic = as<GenericDecl>(declRef.getDecl()->parentDecl);
+    SLANG_RELEASE_ASSERT(generic);
+    auto application = SubstitutionSet(declRef).findGenericAppDeclRef(generic);
+    SLANG_RELEASE_ASSERT(application);
+    Type* schemaType = nullptr;
+    for (auto argument : application->getArgs())
+    {
+        if (auto argumentType = as<Type>(argument->resolve()))
+        {
+            SLANG_RELEASE_ASSERT(!schemaType);
+            schemaType = argumentType;
+        }
+    }
+    auto schema = as<DeclRefType>(schemaType);
+    SLANG_RELEASE_ASSERT(schema);
+    return builder->getStringValue(
+        getMangledName(astBuilder, schema->getDeclRef()).getUnownedSlice());
+}
+
 // Returns the checked entry types used by the duplicate-entry diagnostic. The list's conformance
 // witnesses are handled by ordinary conformance checking and are not needed to compare types.
 static ConcreteTypePack* _getEntryTypes(ASTBuilder* astBuilder, Type* entryListType)

@@ -16184,34 +16184,6 @@ static SourceLoc _getTypeNestingDiagnosticPos(TypeLayout* typeLayout)
     return SourceLoc();
 }
 
-/// Lowers the checked schema's public identity for a trace program descriptor layout.
-/// Consider TraceProgramDescriptor<Schema<int>>: the checked application carries Schema<int>
-/// and its conformance witness. Use its type argument and the same declaration mangling as
-/// ISession::getTypeRTTIMangledName so Metal can match its tables to the reflected schema.
-static IRStringLit* _lowerTraceProgramDescriptorSchemaName(
-    IRLayoutGenContext* context,
-    TraceProgramDescriptorType* type)
-{
-    auto declRef = type->getDeclRef();
-    auto generic = as<GenericDecl>(declRef.getDecl()->parentDecl);
-    SLANG_RELEASE_ASSERT(generic);
-    auto application = SubstitutionSet(declRef).findGenericAppDeclRef(generic);
-    SLANG_RELEASE_ASSERT(application);
-    Type* schemaType = nullptr;
-    for (auto argument : application->getArgs())
-    {
-        if (auto argumentType = as<Type>(argument->resolve()))
-        {
-            SLANG_RELEASE_ASSERT(!schemaType);
-            schemaType = argumentType;
-        }
-    }
-    auto schema = as<DeclRefType>(schemaType);
-    SLANG_RELEASE_ASSERT(schema);
-    return context->irBuilder->getStringValue(
-        getMangledName(context->astBuilder, schema->getDeclRef()).getUnownedSlice());
-}
-
 IRTypeLayout* lowerTypeLayout(IRLayoutGenContext* context, TypeLayout* typeLayout)
 {
     static constexpr UInt kMaxIRLayoutLoweringRecursionDepth = 128;
@@ -16244,7 +16216,10 @@ IRTypeLayout* lowerTypeLayout(IRLayoutGenContext* context, TypeLayout* typeLayou
     {
         IRTraceProgramDescriptorTypeLayout::Builder builder(
             context->irBuilder,
-            _lowerTraceProgramDescriptorSchemaName(context, descriptor));
+            PortableRT::lowerTraceProgramDescriptorSchemaName(
+                context->irBuilder,
+                context->astBuilder,
+                descriptor));
         return _lowerTypeLayoutCommon(&builder, typeLayout);
     }
     else if (auto paramGroupTypeLayout = as<ParameterGroupTypeLayout>(typeLayout))
