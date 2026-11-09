@@ -1176,15 +1176,6 @@ void IRTypeLayout::Builder::addAttrs(List<IRInst*>& operands)
 }
 
 //
-// IRTraceProgramDescriptorTypeLayout
-//
-
-void IRTraceProgramDescriptorTypeLayout::Builder::addOperandsImpl(List<IRInst*>& ioOperands)
-{
-    ioOperands.add(m_schemaTypeMangledName);
-}
-
-//
 // IRParameterGroupTypeLayout
 //
 

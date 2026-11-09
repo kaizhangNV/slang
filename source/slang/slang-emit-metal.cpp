@@ -2582,12 +2582,4 @@ void MetalSourceEmitter::emitFrontMatterImpl(TargetRequest*)
     m_writer->emit("using namespace metal;\n");
 }
 
-void MetalSourceEmitter::emitGlobalInstImpl(IRInst* inst)
-{
-    // This record is consumed by artifact reflection, not executable MSL.
-    if (as<IRMetalRTProgramMetadata>(inst))
-        return;
-    Super::emitGlobalInstImpl(inst);
-}
-
 } // namespace Slang

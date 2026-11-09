@@ -1729,24 +1729,6 @@ local insts = {
 	},
 	{ GetVulkanRayTracingPayloadLocation = { min_operands = 1 } },
 	{
-		metalRTProgramMetadata = {
-			-- Artifact metadata has independent identity: resource legalization may split
-			-- the descriptor struct without changing the program/table relationship.
-			operands = {
-				{ "schemaTypeMangledName", "IRStringLit" },
-				{ "tagMask", "IRIntLit" },
-				{ "maxLevels", "IRIntLit" },
-				{ "hitRecordStride", "IRIntLit" },
-				{ "missRecordStride", "IRIntLit" },
-				{ "callableRecordStride", "IRIntLit" },
-				{ "hitGroupCount", "IRIntLit" },
-				{ "missShaderCount", "IRIntLit" },
-				{ "callableShaderCount", "IRIntLit" },
-				{ "candidateFunctionTableSize", "IRIntLit" },
-			},
-		},
-	},
-	{
 		metalRTTraceDispatch = {
 			-- Physical resources and signatures have already been resolved. This operation
 			-- never asks emission to inspect a schema witness or a logical input type.
@@ -2309,25 +2291,6 @@ local insts = {
 			},
 			{ CudaKernel = { struct_name = "CudaKernelDecoration" } },
 			{
-				PortableRTSchemaNameDecoration = {
-					operands = { { "schemaTypeMangledName", "IRStringLit" } },
-				},
-			},
-			{
-				MetalRTProgramMetadataDecoration = {
-					operands = { { "program", "IRMetalRTProgramMetadata" } },
-				},
-			},
-			{
-				MetalRTFunctionMetadataDecoration = {
-					operands = {
-						{ "program", "IRMetalRTProgramMetadata" },
-						{ "functionIndex", "IRIntLit" },
-						{ "requirements", "IRIntLit" },
-					},
-				},
-			},
-			{
 				-- Identifies the context pointer introduced by explicit-global-context lowering.
 				-- Physical indirect calls consume this role, never a debug name.
 				ExplicitGlobalContextDecoration = {},
@@ -2341,7 +2304,7 @@ local insts = {
 				MetalRTGlobalResourceContextDecoration = {},
 			},
 			{
-				-- The owning IFT instance supplies its descriptor through a reflected binding.
+				-- The owning IFT instance supplies its descriptor as a native buffer argument.
 				MetalRTCandidateDescriptorDecoration = {},
 			},
 			{
@@ -3233,11 +3196,6 @@ local insts = {
 				TypeLayout = {
 					{
 						typeLayout = { struct_name = "TypeLayoutBase" },
-					},
-					{
-						traceProgramDescriptorTypeLayout = {
-							operands = { { "schemaTypeMangledName", "IRStringLit" } },
-						},
 					},
 					{ parameterGroupTypeLayout = { min_operands = 2 } },
 					{

@@ -1,22 +1,59 @@
 #pragma once
 
 #include "core/slang-common.h"
-#include "slang.h"
 
 namespace Slang
 {
 
 /// Encodes the shared native tags inferred for one Metal descriptor. These internal bit values
-/// are not Apple's MTLIntersectionFunctionSignature values; reflection must translate explicitly.
-using MetalRTTag = slang::MetalRayTracingTag;
+/// select the native tag names written by the Metal emitter.
+enum class MetalRTTag : UInt
+{
+    Instancing = 1 << 0,
+    TriangleData = 1 << 1,
+    CurveData = 1 << 2,
+    WorldSpaceData = 1 << 3,
+    PrimitiveMotion = 1 << 4,
+    InstanceMotion = 1 << 5,
+    ExtendedLimits = 1 << 6,
+};
 
 /// Identifies the inputs in each stage's fixed visible-function signature. Every provider accepts
 /// the contract's inputs, including values its implementation does not read.
-using MetalRTStageRequirement = slang::MetalRayTracingStageRequirement;
+enum class MetalRTStageRequirement : UInt
+{
+    None = 0,
+    HitAttributes = 1 << 0,
+    TriangleBarycentricCoord = 1 << 1,
+    TriangleFrontFacing = 1 << 2,
+    CurveParameter = 1 << 3,
+    Distance = 1 << 4,
+    HitKind = 1 << 5,
+    WorldSpaceOrigin = 1 << 6,
+    WorldSpaceDirection = 1 << 7,
+    Record = 1 << 8,
+    CallableDispatch = 1 << 9,
+    PrimitiveIndex = 1 << 10,
+    GeometryIndex = 1 << 11,
+    InstanceIndex = 1 << 12,
+    InstanceID = 1 << 13,
+    ObjectSpaceRay = 1 << 14,
+    ObjectToWorld = 1 << 15,
+    WorldToObject = 1 << 16,
+    InstanceCount = 1 << 17,
+    InstanceIndexAtLevel = 1 << 18,
+    InstanceIDAtLevel = 1 << 19,
+};
 
 /// Selects the native geometry annotation or an intersector geometry assumption. Unknown means
 /// the schema contains multiple primitive kinds and the intersector must not assume one kind.
-using MetalRTGeometryKind = slang::MetalRayTracingPrimitive;
+enum class MetalRTGeometryKind : UInt
+{
+    Unknown,
+    Triangle,
+    Curve,
+    BoundingBox,
+};
 
 /// Defines the stable argument-buffer IDs of a physical TraceProgramDescriptor. Unused tables
 /// retain their field IDs so adding a stage does not move the record buffer or other resources.
@@ -43,16 +80,8 @@ enum class MetalRTRecordSection : UInt
     Callable = 3,
 };
 
-/// Selects fixed IFT slots by primitive kind before the generated dispatcher reads an SBT record.
-enum class MetalRTCandidateKind : UInt
-{
-    Triangle = 0,
-    BoundingBox = 1,
-    Curve = 2,
-};
-
-/// Every record begins with its reflected function index and reserved words, followed by the
-/// application record. Keep these constants shared by reflection, lowering, and Metal emission.
+/// Every record begins with its function index and reserved words, followed by the application
+/// record. Keep these constants shared by lowering and Metal emission.
 static constexpr UInt kMetalRTRecordHeaderSize = 16;
 static constexpr UInt kMetalRTRecordAlignment = 16;
 

@@ -5,7 +5,6 @@
 #include "slang-ir-metal-portable-ray-tracing-acceleration.h"
 #include "slang-ir-metal-portable-ray-tracing-candidates.h"
 #include "slang-ir-metal-portable-ray-tracing-instance-path.h"
-#include "slang-ir-metal-portable-ray-tracing-metadata.h"
 #include "slang-ir-metal-portable-ray-tracing-resources.h"
 #include "slang-ir-metal-portable-ray-tracing-stages.h"
 #include "slang-ir-metal-portable-ray-tracing-standalone.h"
@@ -36,12 +35,10 @@ struct Program : RefObject
     MetalRTGeometryKind geometry = MetalRTGeometryKind::Unknown;
     StageRequirements missRequirements;
     StageRequirements hitRequirements;
-    StageRequirements candidateRequirements;
     StageRequirements callableRequirements;
     StageRequirements allRequirements;
     RayDataHeader header;
     Dictionary<IRType*, RayData> carriers;
-    CandidateAdapters candidates;
     IRIntegerValue hitStride = kMetalRTRecordHeaderSize;
     IRIntegerValue missStride = kMetalRTRecordHeaderSize;
     IRIntegerValue callableStride = kMetalRTRecordHeaderSize;
@@ -202,10 +199,8 @@ RefPtr<Program> createProgram(
     program.hitRequirements = getStageContractRequirements(Stage::ClosestHit, hasInstancePath);
     program.missRequirements = getStageContractRequirements(Stage::Miss, hasInstancePath);
     program.callableRequirements = getStageContractRequirements(Stage::Callable, hasInstancePath);
-    program.candidateRequirements = program.hitRequirements;
     program.allRequirements.combine(program.hitRequirements);
     program.allRequirements.combine(program.missRequirements);
-    program.allRequirements.combine(program.candidateRequirements);
 
     bool firstGeometry = true;
     for (auto& group : program.schema.hitGroups)
@@ -270,40 +265,6 @@ void createProgramResources(
         getCallableFunctionSignature(builder, program.callableRequirements, descriptorPointer),
         getAnyHitFunctionSignature(builder),
         getIntersectionFunctionSignature(builder));
-    UInt candidateTableSize = 0;
-    for (const auto& group : program.schema.hitGroups)
-    {
-        if (!group.anyHit.isPresent && !group.intersection.isPresent)
-            continue;
-        MetalRTCandidateKind kind;
-        switch (getGeometry(group.primitiveType))
-        {
-        case MetalRTGeometryKind::Triangle:
-            kind = MetalRTCandidateKind::Triangle;
-            break;
-        case MetalRTGeometryKind::BoundingBox:
-            kind = MetalRTCandidateKind::BoundingBox;
-            break;
-        case MetalRTGeometryKind::Curve:
-            kind = MetalRTCandidateKind::Curve;
-            break;
-        default:
-            SLANG_UNEXPECTED("expected a checked primitive");
-        }
-        candidateTableSize = Math::Max(candidateTableSize, UInt(kind) + 1);
-    }
-    addMetalRTProgramMetadata(
-        module,
-        program.resources.resourcesStruct,
-        program.tags,
-        program.maxLevels,
-        program.hitStride,
-        program.missStride,
-        program.callableStride,
-        UInt(program.schema.hitGroups.getCount()),
-        UInt(program.schema.missShaders.getCount()),
-        UInt(program.schema.callableShaders.getCount()),
-        candidateTableSize);
     if (program.tags & UInt(MetalRTTag::Instancing))
     {
         if (!instanceContributions.containsKey(instancePathType))
@@ -322,7 +283,7 @@ void createProgramCandidateDispatch(IRModule* module, Program& program)
         getCarrier(module, program, group.payloadType);
     StringBuilder candidatePrefix;
     candidatePrefix << "__slang_portable_rt_" << program.index << "_candidate";
-    program.candidates = createCandidateAdapters(
+    createCandidateAdapters(
         module,
         program.schema,
         program.resources,
@@ -334,13 +295,6 @@ void createProgramCandidateDispatch(IRModule* module, Program& program)
         program.instanceContribution,
         program.instancePathType,
         candidatePrefix.getUnownedSlice());
-    for (auto& pair : program.candidates.intersectionFunctions)
-        addMetalRTFunctionMetadata(
-            module,
-            pair.second,
-            program.resources.resourcesStruct,
-            UInt(pair.first),
-            program.candidateRequirements.mask);
 }
 
 /// Loads a named resource from the descriptor using the physical field's exact type. The

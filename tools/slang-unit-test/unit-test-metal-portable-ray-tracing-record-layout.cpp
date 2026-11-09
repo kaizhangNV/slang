@@ -5,10 +5,9 @@
 
 using namespace Slang;
 
-// Exercise the public host path with two specializations nested under arrays and a parameter
-// block. Their source field keys and binding footprints coincide, but emitted table ownership
-// must match each checked Schema type's RTTI name, not a specialized IR symbol or debug name.
-SLANG_UNIT_TEST(metalPortableRayTracingArtifactMetadata)
+// Check ordinary Record layout and compile descriptors nested in generic structs and arrays.
+// Both ray generation and a separately selected stage need the complete shared resource layout.
+SLANG_UNIT_TEST(metalPortableRayTracingRecordLayoutAndNestedDescriptors)
 {
     const char* source = R"(
         import slang.raytracing.portable;
@@ -101,8 +100,8 @@ SLANG_UNIT_TEST(metalPortableRayTracingArtifactMetadata)
         unitTestContext->slangGlobalSession->createSession(sessionDesc, session.writeRef())));
     ComPtr<slang::IBlob> diagnostics;
     auto module = session->loadModuleFromSourceString(
-        "metalPhysicalMetadata",
-        "metalPhysicalMetadata.slang",
+        "metalRecordLayout",
+        "metalRecordLayout.slang",
         source,
         diagnostics.writeRef());
     if (!module && diagnostics)
@@ -150,12 +149,6 @@ SLANG_UNIT_TEST(metalPortableRayTracingArtifactMetadata)
     SLANG_CHECK(recordLayout->getFieldByIndex(5)->getOffset() == 80);
     SLANG_CHECK(recordLayout->getFieldByIndex(6)->getOffset() == 104);
     SLANG_CHECK(recordLayout->getSize() == 112);
-    ComPtr<slang::IBlob> schemaNames[2];
-    SLANG_CHECK_ABORT(
-        SLANG_SUCCEEDED(session->getTypeRTTIMangledName(firstSchema, schemaNames[0].writeRef())));
-    SLANG_CHECK_ABORT(
-        SLANG_SUCCEEDED(session->getTypeRTTIMangledName(secondSchema, schemaNames[1].writeRef())));
-
     ComPtr<slang::IBlob> code;
     auto result = linked->getEntryPointCode(0, 0, code.writeRef(), diagnostics.writeRef());
     if (SLANG_FAILED(result) && diagnostics)
@@ -163,64 +156,21 @@ SLANG_UNIT_TEST(metalPortableRayTracingArtifactMetadata)
             TestMessageType::Info,
             static_cast<const char*>(diagnostics->getBufferPointer()));
     SLANG_CHECK_ABORT(SLANG_SUCCEEDED(result));
-    ComPtr<slang::IMetadata> metadata;
-    SLANG_CHECK_ABORT(SLANG_SUCCEEDED(
-        linked->getEntryPointMetadata(0, 0, metadata.writeRef(), diagnostics.writeRef())));
-    auto physical = static_cast<slang::IMetalRayTracingMetadata*>(
-        metadata->castAs(slang::IMetalRayTracingMetadata::getTypeGuid()));
-    SLANG_CHECK_ABORT(physical && physical->getProgramCount() == 2);
     auto emitted = UnownedStringSlice(
         static_cast<const char*>(code->getBufferPointer()),
         code->getBufferSize());
     // This artifact contains ray generation only. The schema still describes both Miss slots
     // and their record stride; neither provider implementation is emitted here.
     SLANG_CHECK(emitted.indexOf(UnownedStringSlice("readBackground")) < 0);
-    uint32_t programIndices[2] = {};
-    for (UInt schemaIndex = 0; schemaIndex < 2; ++schemaIndex)
-    {
-        auto name = static_cast<const char*>(schemaNames[schemaIndex]->getBufferPointer());
-        SLANG_CHECK_ABORT(SLANG_SUCCEEDED(
-            physical->findProgramBySchemaTypeMangledName(name, &programIndices[schemaIndex])));
-        slang::MetalRayTracingProgramInfo program;
-        SLANG_CHECK_ABORT(
-            SLANG_SUCCEEDED(physical->getProgramInfo(programIndices[schemaIndex], &program)));
-        SLANG_CHECK(UnownedStringSlice(program.schemaTypeMangledName) == UnownedStringSlice(name));
-        SLANG_CHECK(program.resourceCount == 7 && program.functionCount == 0);
-        SLANG_CHECK(program.candidateDescriptorBufferIndex == UINT32_MAX);
-        SLANG_CHECK(program.tagMask == uint32_t(slang::MetalRayTracingTag::Instancing));
-        SLANG_CHECK(program.recordHeaderSize == 16 && program.recordAlignment == 16);
-        SLANG_CHECK(program.missRecordStride == 128);
-        SLANG_CHECK(
-            program.missRecordStride ==
-            ((program.recordHeaderSize + recordLayout->getSize() + 15) / 16) * 16);
-        for (uint32_t i = 0; i < program.resourceCount; ++i)
-        {
-            slang::MetalRayTracingResourceInfo resource;
-            SLANG_CHECK_ABORT(SLANG_SUCCEEDED(
-                physical->getProgramResourceInfo(programIndices[schemaIndex], i, &resource)));
-            SLANG_CHECK(resource.argumentBufferID == i);
-            SLANG_CHECK(
-                resource.functionTableSize ==
-                (resource.kind == slang::MetalRayTracingResourceKind::MissVisibleFunctionTable
-                     ? 2u
-                     : 0u));
-        }
-    }
-    SLANG_CHECK(programIndices[0] != programIndices[1]);
+    // The 112-byte application record follows a 16-byte header in the generated dispatch.
+    SLANG_CHECK(emitted.indexOf(UnownedStringSlice(" * 128U")) >= 0);
+    SLANG_CHECK(emitted.indexOf(UnownedStringSlice("[[visible]]")) < 0);
     SLANG_CHECK(sourceLayout->findTypeByName("Schema<1>") == firstSchema);
     SLANG_CHECK(sourceLayout->findTypeByName("Schema<2>") == secondSchema);
-    uint32_t missing = 123;
-    SLANG_CHECK(
-        physical->findProgramBySchemaTypeMangledName("absent", &missing) == SLANG_E_NOT_FOUND);
-    SLANG_CHECK(missing == 123);
-    slang::MetalRayTracingProgramInfo invalid;
-    invalid.structSize = 0;
-    SLANG_CHECK(physical->getProgramInfo(0, &invalid) == SLANG_E_INVALID_ARG);
-    SLANG_CHECK(physical->getProgramInfo(2, nullptr) == SLANG_E_INVALID_ARG);
 
     // The selected Miss has no trace/call operation and does not read a global. It nevertheless
     // shares this component's full resource layout with ray generation, including both nested
-    // descriptor specializations. Their physical fields and metadata must therefore exist here
+    // descriptor specializations. Their physical resource fields must therefore exist here
     // without retaining the ray-generation body or either unselected Miss implementation.
     ComPtr<slang::IBlob> providerCode;
     result = linked->getEntryPointCode(1, 0, providerCode.writeRef(), diagnostics.writeRef());
@@ -236,23 +186,4 @@ SLANG_UNIT_TEST(metalPortableRayTracingArtifactMetadata)
     SLANG_CHECK(providerText.indexOf(UnownedStringSlice("PortableRTDescriptorResources")) >= 0);
     SLANG_CHECK(providerText.indexOf(UnownedStringSlice("readBackground")) < 0);
     SLANG_CHECK(providerText.indexOf(UnownedStringSlice("[[kernel]]")) < 0);
-    ComPtr<slang::IMetadata> providerMetadata;
-    SLANG_CHECK_ABORT(SLANG_SUCCEEDED(
-        linked->getEntryPointMetadata(1, 0, providerMetadata.writeRef(), diagnostics.writeRef())));
-    auto providerPhysical = static_cast<slang::IMetalRayTracingMetadata*>(
-        providerMetadata->castAs(slang::IMetalRayTracingMetadata::getTypeGuid()));
-    SLANG_CHECK_ABORT(providerPhysical && providerPhysical->getProgramCount() == 2);
-    for (UInt schemaIndex = 0; schemaIndex < 2; ++schemaIndex)
-    {
-        uint32_t programIndex;
-        auto name = static_cast<const char*>(schemaNames[schemaIndex]->getBufferPointer());
-        SLANG_CHECK_ABORT(SLANG_SUCCEEDED(
-            providerPhysical->findProgramBySchemaTypeMangledName(name, &programIndex)));
-        slang::MetalRayTracingProgramInfo program;
-        SLANG_CHECK_ABORT(
-            SLANG_SUCCEEDED(providerPhysical->getProgramInfo(programIndex, &program)));
-        SLANG_CHECK(program.resourceCount == 7);
-        SLANG_CHECK(program.candidateDescriptorBufferIndex == UINT32_MAX);
-        SLANG_CHECK(program.missRecordStride == 128);
-    }
 }

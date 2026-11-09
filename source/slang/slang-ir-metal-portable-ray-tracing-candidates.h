@@ -12,12 +12,6 @@ namespace PortableRT
 namespace Metal
 {
 
-/// Returns schema-owned native IFT glue. It never references a source stage implementation.
-struct CandidateAdapters
-{
-    Dictionary<MetalRTCandidateKind, IRFunc*> intersectionFunctions;
-};
-
 /// Builds the fixed signatures shared by independently compiled candidate stages and their tables.
 IRFuncType* getAnyHitFunctionSignature(IRBuilder& builder);
 IRFuncType* getIntersectionFunctionSignature(IRBuilder& builder);
@@ -33,7 +27,7 @@ VisibleAdapter createSelectedCandidateAdapter(
 
 /// Creates body-free candidate dispatch for a descriptor. Runtime records choose a schema group;
 /// its checked types determine storage, while independently supplied VFT handles select code.
-CandidateAdapters createCandidateAdapters(
+void createCandidateAdapters(
     IRModule* module,
     const Schema& schema,
     const MetalRTDescriptorResources& resources,

@@ -16212,14 +16212,7 @@ IRTypeLayout* lowerTypeLayout(IRLayoutGenContext* context, TypeLayout* typeLayou
     // one of the cases that requires a dedicated sub-type
     // of IR type layout.
     //
-    if (auto descriptor = as<TraceProgramDescriptorType>(typeLayout->getType()))
-    {
-        IRTraceProgramDescriptorTypeLayout::Builder builder(
-            context->irBuilder,
-            PortableRT::lowerSchemaName(context->irBuilder, context->astBuilder, descriptor));
-        return _lowerTypeLayoutCommon(&builder, typeLayout);
-    }
-    else if (auto paramGroupTypeLayout = as<ParameterGroupTypeLayout>(typeLayout))
+    if (auto paramGroupTypeLayout = as<ParameterGroupTypeLayout>(typeLayout))
     {
         IRParameterGroupTypeLayout::Builder builder(context->irBuilder);
 

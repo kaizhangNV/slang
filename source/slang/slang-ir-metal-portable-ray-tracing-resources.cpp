@@ -103,32 +103,8 @@ IRVarLayout* cloneVarLayout(IRBuilder& builder, IRVarLayout* source, IRTypeLayou
 IRTypeLayout* createPhysicalLayout(
     IRBuilder& builder,
     const MetalRTDescriptorResources& resources,
-    IRTraceProgramDescriptorTypeLayout* sourceLayout)
+    IRTypeLayout* sourceLayout)
 {
-    // The AST layout producer owns the checked Schema type. Transfer its public identity while
-    // this exact descriptor type/layout pair is available; field names or shared generic keys
-    // cannot identify which schema a nested descriptor belongs to.
-    auto schemaName = sourceLayout->getSchemaTypeMangledName();
-    if (auto owner =
-            resources.resourcesStruct->findDecoration<IRMetalRTProgramMetadataDecoration>())
-    {
-        // Keep this identity on the artifact record rather than on a particular lowered struct.
-        // Later legalization may split the descriptor, but every exported table function still
-        // refers to the same program record.
-        owner->getProgram()->setOperand(0, schemaName);
-    }
-    if (auto existing =
-            resources.resourcesStruct->findDecoration<IRPortableRTSchemaNameDecoration>())
-    {
-        SLANG_RELEASE_ASSERT(existing->getSchemaTypeMangledName() == schemaName);
-    }
-    else
-    {
-        builder.addDecoration(
-            resources.resourcesStruct,
-            kIROp_PortableRTSchemaNameDecoration,
-            schemaName);
-    }
     IRTypeLayout::Builder fieldTypeBuilder(&builder);
     fieldTypeBuilder.addResourceUsage(
         LayoutResourceKind::MetalArgumentBufferElement,
@@ -203,10 +179,7 @@ struct LayoutPhysicalizationContext
         IRTypeLayout* result = layout;
         if (auto resources = resourcesByPhysicalType.tryGetValue(type))
         {
-            result = createPhysicalLayout(
-                builder,
-                **resources,
-                cast<IRTraceProgramDescriptorTypeLayout>(layout));
+            result = createPhysicalLayout(builder, **resources, layout);
         }
         else if (auto structType = as<IRStructType>(type))
         {

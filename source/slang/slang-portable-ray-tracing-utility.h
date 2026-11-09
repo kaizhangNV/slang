@@ -20,7 +20,6 @@ class EntryPoint;
 struct IRBuilder;
 struct IRInst;
 struct IRType;
-struct IRStringLit;
 
 namespace PortableRT
 {
@@ -122,15 +121,6 @@ void addTraceProgramDescriptorDecoration(
     IRType* irType,
     IRType* (*lowerType)(Type*, void*),
     void* userData);
-
-/// Lowers the checked schema's public identity for a trace program descriptor layout.
-/// Consider TraceProgramDescriptor<Schema<int>>: the checked application carries Schema<int>
-/// and its conformance witness. Use its type argument and the same declaration mangling as
-/// ISession::getTypeRTTIMangledName so Metal can match its tables to the reflected schema.
-IRStringLit* lowerSchemaName(
-    IRBuilder* builder,
-    ASTBuilder* astBuilder,
-    TraceProgramDescriptorType* type);
 
 /// Returns this executable interface's `invoke` requirement, or null for other interfaces.
 FunctionDeclBase* getStageInvokeRequirement(InterfaceDecl* interfaceDecl);

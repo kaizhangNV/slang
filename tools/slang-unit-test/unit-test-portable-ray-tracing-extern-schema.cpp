@@ -172,29 +172,5 @@ SLANG_UNIT_TEST(portableRayTracingExternSchemaProjections)
         SLANG_CHECK(text.indexOf("stageOnlyBody") < 0);
         SLANG_CHECK(text.indexOf("[[visible]]") < 0);
         SLANG_CHECK(text.indexOf("metalRTCallShader") < 0);
-
-        ComPtr<slang::IMetadata> metadata;
-        SLANG_CHECK_ABORT(SLANG_SUCCEEDED(
-            linked->getEntryPointMetadata(0, 0, metadata.writeRef(), diagnostics.writeRef())));
-        auto physical = static_cast<slang::IMetalRayTracingMetadata*>(
-            metadata->castAs(slang::IMetalRayTracingMetadata::getTypeGuid()));
-        SLANG_CHECK_ABORT(physical && physical->getProgramCount() == 1);
-        slang::MetalRayTracingProgramInfo programInfo;
-        SLANG_CHECK_ABORT(SLANG_SUCCEEDED(physical->getProgramInfo(0, &programInfo)));
-        SLANG_CHECK(programInfo.functionCount == 0);
-        SLANG_CHECK(programInfo.callableRecordStride == (recordVectorCount[0] == '1' ? 32u : 64u));
-        // The descriptor ABI always has seven fields. Empty hit/miss projections instead
-        // determine zero function-table lengths; only the two callable slots need storage.
-        SLANG_CHECK(programInfo.resourceCount == 7);
-        for (uint32_t i = 0; i < programInfo.resourceCount; ++i)
-        {
-            slang::MetalRayTracingResourceInfo resource;
-            SLANG_CHECK_ABORT(SLANG_SUCCEEDED(physical->getProgramResourceInfo(0, i, &resource)));
-            SLANG_CHECK(
-                resource.functionTableSize ==
-                (resource.kind == slang::MetalRayTracingResourceKind::CallableVisibleFunctionTable
-                     ? 2u
-                     : 0u));
-        }
     }
 }

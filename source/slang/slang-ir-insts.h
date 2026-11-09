@@ -1262,36 +1262,6 @@ struct IRTypeLayout : IRLayout
     };
 };
 
-/// Layout information for a trace program descriptor, including its source schema identity.
-/// Descriptors for Schema<int> and Schema<float> can have the same resource usage, but must
-/// retain different layouts so Metal can associate their generated tables with the right schema.
-FIDDLE()
-struct IRTraceProgramDescriptorTypeLayout : IRTypeLayout
-{
-    FIDDLE(leafInst())
-    typedef IRTypeLayout Super;
-
-    struct Builder : Super::Builder
-    {
-        Builder(IRBuilder* irBuilder, IRStringLit* schemaTypeMangledName)
-            : Super::Builder(irBuilder), m_schemaTypeMangledName(schemaTypeMangledName)
-        {
-            SLANG_RELEASE_ASSERT(schemaTypeMangledName);
-        }
-
-        IRTraceProgramDescriptorTypeLayout* build()
-        {
-            return cast<IRTraceProgramDescriptorTypeLayout>(Super::Builder::build());
-        }
-
-    protected:
-        IROp getOp() SLANG_OVERRIDE { return kIROp_TraceProgramDescriptorTypeLayout; }
-        void addOperandsImpl(List<IRInst*>& ioOperands) SLANG_OVERRIDE;
-
-        IRStringLit* m_schemaTypeMangledName;
-    };
-};
-
 /// Type layout for parameter groups (constant buffers and parameter blocks)
 FIDDLE()
 struct IRParameterGroupTypeLayout : IRTypeLayout

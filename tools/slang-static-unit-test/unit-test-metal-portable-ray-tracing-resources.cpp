@@ -1,8 +1,6 @@
 #include "slang/slang-ir-collect-global-uniforms.h"
 #include "slang/slang-ir-metal-portable-ray-tracing-resources.h"
 #include "slang/slang-ir-util.h"
-#include "slang/slang-serialize-container.h"
-#include "slang/slang-serialize-ir.h"
 #include "static-unit-test-env.h"
 #include "unit-test/slang-unit-test.h"
 
@@ -88,16 +86,14 @@ SLANG_UNIT_TEST(metalPortableDescriptorNestedLayouts)
         signature,
         signature));
 
-    // Model two specializations of Holder<S> that share one declared field key and binding
-    // footprint. Their checked descriptor layouts retain the corresponding schema identities.
+    // Model two specializations of Holder<S> that share one declared field key and source layout.
+    // Each descriptor's concrete type must still select its own generated resource fields.
     auto sharedKey = builder.createStructKey();
     auto firstHolder = builder.createStructType();
     auto secondHolder = builder.createStructType();
     builder.createStructField(firstHolder, sharedKey, first);
     builder.createStructField(secondHolder, sharedKey, second);
-    IRTraceProgramDescriptorTypeLayout::Builder opaqueBuilder(
-        &builder,
-        builder.getStringValue(UnownedStringSlice("FirstSchema")));
+    IRTypeLayout::Builder opaqueBuilder(&builder);
     opaqueBuilder.addResourceUsage(LayoutResourceKind::MetalArgumentBufferElement, LayoutSize(1));
     auto opaqueLayout = opaqueBuilder.build();
     IRStructTypeLayout::Builder holderBuilder(&builder);
@@ -106,23 +102,6 @@ SLANG_UNIT_TEST(metalPortableDescriptorNestedLayouts)
         sharedKey,
         createBinding(builder, opaqueLayout, LayoutResourceKind::MetalArgumentBufferElement, 0));
     auto holderLayout = holderBuilder.build();
-    IRTraceProgramDescriptorTypeLayout::Builder secondOpaqueBuilder(
-        &builder,
-        builder.getStringValue(UnownedStringSlice("SecondSchema")));
-    secondOpaqueBuilder.addResourceUsage(
-        LayoutResourceKind::MetalArgumentBufferElement,
-        LayoutSize(1));
-    IRStructTypeLayout::Builder secondHolderBuilder(&builder);
-    secondHolderBuilder.addResourceUsage(
-        LayoutResourceKind::MetalArgumentBufferElement,
-        LayoutSize(1));
-    secondHolderBuilder.addField(
-        sharedKey,
-        createBinding(
-            builder,
-            secondOpaqueBuilder.build(),
-            LayoutResourceKind::MetalArgumentBufferElement,
-            0));
 
     auto count = builder.getIntValue(builder.getIntType(), 2);
     auto arrayType = builder.getArrayType(firstHolder, count);
@@ -138,11 +117,7 @@ SLANG_UNIT_TEST(metalPortableDescriptorNestedLayouts)
         createBinding(builder, arrayLayout, LayoutResourceKind::MetalArgumentBufferElement, 0));
     tupleBuilder.addField(
         builder.getIndexedFieldKey(tupleType, 1),
-        createBinding(
-            builder,
-            secondHolderBuilder.build(),
-            LayoutResourceKind::MetalArgumentBufferElement,
-            2));
+        createBinding(builder, holderLayout, LayoutResourceKind::MetalArgumentBufferElement, 2));
     tupleBuilder.addResourceUsage(LayoutResourceKind::MetalArgumentBufferElement, LayoutSize(3));
     auto tupleLayout = tupleBuilder.build();
 
@@ -163,60 +138,7 @@ SLANG_UNIT_TEST(metalPortableDescriptorNestedLayouts)
         global,
         createBinding(builder, groupBuilder.build(), LayoutResourceKind::MetalBuffer, 7, 3));
 
-    // Serialize the actual target layouts. Source-module serialization tests run before target
-    // layout creation and do not exercise this IR kind.
-    RIFF::Builder serialized;
-    {
-        RIFF::BuildCursor cursor(serialized);
-        SLANG_SCOPED_RIFF_BUILDER_LIST_CHUNK(cursor, SerialBinary::kModuleFourCC);
-        {
-            SLANG_SCOPED_RIFF_BUILDER_LIST_CHUNK(cursor, PropertyKeys<IRModule>::IRModule);
-            writeSerializedModuleIR(cursor, module, nullptr);
-        }
-    }
-    ComPtr<ISlangBlob> blob;
-    SLANG_CHECK_ABORT(SLANG_SUCCEEDED(serialized.writeToBlob(blob.writeRef())));
-    auto root = RIFF::RootChunk::getFromBlob(blob);
-    SLANG_CHECK_ABORT(root);
-    auto moduleChunk = ModuleChunk::find(root);
-    SLANG_CHECK_ABORT(moduleChunk && moduleChunk->findIR());
-    RefPtr<IRModule> readModule;
-    SLANG_CHECK_ABORT(SLANG_SUCCEEDED(
-        readSerializedModuleIR(moduleChunk->findIR(), env.getSessionImpl(), nullptr, readModule)));
-
-    // Equal resource counts must not merge the two restored layouts or lose either schema name.
-    UInt descriptorLayoutCount = 0;
-    bool foundFirst = false;
-    bool foundSecond = false;
-    for (auto inst : readModule->getGlobalInsts())
-    {
-        if (auto layout = as<IRTraceProgramDescriptorTypeLayout>(inst))
-        {
-            ++descriptorLayoutCount;
-            auto name = layout->getSchemaTypeMangledName()->getStringSlice();
-            foundFirst |= name == UnownedStringSlice("FirstSchema");
-            foundSecond |= name == UnownedStringSlice("SecondSchema");
-            auto size = layout->findSizeAttr(LayoutResourceKind::MetalArgumentBufferElement);
-            SLANG_CHECK_ABORT(size);
-            SLANG_CHECK(
-                size->getSize().isFinite() &&
-                size->getSize().getFiniteValue().getValidValue() == 1);
-        }
-    }
-    SLANG_CHECK(descriptorLayoutCount == 2 && foundFirst && foundSecond);
-
     physicalizeMetalRTDescriptorResources(module, resources);
-
-    SLANG_CHECK(
-        resources[0]
-            .resourcesStruct->findDecoration<IRPortableRTSchemaNameDecoration>()
-            ->getSchemaTypeMangledName()
-            ->getStringSlice() == UnownedStringSlice("FirstSchema"));
-    SLANG_CHECK(
-        resources[1]
-            .resourcesStruct->findDecoration<IRPortableRTSchemaNameDecoration>()
-            ->getSchemaTypeMangledName()
-            ->getStringSlice() == UnownedStringSlice("SecondSchema"));
 
     auto varLayout = cast<IRVarLayout>(global->findDecoration<IRLayoutDecoration>()->getLayout());
     auto binding = varLayout->findOffsetAttr(LayoutResourceKind::MetalBuffer);
@@ -262,9 +184,7 @@ SLANG_UNIT_TEST(metalPortableDescriptorGlobalLayoutOnlyKeys)
         signature,
         signature));
 
-    IRTraceProgramDescriptorTypeLayout::Builder opaqueBuilder(
-        &builder,
-        builder.getStringValue(UnownedStringSlice("GlobalSchema")));
+    IRTypeLayout::Builder opaqueBuilder(&builder);
     opaqueBuilder.addResourceUsage(LayoutResourceKind::MetalBuffer, LayoutSize(1));
     auto opaqueLayout = opaqueBuilder.build();
     auto descriptor = builder.createGlobalParam(descriptorType);

@@ -1308,7 +1308,7 @@ VisibleAdapter createSelectedCandidateAdapter(
     return result;
 }
 
-CandidateAdapters createCandidateAdapters(
+void createCandidateAdapters(
     IRModule* module,
     const Schema& schema,
     const MetalRTDescriptorResources& resources,
@@ -1321,28 +1321,21 @@ CandidateAdapters createCandidateAdapters(
     IRType* instancePathParamType,
     UnownedStringSlice symbolPrefix)
 {
-    CandidateAdapters result;
     IRBuilder builder(module);
     struct Geometry
     {
         MetalRTGeometryKind kind;
-        MetalRTCandidateKind slot;
         KnownBuiltinDeclName role;
         const char* suffix;
     };
     Geometry geometries[] = {
         {MetalRTGeometryKind::Triangle,
-         MetalRTCandidateKind::Triangle,
          KnownBuiltinDeclName::RayTracingTrianglePrimitive,
          "_triangle"},
         {MetalRTGeometryKind::BoundingBox,
-         MetalRTCandidateKind::BoundingBox,
          KnownBuiltinDeclName::RayTracingBoundingBoxPrimitive,
          "_bounding_box"},
-        {MetalRTGeometryKind::Curve,
-         MetalRTCandidateKind::Curve,
-         KnownBuiltinDeclName::RayTracingCurvePrimitive,
-         "_curve"}};
+        {MetalRTGeometryKind::Curve, KnownBuiltinDeclName::RayTracingCurvePrimitive, "_curve"}};
     for (auto geometry : geometries)
     {
         bool needsFunction = false;
@@ -1372,23 +1365,20 @@ CandidateAdapters createCandidateAdapters(
         }
         StringBuilder name;
         name << symbolPrefix << geometry.suffix;
-        result.intersectionFunctions.add(
-            geometry.slot,
-            createDispatcher(
-                module,
-                callbacks,
-                resources,
-                parameters,
-                nativeResult,
-                geometry.kind,
-                header,
-                tags,
-                maxLevels,
-                hitStride,
-                instanceContribution,
-                name.getUnownedSlice()));
+        createDispatcher(
+            module,
+            callbacks,
+            resources,
+            parameters,
+            nativeResult,
+            geometry.kind,
+            header,
+            tags,
+            maxLevels,
+            hitStride,
+            instanceContribution,
+            name.getUnownedSlice());
     }
-    return result;
 }
 
 } // namespace Metal
