@@ -16216,10 +16216,7 @@ IRTypeLayout* lowerTypeLayout(IRLayoutGenContext* context, TypeLayout* typeLayou
     {
         IRTraceProgramDescriptorTypeLayout::Builder builder(
             context->irBuilder,
-            PortableRT::lowerTraceProgramDescriptorSchemaName(
-                context->irBuilder,
-                context->astBuilder,
-                descriptor));
+            PortableRT::lowerSchemaName(context->irBuilder, context->astBuilder, descriptor));
         return _lowerTypeLayoutCommon(&builder, typeLayout);
     }
     else if (auto paramGroupTypeLayout = as<ParameterGroupTypeLayout>(typeLayout))

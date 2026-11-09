@@ -127,7 +127,7 @@ void addTraceProgramDescriptorDecoration(
 /// Consider TraceProgramDescriptor<Schema<int>>: the checked application carries Schema<int>
 /// and its conformance witness. Use its type argument and the same declaration mangling as
 /// ISession::getTypeRTTIMangledName so Metal can match its tables to the reflected schema.
-IRStringLit* lowerTraceProgramDescriptorSchemaName(
+IRStringLit* lowerSchemaName(
     IRBuilder* builder,
     ASTBuilder* astBuilder,
     TraceProgramDescriptorType* type);

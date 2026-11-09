@@ -727,7 +727,7 @@ void addTraceProgramDescriptorDecoration(
         SLANG_COUNT_OF(operands));
 }
 
-IRStringLit* lowerTraceProgramDescriptorSchemaName(
+IRStringLit* lowerSchemaName(
     IRBuilder* builder,
     ASTBuilder* astBuilder,
     TraceProgramDescriptorType* type)
