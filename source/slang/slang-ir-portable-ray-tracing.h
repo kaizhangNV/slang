@@ -7,9 +7,10 @@ namespace Slang
 class TargetProgram;
 class DiagnosticSink;
 
-/// Separates selected portable stages from their ordinary static implementations before any
-/// pass interprets entry-point parameters as native shader inputs. The initial adapter has no
-/// native parameters; its checked input contract is specialized along with the call it owns.
+/// Replaces each selected portable entry in entryPoints with a new wrapper that calls it.
+/// The original function keeps its body and parameters but loses its entry-point marker.
+/// Also removes entry-point markers from portable implementations not selected for this output.
+/// Run before entry-parameter processing; later target lowering builds the wrappers' signatures.
 void preparePortableRayTracingEntryPoints(IRModule* module, List<IRFunc*>& entryPoints);
 
 /// Builds native entry-point adapters for checked portable ray-tracing stages and lowers their

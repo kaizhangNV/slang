@@ -120,10 +120,14 @@ struct NativeInvocationParameter : PortableRTInvocationParameter
     }
 };
 
-/// Separates the native entry signature from the callable static implementation. Moving only
-/// entry-related decorations preserves the implementation's ordinary symbol and direct callers.
-/// For example, selecting SharedMiss while CallingMiss invokes it produces two adapters and one
-/// shared callable implementation, not a native entry point called with a logical input.
+/// Creates a new entry-point wrapper that calls the original function. Consider a selected
+/// Miss::invoke, shown here as pseudocode:
+///     Before: [entry point] Miss::invoke(MissInput<C> input) { ... }
+///     After:  [entry point] entry() { Miss::invoke(default(MissInput<C>)); }
+///             Miss::invoke(MissInput<C> input) { ... }
+/// The entry-point marker moves to the wrapper. The original body, parameter type and existing
+/// calls are unchanged. The wrapper initially has no parameters; later target lowering builds
+/// its actual signature using the input type and source layout saved in its decoration.
 IRFunc* createAdapter(IRModule* module, IRFunc* invoke)
 {
     SLANG_RELEASE_ASSERT(invoke->getParamCount() == 1);
