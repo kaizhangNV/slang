@@ -1183,6 +1183,7 @@ SLANG_API SlangReflectionType* spReflection_FindTypeByName(
 #endif
 }
 
+
 SLANG_API bool spReflection_isSubType(
     SlangReflection* reflection,
     SlangReflectionType* subType,
