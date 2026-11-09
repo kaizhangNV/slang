@@ -74,22 +74,13 @@ SLANG_UNIT_TEST(portableRayTracingRenamedStageAndSchema)
         SLANG_CHECK(entry->getStage() == SLANG_STAGE_CLOSEST_HIT);
         SLANG_CHECK(String(entry->getName()) == "SharedHit");
         SLANG_CHECK(String(entry->getNameOverride()) == "renamedPortableHit");
-        auto schema = layout->findTraceProgramSchema("Schema");
-        SLANG_CHECK_ABORT(schema && schema->getHitGroupCount() == 1);
-        auto stage = schema->getHitGroup(0)->getClosestHit();
+        // Renaming the selected export leaves HitGroup.ClosestHit bound to SharedHit.
+        auto stage = layout->findTypeByName("HitGroup.ClosestHit");
         SLANG_CHECK_ABORT(stage);
-        // Source schema reflection reports the default native name, not a selection-specific
-        // override. Metal schema reflection has no selected export name: the selected component
-        // and its compiled artifact metadata own that name.
-        const bool isMetal = targets[targetIndex].format == SLANG_METAL;
-        if (isMetal)
-        {
-            SLANG_CHECK(stage->getEntryPointName() == nullptr);
-        }
-        else
-        {
-            SLANG_CHECK(String(stage->getEntryPointName()) == "SharedHit_closesthit");
-        }
+        SLANG_CHECK(stage == layout->findTypeByName("SharedHit"));
+        SLANG_CHECK(
+            layout->findTypeByName("HitGroup.ClosestHit.Context") ==
+            layout->findTypeByName("HitContext"));
 
         ComPtr<slang::IBlob> code;
         auto result = linked->getTargetCode(targetIndex, code.writeRef(), diagnostics.writeRef());
@@ -120,13 +111,6 @@ SLANG_UNIT_TEST(portableRayTracingRenamedStageAndSchema)
             SLANG_CHECK(emitted.indexOf(UnownedStringSlice("[shader(\"closesthit\")]")) >= 0);
         }
         SLANG_CHECK(String(entry->getNameOverride()) == "renamedPortableHit");
-        if (isMetal)
-        {
-            SLANG_CHECK(stage->getEntryPointName() == nullptr);
-        }
-        else
-        {
-            SLANG_CHECK(String(stage->getEntryPointName()) == "SharedHit_closesthit");
-        }
+        SLANG_CHECK(stage == layout->findTypeByName("HitGroup.ClosestHit"));
     }
 }

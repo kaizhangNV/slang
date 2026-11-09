@@ -129,10 +129,14 @@ SLANG_UNIT_TEST(metalPortableRayTracingArtifactMetadata)
     SLANG_CHECK_ABORT(SLANG_SUCCEEDED(composite->link(linked.writeRef(), diagnostics.writeRef())));
     auto sourceLayout = linked->getLayout(0, diagnostics.writeRef());
     SLANG_CHECK_ABORT(sourceLayout);
-    auto firstSchema = sourceLayout->findTraceProgramSchema("Schema<1>");
-    auto secondSchema = sourceLayout->findTraceProgramSchema("Schema<2>");
+    auto firstSchema = sourceLayout->findTypeByName("Schema<1>");
+    auto secondSchema = sourceLayout->findTypeByName("Schema<2>");
     SLANG_CHECK_ABORT(firstSchema && secondSchema && firstSchema != secondSchema);
-    auto recordLayout = firstSchema->getMissShader(0)->getRecordTypeLayout();
+    // Query the known Miss specialization's Record through its Context type alias.
+    auto recordType = sourceLayout->findTypeByName("Miss<1>.Context.Record");
+    SLANG_CHECK_ABORT(recordType);
+    auto recordLayout =
+        sourceLayout->getTypeLayout(recordType, slang::LayoutRules::DefaultStructuredBuffer);
     SLANG_CHECK_ABORT(recordLayout && recordLayout->getFieldCount() == 7);
     // Packed float3 leaves the next scalar at byte 12. Metal bool occupies one byte, and the
     // nested uint64/uint aggregate includes its C tail padding. Natural IR layout is not this ABI.
@@ -147,10 +151,10 @@ SLANG_UNIT_TEST(metalPortableRayTracingArtifactMetadata)
     SLANG_CHECK(recordLayout->getFieldByIndex(6)->getOffset() == 104);
     SLANG_CHECK(recordLayout->getSize() == 112);
     ComPtr<slang::IBlob> schemaNames[2];
-    SLANG_CHECK_ABORT(SLANG_SUCCEEDED(
-        session->getTypeRTTIMangledName(firstSchema->getType(), schemaNames[0].writeRef())));
-    SLANG_CHECK_ABORT(SLANG_SUCCEEDED(
-        session->getTypeRTTIMangledName(secondSchema->getType(), schemaNames[1].writeRef())));
+    SLANG_CHECK_ABORT(
+        SLANG_SUCCEEDED(session->getTypeRTTIMangledName(firstSchema, schemaNames[0].writeRef())));
+    SLANG_CHECK_ABORT(
+        SLANG_SUCCEEDED(session->getTypeRTTIMangledName(secondSchema, schemaNames[1].writeRef())));
 
     ComPtr<slang::IBlob> code;
     auto result = linked->getEntryPointCode(0, 0, code.writeRef(), diagnostics.writeRef());
@@ -203,8 +207,8 @@ SLANG_UNIT_TEST(metalPortableRayTracingArtifactMetadata)
         }
     }
     SLANG_CHECK(programIndices[0] != programIndices[1]);
-    SLANG_CHECK(sourceLayout->findTraceProgramSchema("Schema<1>") == firstSchema);
-    SLANG_CHECK(sourceLayout->findTraceProgramSchema("Schema<2>") == secondSchema);
+    SLANG_CHECK(sourceLayout->findTypeByName("Schema<1>") == firstSchema);
+    SLANG_CHECK(sourceLayout->findTypeByName("Schema<2>") == secondSchema);
     uint32_t missing = 123;
     SLANG_CHECK(
         physical->findProgramBySchemaTypeMangledName("absent", &missing) == SLANG_E_NOT_FOUND);

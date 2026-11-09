@@ -103,35 +103,40 @@ static void portableRayTracingRecursiveTestImpl(IDevice* device, UnitTestContext
     diagnoseIfNeeded(diagnostics);
     SLANG_CHECK_ABORT(module != nullptr);
 
-    // The schema supplies stage identities; the host does not duplicate generated export names.
     auto sourceLayout = module->getLayout(0, diagnostics.writeRef());
     diagnoseIfNeeded(diagnostics);
     SLANG_CHECK_ABORT(sourceLayout);
-    auto schema = sourceLayout->findTraceProgramSchema("Schema");
-    SLANG_CHECK_ABORT(
-        schema && schema->getHitGroupCount() == 1 && schema->getMissShaderCount() == 1);
-    auto hit = schema->getHitGroup(0);
-    auto reflectedMiss = schema->getMissShader(0);
-    SLANG_CHECK(hit->getFunctionIndex() == 0 && reflectedMiss->getFunctionIndex() == 0);
+    // The fixture declares one hit group and one miss shader. Read each list's static count.
+    const char* listNames[] = {"Schema.HitGroups", "Schema.MissShaders"};
+    for (const char* listName : listNames)
+    {
+        auto listType = sourceLayout->findTypeByName(listName);
+        SLANG_CHECK_ABORT(listType);
+        auto count = sourceLayout->findVarByNameInType(listType, "count");
+        SLANG_CHECK_ABORT(count);
+        ComPtr<slang::IBlob> countValue;
+        GFX_CHECK_CALL_ABORT(count->getDefaultValueBlob(countValue.writeRef()));
+        SLANG_CHECK_ABORT(countValue && countValue->getBufferSize() == sizeof(int32_t));
+        SLANG_CHECK(*static_cast<const int32_t*>(countValue->getBufferPointer()) == 1);
+    }
 
-    ComPtr<slang::IEntryPoint> entries[3];
-    auto result = module->findAndCheckEntryPoint(
-        "RayGeneration",
-        SLANG_STAGE_RAY_GENERATION,
-        entries[0].writeRef(),
-        diagnostics.writeRef());
-    diagnoseIfNeeded(diagnostics);
-    GFX_CHECK_CALL_ABORT(result);
-    slang::RayTracingStageReflection* stages[] = {hit->getClosestHit(), reflectedMiss->getMiss()};
+    // Select this fixture's known source stages. Entry reflection below gives native export names.
+    const struct
+    {
+        const char* name;
+        SlangStage stage;
+    } stages[] = {
+        {"RayGeneration", SLANG_STAGE_RAY_GENERATION},
+        {"RecursiveClosestHit", SLANG_STAGE_CLOSEST_HIT},
+        {"SecondaryMiss", SLANG_STAGE_MISS}};
+    ComPtr<slang::IEntryPoint> entries[SLANG_COUNT_OF(stages)];
+    SlangResult result;
     for (Index i = 0; i < SLANG_COUNT_OF(stages); ++i)
     {
-        SLANG_CHECK_ABORT(stages[i]);
-        ComPtr<slang::IBlob> sourceName;
-        GFX_CHECK_CALL_ABORT(stages[i]->getType()->getFullName(sourceName.writeRef()));
         result = module->findAndCheckEntryPoint(
-            static_cast<const char*>(sourceName->getBufferPointer()),
-            stages[i]->getStage(),
-            entries[i + 1].writeRef(),
+            stages[i].name,
+            stages[i].stage,
+            entries[i].writeRef(),
             diagnostics.writeRef());
         diagnoseIfNeeded(diagnostics);
         GFX_CHECK_CALL_ABORT(result);

@@ -5,8 +5,8 @@
 
 using namespace Slang;
 
-// A host can enumerate a checked schema before selecting any of its stages. Reflecting it must
-// preserve list order and ordinary type identity without making otherwise-unused code live.
+// Existing reflection can query schema counts and known stage types before selecting any stage.
+// Querying these types must not make their implementations live.
 SLANG_UNIT_TEST(portableRayTracingSourceSchemaReflection)
 {
     const char* source = R"(
@@ -93,8 +93,7 @@ SLANG_UNIT_TEST(portableRayTracingSourceSchemaReflection)
             typealias MissShaders = rt::EmptyMissShaderList;
             typealias CallableShaders = rt::EmptyCallableShaderList;
         }
-        // Unlike executable stages, a schema is an ordinary interface conformance. Reflection
-        // must not introduce a new rule requiring its implementation to be a struct.
+        // A schema can also be a class implementing ITraceProgramSchema.
         class ClassSchema : rt::ITraceProgramSchema
         {
             typealias TraceContext = ::TraceContext;
@@ -138,8 +137,7 @@ SLANG_UNIT_TEST(portableRayTracingSourceSchemaReflection)
                 static_cast<const char*>(diagnostics->getBufferPointer()));
         SLANG_CHECK_ABORT(module);
 
-        // Reload a serialized module in another session. The query must use the same checked
-        // declarations and witnesses, not a registry populated only when parsing source.
+        // The same queries must work after loading a serialized module in a new session.
         ComPtr<slang::IBlob> serialized;
         SLANG_CHECK_ABORT(SLANG_SUCCEEDED(module->serialize(serialized.writeRef())));
         ComPtr<slang::ISession> importingSession;
@@ -156,81 +154,98 @@ SLANG_UNIT_TEST(portableRayTracingSourceSchemaReflection)
 
         auto layout = module->getLayout(0, diagnostics.writeRef());
         SLANG_CHECK_ABORT(layout);
-        auto schema = layout->findTraceProgramSchema("Schema<uint>");
-        SLANG_CHECK_ABORT(schema);
-        SLANG_CHECK(schema == layout->findTraceProgramSchema("SchemaAlias"));
-        SLANG_CHECK(schema->getType() == layout->findTypeByName("Schema<uint>"));
-        SLANG_CHECK(schema->getTraceContextType() == layout->findTypeByName("TraceContext"));
-        SLANG_CHECK(layout->findTraceProgramSchema("Material") == nullptr);
-        SLANG_CHECK(layout->findTraceProgramSchema("rt.ITraceProgramSchema") == nullptr);
-        SLANG_CHECK(layout->findTraceProgramSchema("Schema") == nullptr);
-        SLANG_CHECK(layout->findTraceProgramSchema("noSuchType") == nullptr);
-        SLANG_CHECK_ABORT(schema->getHitGroupCount() == 2);
-        SLANG_CHECK_ABORT(schema->getMissShaderCount() == 2);
-        SLANG_CHECK_ABORT(schema->getCallableShaderCount() == 1);
-        SLANG_CHECK(schema->getHitGroup(2) == nullptr);
-        SLANG_CHECK(schema->getMissShader(2) == nullptr);
-        SLANG_CHECK(schema->getCallableShader(1) == nullptr);
+        auto schema = layout->findTypeByName("Schema<uint>");
+        auto floatSchema = layout->findTypeByName("Schema<float>");
+        SLANG_CHECK_ABORT(schema && floatSchema);
+        SLANG_CHECK(schema != floatSchema); // Different generic arguments give different types.
+        SLANG_CHECK(schema == layout->findTypeByName("SchemaAlias"));
 
-        auto procedural = schema->getHitGroup(0);
-        auto triangle = schema->getHitGroup(1);
-        SLANG_CHECK(procedural->getFunctionIndex() == 0);
-        SLANG_CHECK(triangle->getFunctionIndex() == 1);
-        SLANG_CHECK(procedural->getType() == layout->findTypeByName("ProceduralGroup"));
-        SLANG_CHECK(triangle->getType() == layout->findTypeByName("TriangleGroup"));
-        SLANG_CHECK(procedural->getClosestHit() == nullptr);
-        SLANG_CHECK(procedural->getAnyHit() == nullptr);
-        SLANG_CHECK_ABORT(procedural->getIntersection());
-        SLANG_CHECK(procedural->getIntersection()->getStage() == SLANG_STAGE_INTERSECTION);
-        SLANG_CHECK(
-            procedural->getIntersectionAttributesType() == layout->findTypeByName("Attributes"));
-        SLANG_CHECK(triangle->getIntersection() == nullptr);
-        SLANG_CHECK(triangle->getAnyHit() == nullptr);
-        SLANG_CHECK_ABORT(triangle->getClosestHit());
-        SLANG_CHECK(triangle->getClosestHit()->getStage() == SLANG_STAGE_CLOSEST_HIT);
-        SLANG_CHECK(
-            triangle->getClosestHit()->getType() == layout->findTypeByName("Stages.ClosestHit"));
-        SLANG_CHECK(triangle->getPayloadType() == layout->findTypeByName("uint"));
-        SLANG_CHECK(triangle->getRecordType() == layout->findTypeByName("Material"));
-        SLANG_CHECK(triangle->getPrimitiveType() == layout->findTypeByName("rt.TrianglePrimitive"));
-        SLANG_CHECK_ABORT(triangle->getRecordTypeLayout());
-        SLANG_CHECK(triangle->getRecordTypeLayout()->getSize() == 16);
-        auto expectedRules = target == SLANG_HLSL ? slang::LayoutRules::DefaultConstantBuffer
-                                                  : slang::LayoutRules::DefaultStructuredBuffer;
-        SLANG_CHECK(
-            triangle->getRecordTypeLayout() ==
-            layout->getTypeLayout(triangle->getRecordType(), expectedRules));
-        auto entryName = triangle->getClosestHit()->getEntryPointName();
-        if (target == SLANG_HLSL)
+        // Read each list's static count without enumerating its generic arguments.
+        struct ListCount
         {
-            SLANG_CHECK(
-                entryName && UnownedStringSlice(entryName) == "Stages_ClosestHit_closesthit");
-        }
-        else
+            const char* typeName;
+            int count;
+        };
+        const ListCount listCounts[] = {
+            {"Schema<uint>.HitGroups", 2},
+            {"SchemaAlias.HitGroups", 2},
+            {"Schema<uint>.MissShaders", 2},
+            {"Schema<uint>.CallableShaders", 1},
+            {"Schema<float>.MissShaders", 2},
+            {"EmptySchema.HitGroups", 0},
+            {"EmptySchema.MissShaders", 0},
+            {"EmptySchema.CallableShaders", 0},
+            {"ClassSchema.HitGroups", 0},
+        };
+        for (auto expected : listCounts)
         {
-            SLANG_CHECK(entryName == nullptr);
+            auto listType = layout->findTypeByName(expected.typeName);
+            SLANG_CHECK_ABORT(listType);
+            auto count = layout->findVarByNameInType(listType, "count");
+            SLANG_CHECK_ABORT(count);
+            ComPtr<slang::IBlob> value;
+            SLANG_CHECK_ABORT(SLANG_SUCCEEDED(count->getDefaultValueBlob(value.writeRef())));
+            SLANG_CHECK_ABORT(value && value->getBufferSize() == sizeof(int));
+            SLANG_CHECK(*static_cast<const int*>(value->getBufferPointer()) == expected.count);
         }
 
-        auto miss = schema->getMissShader(0);
-        SLANG_CHECK(miss->getFunctionIndex() == 0);
-        SLANG_CHECK(miss->getPayloadType() == layout->findTypeByName("uint"));
-        SLANG_CHECK(miss->getRecordType() == layout->findTypeByName("void"));
-        SLANG_CHECK(miss->getContextType() == layout->findTypeByName("MissContext<uint>"));
-        SLANG_CHECK(schema->getMissShader(1)->getPayloadType() == layout->findTypeByName("int"));
-        auto callable = schema->getCallableShader(0);
-        SLANG_CHECK(callable->getFunctionIndex() == 0);
-        SLANG_CHECK(callable->getDataType() == layout->findTypeByName("float2"));
-        SLANG_CHECK(callable->getCallable()->getStage() == SLANG_STAGE_CALLABLE);
-        auto floatSchema = layout->findTraceProgramSchema("Schema<float>");
-        SLANG_CHECK_ABORT(floatSchema && floatSchema != schema);
-        SLANG_CHECK(
-            floatSchema->getMissShader(0)->getPayloadType() == layout->findTypeByName("float"));
-        auto empty = layout->findTraceProgramSchema("EmptySchema");
-        SLANG_CHECK_ABORT(empty);
-        SLANG_CHECK(empty->getHitGroupCount() == 0);
-        SLANG_CHECK(empty->getMissShaderCount() == 0);
-        SLANG_CHECK(empty->getCallableShaderCount() == 0);
-        SLANG_CHECK(layout->findTraceProgramSchema("ClassSchema") != nullptr);
+        // The host already knows these stage names; qualified lookup resolves their type aliases.
+        struct TypeQuery
+        {
+            const char* path;
+            const char* expectedType;
+        };
+        const TypeQuery associatedTypes[] = {
+            {"Schema<uint>.TraceContext", "TraceContext"},
+            {"SchemaAlias.HitGroups", "Schema<uint>.HitGroups"},
+            {"ProceduralGroup.Context", "Intersection.Context"},
+            {"ProceduralGroup.Intersection", "Intersection"},
+            {"ProceduralGroup.Context.Primitive", "rt.BoundingBoxPrimitive<Attributes>"},
+            {"ProceduralGroup.Context.Primitive.Attributes", "Attributes"},
+            {"TriangleGroup.ClosestHit", "Stages.ClosestHit"},
+            {"TriangleGroup.Context.Payload", "uint"},
+            {"TriangleGroup.Context.Record", "Material"},
+            {"TriangleGroup.Context.Primitive", "rt.TrianglePrimitive"},
+            {"GenericMiss<uint>.Context", "MissContext<uint>"},
+            {"GenericMiss<uint>.Context.Payload", "uint"},
+            {"GenericMiss<uint>.Context.Record", "void"},
+            {"GenericMiss<int>.Context.Payload", "int"},
+            {"GenericMiss<float>.Context.Payload", "float"},
+            {"Callable.Context.CallableData", "float2"},
+            {"Callable.Context.Record", "Material"},
+        };
+        for (auto expected : associatedTypes)
+        {
+            auto type = layout->findTypeByName(expected.path);
+            auto expectedType = layout->findTypeByName(expected.expectedType);
+            SLANG_CHECK_ABORT(type && expectedType);
+            SLANG_CHECK(type == expectedType);
+        }
+
+        // Inherited interfaces and class schemas use the ordinary conformance query.
+        const TypeQuery conformances[] = {
+            {"Schema<uint>", "rt.ITraceProgramSchema"},
+            {"ClassSchema", "rt.ITraceProgramSchema"},
+            {"TriangleGroup", "rt.IHitGroup"},
+            {"GenericMiss<uint>", "rt.IMissShader"},
+        };
+        for (auto expected : conformances)
+        {
+            auto type = layout->findTypeByName(expected.path);
+            auto interfaceType = layout->findTypeByName(expected.expectedType);
+            SLANG_CHECK_ABORT(type && interfaceType);
+            SLANG_CHECK(layout->isSubType(type, interfaceType));
+        }
+
+        auto record = layout->findTypeByName("TriangleGroup.Context.Record");
+        auto rules = target == SLANG_HLSL ? slang::LayoutRules::DefaultConstantBuffer
+                                          : slang::LayoutRules::DefaultStructuredBuffer;
+        auto recordLayout = layout->getTypeLayout(record, rules);
+        SLANG_CHECK_ABORT(recordLayout);
+        SLANG_CHECK(recordLayout->getSize() == 16); // float3 color + float opacity.
+        SLANG_CHECK_ABORT(recordLayout->getFieldCount() == 2);
+        SLANG_CHECK(recordLayout->getFieldByIndex(0)->getOffset() == 0);  // color.
+        SLANG_CHECK(recordLayout->getFieldByIndex(1)->getOffset() == 12); // opacity.
 
         ComPtr<slang::IEntryPoint> entryPoint;
         SLANG_CHECK_ABORT(
@@ -246,16 +261,19 @@ SLANG_UNIT_TEST(portableRayTracingSourceSchemaReflection)
         SLANG_CHECK_ABORT(
             SLANG_SUCCEEDED(composite->link(linked.writeRef(), diagnostics.writeRef())));
         auto linkedLayout = linked->getLayout();
-        auto beforeCodegen = linkedLayout->findTraceProgramSchema("Schema<uint>");
+        auto beforeCodegen = linkedLayout->findTypeByName("TriangleGroup.ClosestHit");
         SLANG_CHECK_ABORT(beforeCodegen);
         ComPtr<slang::IBlob> code;
         SLANG_CHECK_ABORT(SLANG_SUCCEEDED(
             linked->getEntryPointCode(0, 0, code.writeRef(), diagnostics.writeRef())));
-        SLANG_CHECK(beforeCodegen == linkedLayout->findTraceProgramSchema("Schema<uint>"));
+        SLANG_CHECK(beforeCodegen == linkedLayout->findTypeByName("TriangleGroup.ClosestHit"));
         UnownedStringSlice emitted(
             static_cast<const char*>(code->getBufferPointer()),
             code->getBufferSize());
+        // Reflecting stages must not emit them alongside the unrelated compute entry point.
         SLANG_CHECK(emitted.indexOf(toSlice("ClosestHit")) < 0);
         SLANG_CHECK(emitted.indexOf(toSlice("GenericMiss")) < 0);
+        SLANG_CHECK(emitted.indexOf(toSlice("Intersection")) < 0);
+        SLANG_CHECK(emitted.indexOf(toSlice("Callable")) < 0);
     }
 }

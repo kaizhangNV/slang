@@ -219,7 +219,7 @@ enum class SyntheticResourceKnownID : uint32_t
     Coverage = 1,
 };
 
-/// Owns emitted names independently of the IR module and source reflection's lifetime.
+/// Owns emitted names independently of the IR module and ordinary reflection's lifetime.
 struct MetalRTFunctionMetadata
 {
     String entryPointName;

@@ -81,48 +81,55 @@ static void portableRayTracingSbtAddressingTestImpl(IDevice* device, UnitTestCon
     auto sourceLayout = module->getLayout(0, diagnostics.writeRef());
     diagnoseIfNeeded(diagnostics);
     SLANG_CHECK_ABORT(sourceLayout);
-    auto schema = sourceLayout->findTraceProgramSchema("Schema");
-    SLANG_CHECK_ABORT(
-        schema && schema->getHitGroupCount() == 3 && schema->getMissShaderCount() == 2 &&
-        schema->getCallableShaderCount() == 2);
-
-    // Source schema reflection supplies the stage types. Ordinary selected-entry reflection
-    // below supplies native exports; the host never guesses generated name suffixes.
-    List<slang::RayTracingStageReflection*> stages;
-    for (SlangUInt i = 0; i < schema->getHitGroupCount(); ++i)
+    // List counts describe schema entries; the host chooses the number of SBT records below.
+    const struct
     {
-        auto group = schema->getHitGroup(i);
-        SLANG_CHECK_ABORT(group->getFunctionIndex() == i);
-        SLANG_CHECK_ABORT(!group->getAnyHit() && !group->getIntersection());
-        stages.add(group->getClosestHit());
+        const char* name;
+        int32_t count;
+    } expectedLists[] = {
+        {"Schema.HitGroups", 3},
+        {"Schema.MissShaders", 2},
+        {"Schema.CallableShaders", 2}};
+    for (const auto& expected : expectedLists)
+    {
+        auto listType = sourceLayout->findTypeByName(expected.name);
+        SLANG_CHECK_ABORT(listType);
+        auto count = sourceLayout->findVarByNameInType(listType, "count");
+        SLANG_CHECK_ABORT(count);
+        ComPtr<slang::IBlob> countValue;
+        GFX_CHECK_CALL_ABORT(count->getDefaultValueBlob(countValue.writeRef()));
+        SLANG_CHECK_ABORT(countValue && countValue->getBufferSize() == sizeof(int32_t));
+        SLANG_CHECK(*static_cast<const int32_t*>(countValue->getBufferPointer()) == expected.count);
     }
-    for (SlangUInt i = 0; i < schema->getMissShaderCount(); ++i)
-        stages.add(schema->getMissShader(i)->getMiss());
-    for (SlangUInt i = 0; i < schema->getCallableShaderCount(); ++i)
-        stages.add(schema->getCallableShader(i)->getCallable());
 
-    List<ComPtr<slang::IEntryPoint>> entries;
-    entries.setCount(stages.getCount() + 1);
-    auto result = module->findAndCheckEntryPoint(
-        "RayGeneration",
-        SLANG_STAGE_RAY_GENERATION,
-        entries[0].writeRef(),
-        diagnostics.writeRef());
-    diagnoseIfNeeded(diagnostics);
-    GFX_CHECK_CALL_ABORT(result);
-    for (Index i = 0; i < stages.getCount(); ++i)
+    // Select this fixture's known source stages. Entry reflection below gives native export names.
+    const struct
     {
-        SLANG_CHECK_ABORT(stages[i]);
-        ComPtr<slang::IBlob> sourceName;
-        GFX_CHECK_CALL_ABORT(stages[i]->getType()->getFullName(sourceName.writeRef()));
+        const char* name;
+        SlangStage stage;
+    } stages[] = {
+        {"RayGeneration", SLANG_STAGE_RAY_GENERATION},
+        {"WrongHit", SLANG_STAGE_CLOSEST_HIT},
+        {"FirstHit", SLANG_STAGE_CLOSEST_HIT},
+        {"SecondHit", SLANG_STAGE_CLOSEST_HIT},
+        {"WrongMiss", SLANG_STAGE_MISS},
+        {"SelectedMiss", SLANG_STAGE_MISS},
+        {"WrongCallable", SLANG_STAGE_CALLABLE},
+        {"SelectedCallable", SLANG_STAGE_CALLABLE}};
+    List<ComPtr<slang::IEntryPoint>> entries;
+    entries.setCount(SLANG_COUNT_OF(stages));
+    SlangResult result;
+    for (Index i = 0; i < SLANG_COUNT_OF(stages); ++i)
+    {
         result = module->findAndCheckEntryPoint(
-            static_cast<const char*>(sourceName->getBufferPointer()),
-            stages[i]->getStage(),
-            entries[i + 1].writeRef(),
+            stages[i].name,
+            stages[i].stage,
+            entries[i].writeRef(),
             diagnostics.writeRef());
         diagnoseIfNeeded(diagnostics);
         GFX_CHECK_CALL_ABORT(result);
     }
+
     List<slang::IComponentType*> components;
     components.add(module);
     for (auto& entry : entries)
@@ -157,11 +164,10 @@ static void portableRayTracingSbtAddressingTestImpl(IDevice* device, UnitTestCon
     }
     const char* groupNames[] = {"sentinelGroup", "firstGroup", "secondGroup"};
     HitGroupDesc hitGroups[3] = {};
-    for (SlangUInt i = 0; i < schema->getHitGroupCount(); ++i)
+    for (Index i = 0; i < SLANG_COUNT_OF(hitGroups); ++i)
     {
-        const auto functionIndex = schema->getHitGroup(i)->getFunctionIndex();
-        hitGroups[functionIndex].hitGroupName = groupNames[functionIndex];
-        hitGroups[functionIndex].closestHitEntryPoint = names[1 + i];
+        hitGroups[i].hitGroupName = groupNames[i];
+        hitGroups[i].closestHitEntryPoint = names[1 + i];
     }
     RayTracingPipelineDesc pipelineDesc = {};
     pipelineDesc.program = program;

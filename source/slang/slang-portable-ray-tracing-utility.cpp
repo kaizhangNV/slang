@@ -363,8 +363,8 @@ Type* getAssociatedType(
     SLANG_UNEXPECTED("portable ray-tracing contract is missing its associated-type role");
 }
 
-// The checked list application already owns its type pack. Use that semantic value for both
-// duplicate-entry checking and source reflection, without reparsing the generic argument list.
+// Returns the checked list's type pack for duplicate-entry checking, without reparsing
+// the generic argument list.
 ConcreteTypePack* getConcreteEntryTypes(Type* entryListType)
 {
     if (auto declRefType = as<DeclRefType>(entryListType->resolve()))
