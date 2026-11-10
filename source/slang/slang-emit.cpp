@@ -1608,15 +1608,13 @@ Result linkAndOptimizeIR(
     // A portable stage's checked static method is still an ordinary callable helper. Build
     // its target entry adapter only after specialization has resolved its input context, and
     // before DCE or native ABI legalization can discard or reinterpret that logical input.
-    if (requiredLoweringPassSet.portableRayTracing && isMetalTarget(targetRequest))
+    if (requiredLoweringPassSet.portableRayTracing)
         SLANG_PASS(
-            lowerMetalPortableRayTracing,
+            lowerPortableRayTracingEntryPoints,
             targetProgram,
             irEntryPoints,
             sink,
             requiredLoweringPassSet.resultType);
-    else if (requiredLoweringPassSet.portableRayTracing)
-        SLANG_PASS(lowerPortableRayTracingEntryPoints, targetProgram, irEntryPoints, sink);
     if (sink->getErrorCount() != 0)
         return SLANG_FAIL;
 

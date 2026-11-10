@@ -1,6 +1,7 @@
 #include "slang-ir-portable-ray-tracing.h"
 
 #include "slang-ir-insts.h"
+#include "slang-ir-metal-portable-ray-tracing.h"
 #include "slang-ir-portable-ray-tracing-util.h"
 #include "slang-ir-util.h"
 #include "slang-rich-diagnostics.h"
@@ -459,9 +460,20 @@ void lowerPortableRayTracingEntryPoints(
     IRModule* module,
     TargetProgram* targetProgram,
     List<IRFunc*>& entryPoints,
-    DiagnosticSink* sink)
+    DiagnosticSink* sink,
+    bool& requiresResultTypeLowering)
 {
     auto target = targetProgram->getTargetReq();
+    if (isMetalTarget(target))
+    {
+        lowerMetalPortableRayTracing(
+            module,
+            targetProgram,
+            entryPoints,
+            sink,
+            requiresResultTypeLowering);
+        return;
+    }
     if (!isD3DTarget(target) && !isKhronosTarget(target) && !isCUDATarget(target))
         return;
 
