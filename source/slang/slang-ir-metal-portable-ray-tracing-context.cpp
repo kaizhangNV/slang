@@ -7,25 +7,20 @@
 namespace Slang
 {
 
-void preserveMetalRTGlobalResources(IRModule* module, IRVarLayout* globalScopeVarLayout)
+void preserveMetalRTGlobalResources(IRModule* module, const List<IRGlobalParam*>& globalParams)
 {
-    if (!globalScopeVarLayout)
-        return;
-    auto typeLayout = globalScopeVarLayout->getTypeLayout();
-    if (auto group = as<IRParameterGroupTypeLayout>(typeLayout))
-        typeLayout = group->getElementVarLayout()->getTypeLayout();
-    auto structure = cast<IRStructTypeLayout>(typeLayout);
     IRBuilder builder(module);
     IRIntegerValue layoutIndex = 0;
     // Consider a miss shader that reads a global buffer while ray generation only calls trace.
     // Both compilations need the same resource fields in MetalRTGlobalResources. Keep the linked
-    // component's runtime globals and record their layout order before uniform collection rewrites
-    // the layout keys and dead-code elimination removes declarations unused by the selected entry.
-    for (auto field : structure->getFieldLayoutAttrs())
+    // component's runtime globals after uniform collection has replaced ordinary uniforms with
+    // their buffer. Its result list supplies layout order even though the layout's field keys no
+    // longer refer to those globals. Record that order before optimization can remove unused ones.
+    for (auto parameter : globalParams)
     {
-        auto parameter = getGlobalParamFromLayoutFieldKey(field->getFieldKey());
-        if (parameter &&
-            !field->getLayout()->findOffsetAttr(LayoutResourceKind::SpecializationConstant))
+        auto layout = findVarLayout(parameter);
+        SLANG_RELEASE_ASSERT(layout);
+        if (!layout->findOffsetAttr(LayoutResourceKind::SpecializationConstant))
         {
             builder.addDecoration(
                 parameter,

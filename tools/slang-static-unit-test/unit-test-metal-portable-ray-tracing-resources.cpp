@@ -1,4 +1,7 @@
 #include "slang/slang-ir-collect-global-uniforms.h"
+#include "slang/slang-ir-dce.h"
+#include "slang/slang-ir-explicit-global-context.h"
+#include "slang/slang-ir-metal-portable-ray-tracing-context.h"
 #include "slang/slang-ir-metal-portable-ray-tracing-resources.h"
 #include "slang/slang-ir-util.h"
 #include "static-unit-test-env.h"
@@ -262,4 +265,135 @@ SLANG_UNIT_TEST(metalPortableDescriptorGlobalLayoutOnlyKeys)
         offsetFields->getFieldLayout(1)
             ->findOffsetAttr(LayoutResourceKind::MetalBuffer)
             ->getOffset() == 9);
+}
+
+SLANG_UNIT_TEST(metalPortableCollectedGlobalResources)
+{
+    StaticUnitTestEnv env(unitTestContext);
+    for (bool hasUniforms : {false, true})
+    {
+        IRFixtureBuilder fixture(env.getSessionImpl());
+        auto module = fixture.getModule();
+        IRBuilder builder(module);
+        builder.setInsertInto(module);
+
+        // Consider globals declared as bufferA, exposure, bufferB, gain. Linking one entry
+        // can discover bufferB before bufferA, and explicit bindings can alias. Collection
+        // must report bufferA, the uniform wrapper, bufferB in the component's layout order.
+        // The resource-only case also needs this order when collection creates no wrapper.
+        auto secondBuffer = builder.createGlobalParam(
+            builder.getPtrType(builder.getFloatType(), AddressSpace::Global));
+        auto firstBuffer = builder.createGlobalParam(
+            builder.getPtrType(builder.getUIntType(), AddressSpace::Global));
+        IRTypeLayout::Builder bufferBuilder(&builder);
+        bufferBuilder.addResourceUsage(LayoutResourceKind::MetalBuffer, LayoutSize(1));
+        auto bufferLayout = bufferBuilder.build();
+        auto bufferBinding =
+            createBinding(builder, bufferLayout, LayoutResourceKind::MetalBuffer, 3);
+        builder.addLayoutDecoration(firstBuffer, bufferBinding);
+        builder.addLayoutDecoration(secondBuffer, bufferBinding);
+
+        IRStructTypeLayout::Builder fieldsBuilder(&builder);
+        fieldsBuilder.addResourceUsage(LayoutResourceKind::MetalBuffer, LayoutSize(2));
+        fieldsBuilder.addField(firstBuffer, bufferBinding);
+        IRGlobalParam* secondUniform = nullptr;
+        IRTypeLayout* scalarLayout = nullptr;
+        if (hasUniforms)
+        {
+            IRTypeLayout::Builder scalarBuilder(&builder);
+            scalarBuilder.addResourceUsage(LayoutResourceKind::Uniform, LayoutSize(4));
+            scalarLayout = scalarBuilder.build();
+            auto firstUniform = builder.createGlobalParam(builder.getUIntType());
+            secondUniform = builder.createGlobalParam(builder.getUIntType());
+            fieldsBuilder.addResourceUsage(LayoutResourceKind::Uniform, LayoutSize(8));
+            fieldsBuilder.addField(
+                firstUniform,
+                createBinding(builder, scalarLayout, LayoutResourceKind::Uniform, 0));
+        }
+        fieldsBuilder.addField(secondBuffer, bufferBinding);
+        if (hasUniforms)
+            fieldsBuilder.addField(
+                secondUniform,
+                createBinding(builder, scalarLayout, LayoutResourceKind::Uniform, 4));
+        auto fields = fieldsBuilder.build();
+        IRVarLayout* globalLayout = nullptr;
+        if (hasUniforms)
+        {
+            IRParameterGroupTypeLayout::Builder groupBuilder(&builder);
+            groupBuilder.addResourceUsage(LayoutResourceKind::MetalBuffer, LayoutSize(1));
+            groupBuilder.setContainerVarLayout(
+                createBinding(builder, bufferLayout, LayoutResourceKind::MetalBuffer, 0));
+            groupBuilder.setElementVarLayout(
+                createBinding(builder, fields, LayoutResourceKind::Uniform, 0));
+            groupBuilder.setOffsetElementTypeLayout(fields);
+            globalLayout =
+                createBinding(builder, groupBuilder.build(), LayoutResourceKind::MetalBuffer, 0);
+        }
+        else
+        {
+            IRVarLayout::Builder layoutBuilder(&builder, fields);
+            globalLayout = layoutBuilder.build();
+        }
+
+        List<IRGlobalParam*> globalParams;
+        collectGlobalUniformParameters(module, globalLayout, CodeGenTarget::Metal, &globalParams);
+        SLANG_CHECK_ABORT(globalParams.getCount() == (hasUniforms ? 3 : 2));
+        SLANG_CHECK(globalParams[0] == firstBuffer);
+        SLANG_CHECK(globalParams.getLast() == secondBuffer);
+        if (hasUniforms)
+            SLANG_CHECK(as<IRUniformParameterGroupType>(globalParams[1]->getDataType()));
+
+        // No shader body reads these globals yet. Preserving the reported parameters must
+        // keep both standalone resources and the new wrapper through ordinary parameter DCE.
+        preserveMetalRTGlobalResources(module, globalParams);
+        IRDeadCodeEliminationOptions dceOptions;
+        dceOptions.keepGlobalParamsAlive = false;
+        eliminateDeadCode(module, dceOptions);
+        List<IRGlobalParam*> survivingParams;
+        for (auto inst : module->getGlobalInsts())
+            if (auto parameter = as<IRGlobalParam>(inst))
+                survivingParams.add(parameter);
+        SLANG_CHECK_ABORT(survivingParams.getCount() == globalParams.getCount());
+        for (auto parameter : globalParams)
+            SLANG_CHECK_ABORT(survivingParams.contains(parameter));
+
+        // A separately compiled visible shader must interpret its resource pointer using
+        // the same order, including the wrapper even though this shader only reads bufferB.
+        builder.setInsertInto(module);
+        auto erasedPointer = builder.getPtrType(builder.getUInt8Type(), AddressSpace::ThreadLocal);
+        IRType* parameterTypes[] = {erasedPointer};
+        auto signature = builder.getFuncType(1, parameterTypes, builder.getVoidType());
+        auto stage = builder.getIntValue(builder.getIntType(), IRIntegerValue(Stage::Miss));
+        IRInst* tableOperands[] = {signature, stage};
+        auto table = builder.getType(kIROp_MetalVisibleFunctionTable, 2, tableOperands);
+        auto provider = builder.createFunc();
+        provider->setFullType(signature);
+        IRInst* providerOperands[] = {stage, table};
+        builder.addDecoration(provider, kIROp_MetalVisibleFunctionDecoration, providerOperands, 2);
+        builder.setInsertInto(provider);
+        builder.emitBlock();
+        auto resourceParameter = builder.emitParam(erasedPointer);
+        builder.addDecoration(resourceParameter, kIROp_MetalRTGlobalResourceContextDecoration);
+        builder.emitLoad(secondBuffer);
+        builder.emitReturn();
+
+        DiagnosticSink sink;
+        introduceExplicitGlobalContext(module, CodeGenTarget::Metal, &sink);
+        IRStructType* sharedType = nullptr;
+        for (auto inst : provider->getFirstBlock()->getChildren())
+            if (auto cast = as<IRBitCast>(inst))
+                if (cast->getOperand(0) == resourceParameter)
+                    sharedType =
+                        as<IRStructType>(as<IRPtrType>(cast->getDataType())->getValueType());
+        SLANG_CHECK_ABORT(sharedType);
+        Index fieldIndex = 0;
+        for (auto field : sharedType->getFields())
+        {
+            SLANG_CHECK_ABORT(fieldIndex < globalParams.getCount());
+            SLANG_CHECK(field->getFieldType() == globalParams[fieldIndex]->getFullType());
+            ++fieldIndex;
+        }
+        SLANG_CHECK(fieldIndex == globalParams.getCount());
+        SLANG_CHECK(sink.getErrorCount() == 0);
+    }
 }

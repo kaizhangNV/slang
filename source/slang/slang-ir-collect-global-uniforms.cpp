@@ -51,6 +51,35 @@ struct CollectGlobalUniformParametersContext
     IRModule* module;
     IRVarLayout* globalScopeVarLayout;
     CodeGenTarget target = CodeGenTarget::Unknown;
+    List<IRGlobalParam*>* outGlobalParams = nullptr;
+
+    // Records the globals that remain after collection, before the layout keys are rewritten.
+    // Consider exposure, values, and gain in layout order, where exposure and gain are uniforms.
+    // The resulting list is globalParams, values: both uniforms share one wrapper. Use the
+    // original layout order even if the target needs a different order for the wrapper's fields.
+    void collectResultingGlobalParams(IRStructTypeLayout* layout, IRGlobalParam* wrapper)
+    {
+        if (!outGlobalParams)
+            return;
+        bool addedWrapper = false;
+        for (auto field : layout->getFieldLayoutAttrs())
+        {
+            auto parameter = getGlobalParamFromLayoutFieldKey(field->getFieldKey());
+            if (!parameter)
+                continue;
+            if (wrapper &&
+                field->getLayout()->getTypeLayout()->findSizeAttr(LayoutResourceKind::Uniform))
+            {
+                if (!addedWrapper)
+                {
+                    outGlobalParams->add(wrapper);
+                    addedWrapper = true;
+                }
+            }
+            else
+                outGlobalParams->add(parameter);
+        }
+    }
 
     // Preserves the checked value type before a layout's global key becomes an untyped key.
     // A global parameter already has its value type; a lowered varying can instead be a load
@@ -104,6 +133,12 @@ struct CollectGlobalUniformParametersContext
                 globalParameterGroupTypeLayout->getElementVarLayout()->getTypeLayout();
         }
 
+        // We expect that the layout for the global-scope parameters is always
+        // computed for a `struct` type.
+        //
+        auto globalParamsStructTypeLayout = as<IRStructTypeLayout>(globalParamsTypeLayout);
+        SLANG_ASSERT(globalParamsStructTypeLayout);
+
         // As a special case (in order to avoid disruption to any downstream passes),
         // if the layout for the global-scope parameters doesn't include any "ordinary"
         // data (represented as `LayoutResourceKind::Uniform`), then we will not do
@@ -120,13 +155,10 @@ struct CollectGlobalUniformParametersContext
         //
         if (!globalParameterGroupTypeLayout &&
             !globalParamsTypeLayout->findSizeAttr(LayoutResourceKind::Uniform))
+        {
+            collectResultingGlobalParams(globalParamsStructTypeLayout, nullptr);
             return;
-
-        // We expect that the layout for the global-scope parameters is always
-        // computed for a `struct` type.
-        //
-        auto globalParamsStructTypeLayout = as<IRStructTypeLayout>(globalParamsTypeLayout);
-        SLANG_ASSERT(globalParamsStructTypeLayout);
+        }
 
         // We need to construct a single IR parameter that will represent
         // the collected global-scope parameters. The `IRBuilder` we construct
@@ -179,6 +211,7 @@ struct CollectGlobalUniformParametersContext
         IRGlobalParam* wrapperParam = builder->createGlobalParam(wrapperParamType);
         builder->addLayoutDecoration(wrapperParam, globalScopeVarLayout);
         builder->addNameHintDecoration(wrapperParam, UnownedTerminatedStringSlice("globalParams"));
+        collectResultingGlobalParams(globalParamsStructTypeLayout, wrapperParam);
 
         // With the setup work out of the way, we can iterate over the global
         // parameters that were present in the layout information (they are
@@ -235,26 +268,6 @@ struct CollectGlobalUniformParametersContext
             auto globalParam = getGlobalParamFromLayoutFieldKey(originalFieldKey);
 
             auto globalParamLayout = fieldLayoutAttr->getLayout();
-
-            // The uniform wrapper replaces these ProgramLayout-owned parameters. Carry the
-            // earliest declaration coordinate so its physical resource leaves keep a stable
-            // place in the independently compiled Metal shader resource context.
-            if (globalParam &&
-                globalParamLayout->getTypeLayout()->findSizeAttr(LayoutResourceKind::Uniform))
-            {
-                if (auto resource =
-                        globalParam->findDecoration<IRMetalRTGlobalResourceDecoration>())
-                {
-                    if (!wrapperParam->findDecoration<IRMetalRTGlobalResourceDecoration>())
-                    {
-                        builder->addDecoration(
-                            wrapperParam,
-                            kIROp_MetalRTGlobalResourceDecoration,
-                            resource->getOperand(0));
-                        builder->addKeepAliveDecoration(wrapperParam);
-                    }
-                }
-            }
 
             // Set insert position to a valid instruction under the global parent scope so we can
             // create struct keys.
@@ -433,12 +446,16 @@ struct CollectGlobalUniformParametersContext
 void collectGlobalUniformParameters(
     IRModule* module,
     IRVarLayout* globalScopeVarLayout,
-    CodeGenTarget target)
+    CodeGenTarget target,
+    List<IRGlobalParam*>* outGlobalParams)
 {
+    if (outGlobalParams)
+        outGlobalParams->clear();
     CollectGlobalUniformParametersContext context;
     context.module = module;
     context.globalScopeVarLayout = globalScopeVarLayout;
     context.target = target;
+    context.outGlobalParams = outGlobalParams;
 
     context.processModule();
 }
