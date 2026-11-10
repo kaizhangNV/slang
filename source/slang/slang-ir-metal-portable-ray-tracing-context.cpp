@@ -7,6 +7,37 @@
 namespace Slang
 {
 
+void preserveMetalRTGlobalResources(IRModule* module, IRVarLayout* globalScopeVarLayout)
+{
+    if (!globalScopeVarLayout)
+        return;
+    auto typeLayout = globalScopeVarLayout->getTypeLayout();
+    if (auto group = as<IRParameterGroupTypeLayout>(typeLayout))
+        typeLayout = group->getElementVarLayout()->getTypeLayout();
+    auto structure = cast<IRStructTypeLayout>(typeLayout);
+    IRBuilder builder(module);
+    IRIntegerValue layoutIndex = 0;
+    // Consider a miss shader that reads a global buffer while ray generation only calls trace.
+    // Both compilations need the same resource fields in MetalRTGlobalResources. Keep the linked
+    // component's runtime globals and record their layout order before uniform collection rewrites
+    // the layout keys and dead-code elimination removes declarations unused by the selected entry.
+    for (auto field : structure->getFieldLayoutAttrs())
+    {
+        auto parameter = getGlobalParamFromLayoutFieldKey(field->getFieldKey());
+        if (parameter &&
+            !field->getLayout()->findOffsetAttr(LayoutResourceKind::SpecializationConstant))
+        {
+            builder.addDecoration(
+                parameter,
+                kIROp_MetalRTGlobalResourceDecoration,
+                builder.getIntValue(builder.getIntType(), layoutIndex));
+            if (!parameter->findDecoration<IRKeepAliveDecoration>())
+                builder.addKeepAliveDecoration(parameter);
+        }
+        ++layoutIndex;
+    }
+}
+
 // Consider an AnyHit method reading RWStructuredBuffer<uint> values. Global-context lowering
 // gives its native callback a parameter with the original MetalBuffer layout, emitted as
 // device uint* values [[buffer(n)]]. Textures and samplers cannot be direct IFT parameters;

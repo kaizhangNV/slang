@@ -2554,6 +2554,20 @@ IRVarLayout* findVarLayout(IRInst* value)
     return nullptr;
 }
 
+IRGlobalParam* getGlobalParamFromLayoutFieldKey(IRInst* key)
+{
+    switch (key->getOp())
+    {
+    case kIROp_GlobalParam:
+        return cast<IRGlobalParam>(key);
+    case kIROp_MakeExistential:
+    case kIROp_WrapExistential:
+        return as<IRGlobalParam>(key->getOperand(0));
+    default:
+        return nullptr;
+    }
+}
+
 UnownedStringSlice getBuiltinFuncName(IRInst* callee)
 {
     auto decor = getResolvedInstForDecorations(callee)->findDecoration<IRKnownBuiltinDecoration>();

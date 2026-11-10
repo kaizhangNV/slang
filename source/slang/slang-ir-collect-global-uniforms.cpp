@@ -2,7 +2,6 @@
 #include "slang-ir-collect-global-uniforms.h"
 
 #include "slang-ir-insts.h"
-#include "slang-ir-metal-portable-ray-tracing-context.h"
 #include "slang-ir-util.h"
 
 namespace Slang
@@ -53,26 +52,12 @@ struct CollectGlobalUniformParametersContext
     IRVarLayout* globalScopeVarLayout;
     CodeGenTarget target = CodeGenTarget::Unknown;
 
-    IRGlobalParam* _getGlobalParamFromLayoutFieldKey(IRInst* key)
-    {
-        switch (key->getOp())
-        {
-        case kIROp_GlobalParam:
-            return cast<IRGlobalParam>(key);
-        case kIROp_MakeExistential:
-        case kIROp_WrapExistential:
-            return as<IRGlobalParam>(key->getOperand(0));
-        default:
-            return nullptr;
-        }
-    }
-
     // Preserves the checked value type before a layout's global key becomes an untyped key.
     // A global parameter already has its value type; a lowered varying can instead be a load
     // of that value or the backing global variable, whose pointer must be unwrapped once.
     IRType* getGlobalLayoutFieldValueType(IRBuilder* builder, IRInst* key)
     {
-        if (auto globalParam = _getGlobalParamFromLayoutFieldKey(key))
+        if (auto globalParam = getGlobalParamFromLayoutFieldKey(key))
             return globalParam->getFullType();
         auto type = key->getDataType();
         SLANG_RELEASE_ASSERT(type);
@@ -214,8 +199,7 @@ struct CollectGlobalUniformParametersContext
 
             for (auto fieldLayoutAttr : fieldAttrs)
             {
-                auto globalParam =
-                    _getGlobalParamFromLayoutFieldKey(fieldLayoutAttr->getFieldKey());
+                auto globalParam = getGlobalParamFromLayoutFieldKey(fieldLayoutAttr->getFieldKey());
                 if (globalParam && as<IRUnsizedArrayType>(globalParam->getDataType()))
                 {
                     unsizedArrayFields.add(fieldLayoutAttr);
@@ -248,7 +232,7 @@ struct CollectGlobalUniformParametersContext
             // Save the original key while it still carries its checked type. Layout-only
             // resources have no nominal GlobalParams field from which to recover that type.
             auto originalFieldKey = fieldLayoutAttr->getFieldKey();
-            auto globalParam = _getGlobalParamFromLayoutFieldKey(originalFieldKey);
+            auto globalParam = getGlobalParamFromLayoutFieldKey(originalFieldKey);
 
             auto globalParamLayout = fieldLayoutAttr->getLayout();
 
@@ -445,38 +429,6 @@ struct CollectGlobalUniformParametersContext
         }
     }
 };
-
-void preserveMetalPortableRayTracingGlobalParameters(
-    IRModule* module,
-    IRVarLayout* globalScopeVarLayout)
-{
-    if (!globalScopeVarLayout)
-        return;
-    auto typeLayout = globalScopeVarLayout->getTypeLayout();
-    if (auto group = as<IRParameterGroupTypeLayout>(typeLayout))
-        typeLayout = group->getElementVarLayout()->getTypeLayout();
-    auto structure = cast<IRStructTypeLayout>(typeLayout);
-    CollectGlobalUniformParametersContext context;
-    IRBuilder builder(module);
-    IRIntegerValue layoutIndex = 0;
-    // The linker has cloned the complete component layout. Its declaration sequence survives
-    // even when a shader reads no globals or two declarations intentionally alias one binding.
-    for (auto field : structure->getFieldLayoutAttrs())
-    {
-        auto parameter = context._getGlobalParamFromLayoutFieldKey(field->getFieldKey());
-        if (parameter &&
-            !field->getLayout()->findOffsetAttr(LayoutResourceKind::SpecializationConstant))
-        {
-            builder.addDecoration(
-                parameter,
-                kIROp_MetalRTGlobalResourceDecoration,
-                builder.getIntValue(builder.getIntType(), layoutIndex));
-            if (!parameter->findDecoration<IRKeepAliveDecoration>())
-                builder.addKeepAliveDecoration(parameter);
-        }
-        ++layoutIndex;
-    }
-}
 
 void collectGlobalUniformParameters(
     IRModule* module,

@@ -1397,9 +1397,7 @@ Result linkAndOptimizeIR(
     }
 
     if (requiredLoweringPassSet.portableRayTracing && isMetalTarget(targetRequest))
-        SLANG_PASS(
-            preserveMetalPortableRayTracingGlobalParameters,
-            outLinkedIR.globalScopeVarLayout);
+        SLANG_PASS(preserveMetalRTGlobalResources, outLinkedIR.globalScopeVarLayout);
     SLANG_PASS(collectGlobalUniformParameters, outLinkedIR.globalScopeVarLayout, target);
     validateIRModuleIfEnabled(codeGenContext, irModule);
 
