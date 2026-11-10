@@ -2931,30 +2931,24 @@ struct ValLoweringVisitor : ValVisitor<ValLoweringVisitor, LoweredValInfo, Lower
                     SLANG_ASSERT(argVal);
                     operands.add(argVal);
                 });
-        auto irType =
-            getBuilder()->getType(op, static_cast<UInt>(operands.getCount()), operands.getBuffer());
         if (auto descriptorType = as<TraceProgramDescriptorType>(type))
         {
-            // Decorate TraceProgramDescriptorType with the schema's list, acceleration-structure,
-            // and motion types needed for backend code synthesis. The descriptor already refers
-            // to Schema and its conformance, but those operands do not request the associated-type
-            // entries during linking. The decoration references the required lookups, so the
-            // linker copies their entries and DCE keeps their results while the descriptor is live.
-            IRBuilder decorationBuilder = *getBuilder();
-            decorationBuilder.setInsertBefore(irType);
-            IRGenContext decorationContext = *context;
-            decorationContext.irBuilder = &decorationBuilder;
-            PortableRT::addTraceProgramDescriptorDecoration(
-                &decorationBuilder,
-                decorationContext.getLinkage(),
-                decorationContext.astBuilder,
+            // Lower the schema types needed for backend synthesis before creating the descriptor.
+            // Ordinary operands keep their lookups alive and place them before this hoistable type,
+            // so specialization can substitute them when it copies the descriptor.
+            PortableRT::appendTraceProgramDescriptorOperands(
+                context->getLinkage(),
+                context->astBuilder,
                 descriptorType,
-                irType,
-                [](Type* projectedType, void* userData)
-                { return lowerType(static_cast<IRGenContext*>(userData), projectedType); },
-                &decorationContext);
+                operands,
+                [](Type* associatedType, void* userData)
+                { return lowerType(static_cast<IRGenContext*>(userData), associatedType); },
+                context);
         }
-        return irType;
+        return getBuilder()->getType(
+            op,
+            static_cast<UInt>(operands.getCount()),
+            operands.getBuffer());
     }
 
     // The AST encodes a reference parameter's access in the class of its wrapper type, while

@@ -29,8 +29,8 @@ import slang.raytracing.portable;
 // CHECK-NEXT: [nameHint("rt.MissShaderList")]
 // CHECK-NEXT: struct {{%[A-Za-z0-9_]+}} : Type;
 
-// The descriptor retains its schema identity. schema-contract.slang also checks its
-// decoration and the concrete types it contains after specialization.
+// The descriptor retains its schema identity. schema-contract.slang also checks its five
+// schema-type operands and the concrete list decorations after specialization.
 // CHECK: TraceProgramDescriptor(%Schema,
 
 struct Payload { uint value; }

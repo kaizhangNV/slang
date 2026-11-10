@@ -8431,9 +8431,7 @@ static void dumpInstBody(IRDumpContext* context, IRInst* inst)
 
 static void dumpInst(IRDumpContext* context, IRInst* inst)
 {
-    // Print decorated instructions even when their uses are abbreviated inline. Otherwise,
-    // decorations on types such as TraceProgramDescriptor disappear from the dump entirely.
-    if (shouldFoldInstIntoUses(context, inst) && !inst->getFirstDecoration())
+    if (shouldFoldInstIntoUses(context, inst))
         return;
 
     dumpIndent(context);

@@ -6,16 +6,24 @@
 
 using namespace Slang;
 
-// Resource physicalization consumes descriptor identity, not schema requirements. An empty
-// conformance is sufficient here: schema discovery has its own checked-source integration tests.
+// Resource physicalization only consumes descriptor identity. Use an empty conformance and void
+// placeholders for the five schema types; checked-source integration tests cover those types.
 static IRTraceProgramDescriptorType* createDescriptorType(IRBuilder& builder)
 {
     auto schema = builder.createStructType();
     auto contract = builder.createInterfaceType(0, nullptr);
     auto witness = builder.createWitnessTable(contract, schema);
-    IRInst* operands[] = {schema, witness};
+    auto unusedSchemaType = builder.getVoidType();
+    IRInst* operands[] = {
+        schema,
+        witness,
+        unusedSchemaType,
+        unusedSchemaType,
+        unusedSchemaType,
+        unusedSchemaType,
+        unusedSchemaType};
     return cast<IRTraceProgramDescriptorType>(
-        builder.getType(kIROp_TraceProgramDescriptorType, 2, operands));
+        builder.getType(kIROp_TraceProgramDescriptorType, SLANG_COUNT_OF(operands), operands));
 }
 
 // Creates one normal binding with a nonzero space so rebuilding cannot accidentally preserve

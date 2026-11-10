@@ -83,13 +83,11 @@ void readSchemaContract(IRTraceProgramDescriptorType* descriptorType, Schema& ou
     // For example, HitGroupList<GroupA, GroupB> carries one expansion for Primitive, another for
     // Record, and so on. Their lookup instructions request the required conformance entries during
     // linking. Here the operands are already the resulting canonical types, not tables to inspect.
-    auto program = descriptorType->findDecoration<IRPortableRTProgramDecoration>();
-    SLANG_RELEASE_ASSERT(program);
     Schema result;
-    result.accelerationStructure = program->getAccelerationStructureType();
-    result.motion = program->getMotionType();
+    result.accelerationStructure = descriptorType->getAccelerationStructureType();
+    result.motion = descriptorType->getMotionType();
 
-    auto hitList = _getList(program->getHitGroupsType());
+    auto hitList = _getList(descriptorType->getHitGroupsType());
     auto entryTypes = cast<IRTypePack>(hitList->getTypepack());
     auto recordTypes = _getProjectedTypes(hitList->getRecordTypes(), entryTypes);
     auto payloadTypes = _getProjectedTypes(hitList->getPayloadTypes(), entryTypes);
@@ -111,8 +109,11 @@ void readSchemaContract(IRTraceProgramDescriptorType* descriptorType, Schema& ou
             _readStageSelection(intersectionTypes->getOperand(i), Stage::Intersection);
         result.hitGroups.add(group);
     }
-    _readRecordList(program->getMissShadersType(), Stage::Miss, result.missShaders);
-    _readRecordList(program->getCallableShadersType(), Stage::Callable, result.callableShaders);
+    _readRecordList(descriptorType->getMissShadersType(), Stage::Miss, result.missShaders);
+    _readRecordList(
+        descriptorType->getCallableShadersType(),
+        Stage::Callable,
+        result.callableShaders);
     outSchema = _Move(result);
 }
 

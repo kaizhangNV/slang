@@ -19,11 +19,11 @@ struct Schema : rt::ITraceProgramSchema
 rt::TraceProgramDescriptor<Schema> descriptor;
 
 // The imported serialized module must preserve the compiler-owned operation, including its
-// schema type argument and conformance witness.
+// schema type argument and conformance witness as its first two operands.
 // CHECK-NOT: TraceProgramDescriptorResources
 // CHECK: [nameHint("descriptor")]
 // CHECK-NEXT: [export({{.*}})]
-// CHECK-NEXT: let %descriptor : TraceProgramDescriptor(%Schema, %{{[0-9]+}}) = global_param
+// CHECK-NEXT: let %descriptor : TraceProgramDescriptor(%Schema, %{{[0-9]+}}, {{.*}}) = global_param
 // CHECK-NOT: TraceProgramDescriptorResources
 
 [numthreads(1, 1, 1)]

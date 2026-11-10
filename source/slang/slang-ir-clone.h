@@ -106,11 +106,6 @@ void cloneInstDecorationsAndChildren(
     IRInst* oldInst,
     IRInst* newInst);
 
-/// Returns whether a clone still needs its source decorations and children copied.
-/// Reusing the source instruction or an already populated hoistable target must not append
-/// duplicate children. Check immediately before copying: deferred clones can share a target.
-bool shouldCloneInstDecorationsAndChildren(IRInst* oldInst, IRInst* newInst);
-
 // For the case where the user knows the sequencing constraints
 // on cloning operands before uses can be satisfied, we provide
 // a convenience wrapper around the two phases of cloning:

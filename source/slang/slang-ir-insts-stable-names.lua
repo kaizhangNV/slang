@@ -937,6 +937,7 @@ return {
 	["metalRTAcceptHitAndEndSearch"] = 946,
 	["metalRTReportHit"] = 947,
 	["metalRTCallShader"] = 948,
+	-- Retired: descriptor schema types are now ordinary operands of TraceProgramDescriptor.
 	["Decoration.PortableRTProgramDecoration"] = 980,
 	["Layout.TypeLayout.traceProgramDescriptorTypeLayout"] = 981,
 }

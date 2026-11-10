@@ -110,15 +110,15 @@ void addShaderListDecoration(
     IRType* (*lowerType)(Type*, void*),
     void* userData);
 
-/// Adds PortableRTProgramDecoration to a trace-program descriptor type, preserving its schema's
-/// acceleration-structure, motion, and three list types through ordinary associated-type lookups.
-/// The callback lowers those checked types in the descriptor's existing generic environment.
-void addTraceProgramDescriptorDecoration(
-    IRBuilder* builder,
+/// Appends the descriptor schema's acceleration-structure, motion, and three list types to
+/// operands, which already contains the lowered schema and its conformance witness. The callback
+/// lowers each checked associated type in the descriptor's generic environment. Construct the IR
+/// descriptor after this call so its ordinary operands retain all seven values from the start.
+void appendTraceProgramDescriptorOperands(
     Linkage* linkage,
     ASTBuilder* astBuilder,
     TraceProgramDescriptorType* descriptorType,
-    IRType* irType,
+    List<IRInst*>& operands,
     IRType* (*lowerType)(Type*, void*),
     void* userData);
 

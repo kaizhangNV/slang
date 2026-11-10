@@ -4,17 +4,19 @@
 //TEST:SIMPLE_EX(filecheck=CHECK): -experimental-feature tests/ray-tracing-2/ir/identity/schema-contract-cache.slang-module -entry TraceEntry -stage miss -target metal -profile metallib_2_4 -validate-ir -dump-ir-after specializeModule
 //TEST:SIMPLE_EX(filecheck=LIVENESS): -experimental-feature tests/ray-tracing-2/ir/identity/schema-contract-cache.slang-module -entry TraceEntry -stage miss -target metal -profile metallib_2_4 -validate-ir -dump-ir-after specializeModule
 
-// The schema decorations must contain concrete types after specialization, including after
-// loading a serialized module. They must not retain the bodies of unselected shader stages.
+// The descriptor operands and list decorations must contain concrete types after specialization,
+// including after loading a serialized module. They must not retain unselected shader bodies.
 
-// Check both calls use the same specialized descriptor type. Its decoration names the three
+// Check both calls use the same specialized descriptor type. Its operands name the three
 // concrete shader-list types checked below.
 // CHECK: result code = 0
 // CHECK: ### AFTER specializeModule:
-// CHECK: func %copyDescriptor : Func([[DESCRIPTOR:TraceProgramDescriptor\(%Schema, %[A-Za-z0-9_]+\)]], [[DESCRIPTOR]])
-// CHECK: param %descriptor : [[DESCRIPTOR]]):
-// CHECK: [PortableRTProgramDecoration(RaytracingAccelerationStructure, %rtx5FNoMotion, [[HITS:%[A-Za-z0-9_]+]], [[MISSES:%[A-Za-z0-9_]+]], [[CALLABLES:%[A-Za-z0-9_]+]])]
-// CHECK-NEXT: let {{%[A-Za-z0-9_]+}} : _ = [[DESCRIPTOR]]
+// CHECK: func %copyDescriptor : Func(TraceProgramDescriptor(%Schema, [[WITNESS:%[A-Za-z0-9_]+]],
+// CHECK-SAME: RaytracingAccelerationStructure, %rtx5FNoMotion, [[HITS:%[A-Za-z0-9_]+]], [[MISSES:%[A-Za-z0-9_]+]], [[CALLABLES:%[A-Za-z0-9_]+]]),
+// CHECK-SAME: TraceProgramDescriptor(%Schema, [[WITNESS]],
+// CHECK-SAME: RaytracingAccelerationStructure, %rtx5FNoMotion, [[HITS]], [[MISSES]], [[CALLABLES]]))
+// CHECK: param %descriptor : TraceProgramDescriptor(%Schema, [[WITNESS]],
+// CHECK-SAME: RaytracingAccelerationStructure, %rtx5FNoMotion, [[HITS]], [[MISSES]], [[CALLABLES]])):
 
 // Miss and callable lists retain only their entry types and Record types. Hit-only operands
 // are empty packs. The refined Miss interface still resolves to Record = uint.
@@ -40,20 +42,16 @@
 // CHECK-NEXT: [KnownBuiltinDecoration({{[0-9]+}} : Int)]
 // CHECK-NEXT: [nameHint("rt.HitGroupList")]
 // CHECK-NEXT: struct [[HITS]] : Type;
-// CHECK: let %program : [[DESCRIPTOR]] = global_param
-// CHECK: let {{%[A-Za-z0-9_]+}} : [[DESCRIPTOR]] = call %copyDescriptor(%program)
+// CHECK: let %program : TraceProgramDescriptor(%Schema, [[WITNESS]],
+// CHECK-SAME: RaytracingAccelerationStructure, %rtx5FNoMotion, [[HITS]], [[MISSES]], [[CALLABLES]]) = global_param
+// CHECK: let {{%[A-Za-z0-9_]+}} : TraceProgramDescriptor(%Schema, [[WITNESS]],
+// CHECK-SAME: RaytracingAccelerationStructure, %rtx5FNoMotion, [[HITS]], [[MISSES]], [[CALLABLES]]) = call %copyDescriptor(%program)
 
-// Scan the entire specialized module separately: exactly one program decoration survives,
-// but none of the unselected invoke bodies or their shared helper do. Metal intentionally
+// Scan the entire specialized module separately: the descriptor's type dependencies must not
+// retain the unselected invoke bodies or their shared helper. Metal intentionally
 // keeps global resource parameters for layout, so stageBodyOutput itself may remain.
 // LIVENESS: result code = 0
 // LIVENESS: ### AFTER specializeModule:
-// LIVENESS-NOT: PortableRTProgramDecoration
-// LIVENESS-NOT: referencedStageBody
-// LIVENESS-NOT: UnrelatedMiss
-// LIVENESS-NOT: nameHint("{{(SharedHit|Intersection|Miss|Callable)}}.invoke")
-// LIVENESS: [PortableRTProgramDecoration(
-// LIVENESS-NOT: PortableRTProgramDecoration
 // LIVENESS-NOT: referencedStageBody
 // LIVENESS-NOT: UnrelatedMiss
 // LIVENESS-NOT: nameHint("{{(SharedHit|Intersection|Miss|Callable)}}.invoke")
@@ -183,7 +181,7 @@ rt::TraceProgramDescriptor<Schema> program;
 RaytracingAccelerationStructure scene;
 
 // This descriptor is first lowered with an unknown schema. Specializing the helper
-// must reuse the concrete descriptor type above without losing the types in its decoration.
+// must reuse the concrete descriptor type above, including all five schema-type operands.
 [noinline]
 rt::TraceProgramDescriptor<S> copyDescriptor<S : rt::ITraceProgramSchema>(
     rt::TraceProgramDescriptor<S> descriptor)

@@ -15,7 +15,7 @@ namespace PortableRT
 {
 
 // This file owns the portable ray-tracing rules, their declaration identities, and the IR
-// decorations that preserve checked program, shader-list, and stage-input type projections for
+// operands and decorations that preserve checked program, shader-list, and stage-input types for
 // later target lowering.
 // Ordinary interfaces, associated-type constraints, overload resolution, and capability inference
 // remain in the normal checker. Their call sites delegate here for the additional rules:
@@ -616,15 +616,18 @@ void addShaderListDecoration(
         SLANG_COUNT_OF(operands));
 }
 
-// Adds a decoration to IRTraceProgramDescriptorType with the schema types needed by the backend.
+// Appends the five schema types needed by the backend to a descriptor's IR operands.
 // Consider this declaration, where Schema conforms to ITraceProgramSchema:
 //
 //     rt::TraceProgramDescriptor<Schema> descriptor;
 //
-// The decoration belongs to the descriptor's IR type and conceptually looks like:
+// The caller has already lowered Schema and its conformance witness. This function appends the
+// remaining operands, so the caller can construct this complete IR type:
 //
-//     PortableRTProgramDecoration
+//     TraceProgramDescriptor
 //     {
+//         schema                    = Schema
+//         schemaWitness             = Conformance(Schema : ITraceProgramSchema)
 //         accelerationStructureType = Schema.TraceContext.AccelerationStructure
 //         motionType                = Schema.TraceContext.Motion
 //         hitGroupsType             = Schema.HitGroups
@@ -632,13 +635,12 @@ void addShaderListDecoration(
 //         callableShadersType       = Schema.CallableShaders
 //     }
 //
-// Each expression is a symbolic associated-type lookup through Schema's conformance witness.
-// The first two also look up the TraceContext conformance to find its associated types.
-// This uses the same ordinary witness lookup instructions as addShaderListDecoration. There is
-// no IRExpand here: we look up five values from one schema, without iterating its list members.
+// The five appended expressions are symbolic associated-type lookups. getAssociatedType resolves
+// each checked AST type; lowerType lowers it in the caller's generic environment, using userData
+// as its lowering context. There is no IRExpand here: each expression selects one schema type.
 //
 // Schema may still be generic or supplied by another module. Once linking and specialization
-// resolve these lookups, the decoration refers to concrete types. For example, if Schema.HitGroups
+// resolve these lookups, the operands refer to concrete types. For example, if Schema.HitGroups
 // is HitGroupList<FirstGroup, SecondGroup>, hitGroupsType refers to that specialized list struct.
 // Its own shader-list decoration supplies the member-type packs described above. The acceleration
 // structure and motion types tell Metal how to configure traversal; the three list types tell it
@@ -649,20 +651,17 @@ void addShaderListDecoration(
 // Storing the conformance alone would leave the backend to follow tables whose entries the linker
 // may not have copied. The lookup instructions request the required entries before specialization,
 // avoiding the need to recursively copy complete tables and unused method implementations.
-// The backend then reads the resulting types directly. The decoration adds no runtime fields.
-void addTraceProgramDescriptorDecoration(
-    IRBuilder* builder,
+// Ordinary operands keep those lookups alive and order them before the descriptor, so normal
+// specialization remaps them when it copies the descriptor. They add no runtime fields.
+void appendTraceProgramDescriptorOperands(
     Linkage* linkage,
     ASTBuilder* astBuilder,
     TraceProgramDescriptorType* descriptorType,
-    IRType* irType,
+    List<IRInst*>& operands,
     IRType* (*lowerType)(Type*, void*),
     void* userData)
 {
-    // Intrinsic types are uniqued by their identity operands. Another lowering request can
-    // return the same descriptor type, whose projections have already been attached.
-    if (irType->findDecoration<IRPortableRTProgramDecoration>())
-        return;
+    SLANG_RELEASE_ASSERT(operands.getCount() == 2);
     auto declRef = descriptorType->getDeclRef();
     auto generic = as<GenericDecl>(declRef.getDecl()->parentDecl);
     SLANG_RELEASE_ASSERT(generic);
@@ -683,7 +682,7 @@ void addTraceProgramDescriptorDecoration(
         astBuilder,
         schemaType,
         KnownBuiltinDeclName::RayTracingProgramTraceContext);
-    IRInst* operands[] = {
+    IRInst* schemaOperands[] = {
         lowerType(
             getAssociatedType(
                 linkage,
@@ -720,11 +719,7 @@ void addTraceProgramDescriptorDecoration(
                 KnownBuiltinDeclName::RayTracingProgramCallableShaders),
             userData),
     };
-    builder->addDecoration(
-        irType,
-        kIROp_PortableRTProgramDecoration,
-        operands,
-        SLANG_COUNT_OF(operands));
+    operands.addRange(schemaOperands, SLANG_COUNT_OF(schemaOperands));
 }
 
 // Returns the checked entry types used by the duplicate-entry diagnostic. The list's conformance
