@@ -18,7 +18,12 @@ IRPortableRTStageInputDecoration* getStageInputInfo(IRType* type);
 /// shader parameter; its target signature is generated after specialization.
 IRPortableRTStageInputDecoration* getEntryPointInputInfo(IRFunc* function);
 
-/// Removes remaining entry-point markers from logical stage implementations after selected
+/// Removes a logical stage function's entry marker and denormal execution modes. Use this when
+/// the implementation becomes an ordinary helper, including when Metal gives it a visible adapter.
+/// The caller handles any keep-alive marker and layout needed by its target.
+void demoteStageImplementation(IRFunc* function);
+
+/// Removes remaining entry-point markers and denormal modes from logical stages after selected
 /// entries have been replaced with target adapters. Consider compiling CallingMiss and
 /// SharedMiss as separate outputs, where CallingMiss calls SharedMiss::invoke. SharedMiss is
 /// an ordinary helper in CallingMiss's output, even though the source module also selected it.

@@ -49,7 +49,7 @@ List<VisibleAdapter> prepareMetalStandaloneStages(
 
         // The final adapter owns the selected export. Keep the original function callable,
         // without an entry-point signature or its reflected shader-record parameter layout.
-        entry->removeAndDeallocate();
+        PortableRT::demoteStageImplementation(invoke);
         if (auto keepAlive = invoke->findDecoration<IRKeepAliveDecoration>())
             keepAlive->removeAndDeallocate();
         if (auto layout = invoke->findDecoration<IRLayoutDecoration>())

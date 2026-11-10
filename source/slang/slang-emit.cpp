@@ -1412,6 +1412,12 @@ Result linkAndOptimizeIR(
 
     SLANG_PASS(checkEntryPointDecorations, target, sink);
 
+    // Add floating point denormal handling mode decorations to entry point functions based on
+    // compiler options. This is done post-linking to ensure all entry points from linked
+    // modules are processed.
+    SLANG_PASS(addDenormalModeDecorations, codeGenContext);
+    validateIRModuleIfEnabled(codeGenContext, irModule);
+
     // Another transformation that needed to wait until we
     // had layout information on parameters is to take uniform
     // parameters of a shader entry point and move them into
@@ -1625,9 +1631,6 @@ Result linkAndOptimizeIR(
     if (sink->getErrorCount() != 0)
         return SLANG_FAIL;
 
-    // These modes describe native entry points. Assign them after portable RT adapters are
-    // created, so the original implementations called as helpers do not receive execution modes.
-    SLANG_PASS(addDenormalModeDecorations, codeGenContext);
     validateIRModuleIfEnabled(codeGenContext, irModule);
 
     // finalizeAutoDiffPass walks the whole module and builds an AutoDiffSharedContext. It

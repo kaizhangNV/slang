@@ -23,6 +23,28 @@ IRPortableRTStageInputDecoration* getEntryPointInputInfo(IRFunc* function)
     return getStageInputInfo(function->getParamType(0));
 }
 
+void demoteStageImplementation(IRFunc* function)
+{
+    SLANG_RELEASE_ASSERT(getEntryPointInputInfo(function));
+    // For example, a selected Metal Miss becomes an ordinary invoke helper behind a visible
+    // adapter. Its old denormal modes must not remain as entry execution modes on that helper.
+    for (auto decoration = function->getFirstDecoration(); decoration;)
+    {
+        auto next = decoration->getNextDecoration();
+        switch (decoration->getOp())
+        {
+        case kIROp_EntryPointDecoration:
+        case kIROp_FpDenormalPreserveDecoration:
+        case kIROp_FpDenormalFlushToZeroDecoration:
+            decoration->removeAndDeallocate();
+            break;
+        default:
+            break;
+        }
+        decoration = next;
+    }
+}
+
 static void _demoteStageImplementations(IRInst* parent)
 {
     for (auto child : parent->getChildren())
@@ -30,7 +52,7 @@ static void _demoteStageImplementations(IRInst* parent)
         if (auto function = as<IRFunc>(child))
         {
             if (getEntryPointInputInfo(function))
-                function->findDecoration<IREntryPointDecoration>()->removeAndDeallocate();
+                demoteStageImplementation(function);
         }
         else if (as<IRGeneric>(child) || as<IRBlock>(child))
         {

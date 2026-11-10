@@ -120,6 +120,7 @@ struct NativeInvocationParameter : PortableRTInvocationParameter
 /// Run after specialization. The entry-point marker moves to the wrapper, while existing calls
 /// still target invoke. Native lowering adds the wrapper's payload parameters and record access
 /// in this same pass, so an ordinary call keeps using its caller's invocation.
+/// Denormal execution modes move with the entry marker because they apply to the wrapper.
 IRFunc* createAdapter(IRModule* module, IRFunc* invoke)
 {
     SLANG_RELEASE_ASSERT(invoke->getParamCount() == 1);
@@ -138,6 +139,8 @@ IRFunc* createAdapter(IRModule* module, IRFunc* invoke)
         {
         case kIROp_EntryPointDecoration:
         case kIROp_KeepAliveDecoration:
+        case kIROp_FpDenormalPreserveDecoration:
+        case kIROp_FpDenormalFlushToZeroDecoration:
             decoration->insertAtStart(adapter);
             break;
         default:
