@@ -10,12 +10,16 @@
 // IR: [nameHint("rt.MissInput")]
 // IR-NEXT: struct [[INPUT:%[A-Za-z0-9_]+]] : Type;
 // IR: [entryPoint({{[0-9]+}} : Int, "SharedMiss_miss",
+// IR-NOT: {{^func }}
 // IR: [nameHint("SharedMiss.invoke")]
+// IR-NOT: {{^func }}
 // IR: func [[SHARED:%[A-Za-z0-9_]+]] : Func(Void, [[INPUT]])
 // IR: param [[SHARED_INPUT:%[A-Za-z0-9_]+]] : [[INPUT]]):
 // IR: portableRTGetRecord([[SHARED_INPUT]])
 // IR: [entryPoint({{[0-9]+}} : Int, "CallingMiss_miss",
+// IR-NOT: {{^func }}
 // IR: [nameHint("CallingMiss.invoke")]
+// IR-NOT: {{^func }}
 // IR: func {{%[A-Za-z0-9_]+}} : Func(Void, [[INPUT]])
 // IR: param [[CALLER_INPUT:%[A-Za-z0-9_]+]] : [[INPUT]]):
 // IR-NEXT: call [[SHARED]]([[CALLER_INPUT]])
