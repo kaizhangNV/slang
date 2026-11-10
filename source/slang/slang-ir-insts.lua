@@ -2541,18 +2541,6 @@ local insts = {
 				},
 			},
 			{
-				-- A selected native entry keeps its logical input until specialization
-				-- makes the dependent types concrete. The original method remains an
-				-- ordinary callable helper; sourceLayout owns its checked record binding.
-				PortableRTStageAdapterDecoration = {
-					operands = {
-						{ "inputType", "IRType" },
-						{ "invoke" },
-						{ "sourceLayout", "IREntryPointLayout" },
-					},
-				},
-			},
-			{
 				-- Decorates the IR struct type of a logical RT stage input, such as
 				-- ClosestHitInput<Context> or MissInput<Context>. These inputs have no
 				-- fields and lower to empty IR structs. The backend still needs types

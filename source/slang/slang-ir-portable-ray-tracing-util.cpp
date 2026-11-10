@@ -7,6 +7,44 @@
 namespace Slang
 {
 
+namespace PortableRT
+{
+IRPortableRTStageInputDecoration* getStageInputInfo(IRType* type)
+{
+    if (auto pointerType = as<IRPtrTypeBase>(type))
+        type = pointerType->getValueType();
+    return getResolvedInstForDecorations(type)->findDecoration<IRPortableRTStageInputDecoration>();
+}
+
+IRPortableRTStageInputDecoration* getEntryPointInputInfo(IRFunc* function)
+{
+    if (!function->findDecoration<IREntryPointDecoration>() || function->getParamCount() != 1)
+        return nullptr;
+    return getStageInputInfo(function->getParamType(0));
+}
+
+static void _demoteStageImplementations(IRInst* parent)
+{
+    for (auto child : parent->getChildren())
+    {
+        if (auto function = as<IRFunc>(child))
+        {
+            if (getEntryPointInputInfo(function))
+                function->findDecoration<IREntryPointDecoration>()->removeAndDeallocate();
+        }
+        else if (as<IRGeneric>(child) || as<IRBlock>(child))
+        {
+            _demoteStageImplementations(child);
+        }
+    }
+}
+
+void demoteStageImplementations(IRModule* module)
+{
+    _demoteStageImplementations(module->getModuleInst());
+}
+} // namespace PortableRT
+
 PortableRTInvocationParameter::PortableRTInvocationParameter(
     IRModule* module,
     IRType* valueType,

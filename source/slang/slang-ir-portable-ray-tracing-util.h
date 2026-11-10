@@ -5,6 +5,26 @@
 namespace Slang
 {
 
+namespace PortableRT
+{
+/// Returns the decoration on a logical stage-input type, such as MissInput<C>, or null for
+/// other types. Also accepts a borrowed input. Before specialization, this can return the
+/// generic declaration's decoration, whose operands still depend on C; use it only to identify
+/// a logical input until specialization supplies the concrete types.
+IRPortableRTStageInputDecoration* getStageInputInfo(IRType* type);
+
+/// Returns the input contract for a portable stage entry, or null for an ordinary entry/function.
+/// A portable stage has one logical Input<Context> parameter. That parameter is not a native
+/// shader parameter; its target signature is generated after specialization.
+IRPortableRTStageInputDecoration* getEntryPointInputInfo(IRFunc* function);
+
+/// Removes remaining entry-point markers from logical stage implementations after selected
+/// entries have been replaced with target adapters. Consider compiling CallingMiss and
+/// SharedMiss as separate outputs, where CallingMiss calls SharedMiss::invoke. SharedMiss is
+/// an ordinary helper in CallingMiss's output, even though the source module also selected it.
+void demoteStageImplementations(IRModule* module);
+} // namespace PortableRT
+
 /// Threads one typed invocation value through specialized ordinary function calls.
 ///
 /// Consider a static stage method calling a noinline helper which changes a copied input's

@@ -13,15 +13,6 @@ namespace Slang
 namespace
 {
 
-/// Reads the checked input contract from an ordinary input struct, including an input which an
-/// earlier parameter legalization has changed from by-value to borrow-in.
-IRPortableRTStageInputDecoration* getInputInfo(IRType* type)
-{
-    if (auto pointerType = as<IRPtrTypeBase>(type))
-        type = pointerType->getValueType();
-    return getResolvedInstForDecorations(type)->findDecoration<IRPortableRTStageInputDecoration>();
-}
-
 KnownBuiltinDeclName getPrimitiveKind(IRPortableRTStageInputDecoration* info)
 {
     auto decoration = info->getPrimitiveType()->findDecoration<IRKnownBuiltinDecoration>();
@@ -125,9 +116,9 @@ struct NativeInvocationParameter : PortableRTInvocationParameter
 ///     Before: [entry point] Miss::invoke(MissInput<C> input) { ... }
 ///     After:  [entry point] entry() { Miss::invoke(default(MissInput<C>)); }
 ///             Miss::invoke(MissInput<C> input) { ... }
-/// The entry-point marker moves to the wrapper. The original body, parameter type and existing
-/// calls are unchanged. The wrapper initially has no parameters; later target lowering builds
-/// its actual signature using the input type and source layout saved in its decoration.
+/// Run after specialization. The entry-point marker moves to the wrapper, while existing calls
+/// still target invoke. Native lowering adds the wrapper's payload parameters and record access
+/// in this same pass, so an ordinary call keeps using its caller's invocation.
 IRFunc* createAdapter(IRModule* module, IRFunc* invoke)
 {
     SLANG_RELEASE_ASSERT(invoke->getParamCount() == 1);
@@ -170,15 +161,6 @@ IRFunc* createAdapter(IRModule* module, IRFunc* invoke)
     builder.setInsertInto(adapter);
     builder.emitBlock();
     auto inputType = invoke->getParamType(0);
-    auto valueType = inputType;
-    if (auto pointerType = as<IRPtrTypeBase>(inputType))
-        valueType = pointerType->getValueType();
-    builder.addDecoration(
-        adapter,
-        kIROp_PortableRTStageAdapterDecoration,
-        valueType,
-        invoke,
-        sourceLayout);
     IRInst* input;
     if (auto pointerType = as<IRPtrTypeBase>(inputType))
     {
@@ -217,31 +199,6 @@ void collectInputOperations(IRInst* parent, List<IRInst*>& result)
         if (isInputOperation(child->getOp()))
             result.add(child);
         collectInputOperations(child, result);
-    }
-}
-
-/// Removes native-stage identity from portable implementations not selected in this output.
-///
-/// Consider compiling both CallingMiss and SharedMiss into separate outputs, where CallingMiss
-/// directly invokes SharedMiss. The shared module marks both methods as selected entries, but
-/// the CallingMiss output links SharedMiss only as a helper. Only the selected output receives
-/// an adapter; the remaining logical implementation must not be interpreted as a native entry
-/// by parameter legalization. This operates on the linked module, not the reusable source module.
-void demoteUnselectedImplementations(IRInst* parent)
-{
-    for (auto child : parent->getChildren())
-    {
-        if (auto function = as<IRFunc>(child))
-        {
-            auto entryPoint = function->findDecoration<IREntryPointDecoration>();
-            if (entryPoint && function->getParamCount() == 1 &&
-                getInputInfo(function->getParamType(0)))
-                entryPoint->removeAndDeallocate();
-        }
-        else if (as<IRGeneric>(child) || as<IRBlock>(child))
-        {
-            demoteUnselectedImplementations(child);
-        }
     }
 }
 
@@ -331,7 +288,7 @@ void lowerAttributes(IRModule* module, const List<NativeStage>& stages, List<IRI
             needsTriangles = true;
         if (operation->getOp() != kIROp_PortableRTGetHitAttributes)
             continue;
-        auto input = getInputInfo(operation->getOperand(0)->getDataType());
+        auto input = PortableRT::getStageInputInfo(operation->getOperand(0)->getDataType());
         SLANG_RELEASE_ASSERT(input);
         if (getPrimitiveKind(input) == KnownBuiltinDeclName::RayTracingTrianglePrimitive)
         {
@@ -498,16 +455,6 @@ void lowerRecords(
 
 } // namespace
 
-void preparePortableRayTracingEntryPoints(IRModule* module, List<IRFunc*>& entryPoints)
-{
-    for (auto& entryPoint : entryPoints)
-    {
-        if (entryPoint->getParamCount() == 1 && getInputInfo(entryPoint->getParamType(0)))
-            entryPoint = createAdapter(module, entryPoint);
-    }
-    demoteUnselectedImplementations(module->getModuleInst());
-}
-
 void lowerPortableRayTracingEntryPoints(
     IRModule* module,
     TargetProgram* targetProgram,
@@ -521,16 +468,17 @@ void lowerPortableRayTracingEntryPoints(
     List<NativeStage> stages;
     for (auto& entryPoint : entryPoints)
     {
-        auto adapter = entryPoint->findDecoration<IRPortableRTStageAdapterDecoration>();
-        if (!adapter)
+        auto input = PortableRT::getEntryPointInputInfo(entryPoint);
+        if (!input)
             continue;
-        auto input = getInputInfo(adapter->getInputType());
-        SLANG_RELEASE_ASSERT(input);
+        auto layoutDecoration = entryPoint->findDecoration<IRLayoutDecoration>();
+        SLANG_RELEASE_ASSERT(layoutDecoration);
+        auto sourceLayout = cast<IREntryPointLayout>(layoutDecoration->getLayout());
         SLANG_RELEASE_ASSERT(
             Stage(input->getStageKind()->getValue()) ==
             entryPoint->findDecoration<IREntryPointDecoration>()->getProfile().getStage());
         IRVarLayout* recordLayout = nullptr;
-        for (auto field : getScopeStructLayout(adapter->getSourceLayout())->getFieldLayoutAttrs())
+        for (auto field : getScopeStructLayout(sourceLayout)->getFieldLayoutAttrs())
         {
             if (field->getLayout()->findOffsetAttr(LayoutResourceKind::ShaderRecord))
             {
@@ -538,8 +486,11 @@ void lowerPortableRayTracingEntryPoints(
                 recordLayout = field->getLayout();
             }
         }
+        entryPoint = createAdapter(module, entryPoint);
         stages.add({entryPoint, input, recordLayout});
     }
+
+    PortableRT::demoteStageImplementations(module);
 
     List<IRInst*> operations;
     collectInputOperations(module->getModuleInst(), operations);
@@ -565,11 +516,6 @@ void lowerPortableRayTracingEntryPoints(
             builder.getEntryPointLayout(paramsLayout.build(), oldLayout->getResultLayout());
         layoutDecoration->removeAndDeallocate();
         builder.addLayoutDecoration(stage.adapter, layout);
-
-        // The checked contract is needed until this adapter has its native ABI. After that the
-        // actual call and record resource own its executable dependencies. Keeping the temporary
-        // metadata would unnecessarily retain dead logical input types and inlined invoke bodies.
-        stage.adapter->findDecoration<IRPortableRTStageAdapterDecoration>()->removeAndDeallocate();
     }
 
     for (auto operation : operations)

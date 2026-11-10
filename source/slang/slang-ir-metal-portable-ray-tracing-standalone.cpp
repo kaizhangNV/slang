@@ -1,6 +1,7 @@
 #include "slang-ir-metal-portable-ray-tracing-standalone.h"
 
 #include "slang-ir-metal-portable-ray-tracing-candidates.h"
+#include "slang-ir-portable-ray-tracing-util.h"
 #include "slang-ir-util.h"
 
 namespace Slang
@@ -14,33 +15,56 @@ List<VisibleAdapter> prepareMetalStandaloneStages(
     bool& requiresResultTypeLowering,
     DiagnosticSink* sink)
 {
+    struct SelectedStage
+    {
+        PortableRT::SchemaStage stage;
+        String name;
+    };
+
     List<VisibleAdapter> result;
     List<IRFunc*> nativeEntries;
+    List<SelectedStage> selectedStages;
     IRBuilder builder(module);
-    for (auto wrapper : entryPoints)
+    for (auto invoke : entryPoints)
     {
-        auto adapter = wrapper->findDecoration<IRPortableRTStageAdapterDecoration>();
-        if (!adapter)
+        auto input = PortableRT::getEntryPointInputInfo(invoke);
+        if (!input)
         {
-            nativeEntries.add(wrapper);
+            nativeEntries.add(invoke);
             continue;
         }
-        auto entry = wrapper->findDecoration<IREntryPointDecoration>();
+        auto entry = invoke->findDecoration<IREntryPointDecoration>();
         SLANG_RELEASE_ASSERT(entry);
-        auto input = getResolvedInstForDecorations(adapter->getInputType())
-                         ->findDecoration<IRPortableRTStageInputDecoration>();
-        SLANG_RELEASE_ASSERT(input);
 
         // Selecting Miss supplies a checked invoke and Context without selecting a program
         // schema. The same source contract fixes the VFT signature in the caller's compilation;
-        // only this adapter needs the implementation and its logical input metadata.
-        PortableRT::SchemaStage stage;
-        stage.stage = entry->getProfile().getStage();
-        stage.isPresent = true;
-        stage.invoke = cast<IRFunc>(adapter->getInvoke());
-        stage.input = input;
+        // only this adapter needs the implementation and its logical input decoration.
+        SelectedStage selected;
+        selected.stage.stage = entry->getProfile().getStage();
+        selected.stage.isPresent = true;
+        selected.stage.invoke = invoke;
+        selected.stage.input = input;
+        selected.name = entry->getName()->getStringSlice();
+        selectedStages.add(_Move(selected));
 
-        auto symbolName = entry->getName()->getStringSlice();
+        // The final adapter owns the selected export. Keep the original function callable,
+        // without an entry-point signature or its reflected shader-record parameter layout.
+        entry->removeAndDeallocate();
+        if (auto keepAlive = invoke->findDecoration<IRKeepAliveDecoration>())
+            keepAlive->removeAndDeallocate();
+        if (auto layout = invoke->findDecoration<IRLayoutDecoration>())
+            layout->removeAndDeallocate();
+    }
+
+    // Candidate adapters clone parts of the source call graph. Remove remaining entry markers
+    // before cloning, so linked implementations used as helpers also remain ordinary functions.
+    PortableRT::demoteStageImplementations(module);
+
+    for (const auto& selected : selectedStages)
+    {
+        const auto& stage = selected.stage;
+        auto input = stage.input;
+        auto symbolName = selected.name.getUnownedSlice();
         VisibleAdapter root;
         if (stage.stage == Stage::AnyHit || stage.stage == Stage::Intersection)
         {
@@ -82,16 +106,6 @@ List<VisibleAdapter> prepareMetalStandaloneStages(
             }
         }
         result.add(_Move(root));
-
-        // The selected export name now belongs to its physical VFT adapter. Drop the temporary
-        // native wrapper's roots so ordinary DCE removes it, while the source invoke remains
-        // callable by both this adapter and ordinary source helpers.
-        entry->removeAndDeallocate();
-        adapter->removeAndDeallocate();
-        if (auto keepAlive = wrapper->findDecoration<IRKeepAliveDecoration>())
-            keepAlive->removeAndDeallocate();
-        if (auto layout = wrapper->findDecoration<IRLayoutDecoration>())
-            layout->removeAndDeallocate();
     }
     entryPoints = _Move(nativeEntries);
     return result;
