@@ -1,6 +1,5 @@
 #include "slang-ir-metal-portable-ray-tracing.h"
 
-#include "slang-ir-call-graph.h"
 #include "slang-ir-layout.h"
 #include "slang-ir-metal-portable-ray-tracing-acceleration.h"
 #include "slang-ir-metal-portable-ray-tracing-candidates.h"
@@ -648,54 +647,19 @@ void lowerMetalPortableRayTracing(
     DiagnosticSink* sink,
     bool& requiresResultTypeLowering)
 {
-    // 1. Find TraceRay and CallShader instructions and the entry points that reach them.
-    // A ray-generation entry that reaches either instruction must become a compute entry,
-    // because Metal launches ray generation as a compute kernel.
+    // 1. Make each selected ray-generation entry a compute entry.
+    // Metal launches ray generation as a compute kernel, even when it does not trace any rays.
     List<IRMetalTraceRay*> traces;
     List<IRMetalRTCallShader*> calls;
-    // Collect TraceRay instructions into traces and CallShader instructions into calls,
-    // including instructions inside helper functions. These lists identify the instructions
-    // to lower; they do not yet say which entry points reach them.
+    // Collect TraceRay and CallShader instructions.
     collectDispatches(module->getModuleInst(), traces, calls);
 
-    // Map each referenced function or global (IRInst*) to the entry-point functions (IRFunc*)
-    // that reference it, directly or through other functions. Consider RayGenerationA and
-    // RayGenerationB both calling traceHelper, which contains TraceRay. The map then contains:
-    //     referencingEntries[traceHelper] = {RayGenerationA, RayGenerationB};
-    // A helper shared by several entries therefore has one key and several values in its set.
-    Dictionary<IRInst*, HashSet<IRFunc*>> referencingEntries;
-    // Follow calls and global references from the module's entry points to populate the map.
-    // The loops below look up each TraceRay or CallShader instruction's enclosing function
-    // to find all entry points that reach it, including through helper calls.
-    buildEntryPointReferenceGraph(referencingEntries, module);
-    HashSet<IRFunc*> physicalRayGenerationEntries;
-    for (auto trace : traces)
-    {
-        if (auto roots = referencingEntries.tryGetValue(getParentFunc(trace)))
-            for (auto root : *roots)
-                physicalRayGenerationEntries.add(root);
-    }
-    for (auto call : calls)
-    {
-        if (auto roots = referencingEntries.tryGetValue(getParentFunc(call)))
-            for (auto root : *roots)
-                physicalRayGenerationEntries.add(root);
-    }
     IRBuilder builder(module);
     for (auto entry : entryPoints)
     {
         auto decoration = entry->findDecoration<IREntryPointDecoration>();
         if (!decoration || decoration->getProfile().getStage() != Stage::RayGeneration)
             continue;
-        if (!physicalRayGenerationEntries.contains(entry))
-        {
-            sink->diagnose(Diagnostics::UnsupportedTargetIntrinsic{
-                .operation = "Metal ray-generation entry without portable ray-tracing dispatch",
-                .location = entry->sourceLoc});
-            continue;
-        }
-        // Capability checking admits the logical ray-generation stage. Only now, after witness
-        // specialization exposes even an interface-dispatched trace, is its physical stage known.
         decoration->setOperand(
             0,
             builder.getIntValue(builder.getIntType(), Profile(Stage::Compute).raw));

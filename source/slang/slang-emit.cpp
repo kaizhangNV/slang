@@ -682,6 +682,15 @@ void calcRequiredLoweringPassSet(
     case kIROp_LateRequireCapability:
         result.lateRequireCapability = true;
         break;
+    case kIROp_EntryPointDecoration:
+        // Metal ray-generation entries need compute-stage lowering even without TraceRay or
+        // CallShader instructions in their bodies.
+        if (isMetalTarget(codeGenContext->getTargetReq()) &&
+            cast<IREntryPointDecoration>(inst)->getProfile().getStage() == Stage::RayGeneration)
+        {
+            result.portableRayTracing = true;
+        }
+        break;
     case kIROp_PortableRTStageInputDecoration:
     case kIROp_MetalTraceRay:
     case kIROp_MetalRTCallShader:
