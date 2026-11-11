@@ -648,6 +648,9 @@ void lowerMetalPortableRayTracing(
     DiagnosticSink* sink,
     bool& requiresResultTypeLowering)
 {
+    // 1. Find TraceRay and CallShader instructions and the entry points that reach them.
+    // A ray-generation entry that reaches either instruction must become a compute entry,
+    // because Metal launches ray generation as a compute kernel.
     List<IRMetalTraceRay*> traces;
     List<IRMetalRTCallShader*> calls;
     // Collect TraceRay instructions into traces and CallShader instructions into calls,
@@ -697,6 +700,11 @@ void lowerMetalPortableRayTracing(
             0,
             builder.getIntValue(builder.getIntType(), Profile(Stage::Compute).raw));
     }
+
+    // 2. Read each schema and prepare its Metal types.
+    // Read acceleration-structure and motion types, plus the lists' concrete types, including
+    // Payload, Record, Primitive and Attributes. Compute record strides and stage signatures,
+    // then choose Metal acceleration-structure types and create descriptor table types.
     Dictionary<IRTraceProgramDescriptorType*, RefPtr<Program>> programs;
     Dictionary<IRType*, IRFunc*> instanceContributions;
     auto discover = [&](IRTraceProgramDescriptorType* descriptorType, IRInst* useSite)
@@ -749,6 +757,11 @@ void lowerMetalPortableRayTracing(
         return;
     for (auto& pair : programs)
         createProgramResources(module, *pair.second, instanceContributions);
+
+    // 3. Replace TraceRay and CallShader with MetalRTTraceDispatch and MetalRTCallDispatch.
+    // For TraceRay, prepare per-ray storage and copy Payload in and back out around the call.
+    // The new instructions carry tables, record strides and data pointers. The Metal emitter
+    // later expands them into traversal and function-table calls.
     for (auto trace : traces)
     {
         auto type = cast<IRTraceProgramDescriptorType>(trace->getDescriptor()->getDataType());
@@ -759,6 +772,11 @@ void lowerMetalPortableRayTracing(
         auto type = cast<IRTraceProgramDescriptorType>(call->getDescriptor()->getDataType());
         lowerCallable(module, call, *programs.tryGetValue(type)->Ptr());
     }
+
+    // 4. Generate wrappers for the shader entries explicitly selected by the application.
+    // For schemas used by TraceRay, generate any needed traversal callbacks that invoke any-hit and
+    // intersection shaders through function tables. Listing a shader in a schema does not
+    // select its invoke body for compilation.
     auto adapters = prepareMetalStandaloneStages(
         module,
         targetProgram,
@@ -775,6 +793,12 @@ void lowerMetalPortableRayTracing(
             createProgramCandidateDispatch(module, program);
         resources.add(program.resources);
     }
+
+    // 5. Replace logical stage-input accesses with values supplied by the generated wrappers.
+    // For example, input.payload and input.record use wrapper arguments. Obtain launch indices
+    // and dimensions from compute-kernel parameters, then replace descriptor types and layouts
+    // with their concrete Metal representations. The later introduceExplicitGlobalContext pass
+    // supplies the shared global-resource pointers.
     lowerVisibleStageInputs(module, adapters);
     lowerLaunchQueries(module);
     physicalizeMetalRTDescriptorResources(module, resources);
