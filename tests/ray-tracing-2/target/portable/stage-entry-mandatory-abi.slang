@@ -6,6 +6,14 @@
 //TEST:SIMPLE(filecheck=METALTRIANGLE): -experimental-feature -entry EmptyTriangleAnyHit -stage anyhit -target metal -profile metallib_2_4 -validate-ir
 //TEST:SIMPLE(filecheck=METALMISS): -experimental-feature -entry EmptyMiss -stage miss -target metal -profile metallib_2_4 -validate-ir
 //TEST:SIMPLE(filecheck=METALCALLABLE): -experimental-feature -entry EmptyCallable -stage callable -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=CUDACUSTOM): -experimental-feature -entry EmptyCustomClosestHit -stage closesthit -target cuda -validate-ir
+//TEST:SIMPLE(filecheck=PTXCUSTOM): -experimental-feature -entry EmptyCustomClosestHit -stage closesthit -target ptx -validate-ir -Xnvrtc -I"./external/optix-dev/include/"
+//TEST:SIMPLE(filecheck=CUDATRIANGLE): -experimental-feature -entry EmptyTriangleAnyHit -stage anyhit -target cuda -validate-ir
+//TEST:SIMPLE(filecheck=PTXTRIANGLE): -experimental-feature -entry EmptyTriangleAnyHit -stage anyhit -target ptx -validate-ir -Xnvrtc -I"./external/optix-dev/include/"
+//TEST:SIMPLE(filecheck=CUDAMISS): -experimental-feature -entry EmptyMiss -stage miss -target cuda -validate-ir
+//TEST:SIMPLE(filecheck=PTXMISS): -experimental-feature -entry EmptyMiss -stage miss -target ptx -validate-ir -Xnvrtc -I"./external/optix-dev/include/"
+//TEST:SIMPLE(filecheck=CUDACALLABLE): -experimental-feature -entry EmptyCallable -stage callable -target cuda -validate-ir
+//TEST:SIMPLE(filecheck=PTXCALLABLE): -experimental-feature -entry EmptyCallable -stage callable -target ptx -validate-ir -Xnvrtc -I"./external/optix-dev/include/"
 
 import slang.raytracing.portable;
 
@@ -91,3 +99,32 @@ struct EmptyCallable : rt::ICallableShader
 // METALTRIANGLE: visible]] uint EmptyTriangleAnyHit_anyhit(void thread* candidateState_{{[0-9]+}}, uchar thread* globalResourceContext_
 // METALMISS: visible]] void EmptyMiss_miss(void thread* payload_
 // METALCALLABLE: visible]] void EmptyCallable_callable(void thread* data_{{[0-9]+}}, uint3 dispatchRaysIndex_
+
+// OptiX wrappers retain payload register round-trips even for an empty body. NVRTC may
+// remove unused attribute loads, while direct callable entries retain their data pointer ABI.
+// CUDACUSTOM: __closesthit__EmptyCustomClosestHit_closesthit()
+// CUDACUSTOM: optixGetPayload_0()
+// CUDACUSTOM: optixGetAttribute_0()
+// CUDACUSTOM: optixGetAttribute_1()
+// CUDACUSTOM: optixSetPayload_0(
+// CUDATRIANGLE: __anyhit__EmptyTriangleAnyHit_anyhit()
+// CUDATRIANGLE: optixGetPayload_0()
+// CUDATRIANGLE: optixGetAttribute_0()
+// CUDATRIANGLE: optixGetAttribute_1()
+// CUDATRIANGLE: optixSetPayload_0(
+// CUDAMISS: __miss__EmptyMiss_miss()
+// CUDAMISS: optixGetPayload_0()
+// CUDAMISS: optixSetPayload_0(
+// CUDACALLABLE: __direct_callable__EmptyCallable_callable(uint * data_
+// PTXCUSTOM: .visible .entry __closesthit__EmptyCustomClosestHit_closesthit()
+// PTXCUSTOM: call ([[PAYLOAD:%r[0-9]+]]), _optix_get_payload, ([[SLOT:%r[0-9]+]]);
+// PTXCUSTOM: call _optix_set_payload, ([[SLOT]], [[PAYLOAD]]);
+// PTXTRIANGLE: .visible .entry __anyhit__EmptyTriangleAnyHit_anyhit()
+// PTXTRIANGLE: call ([[PAYLOAD:%r[0-9]+]]), _optix_get_payload, ([[SLOT:%r[0-9]+]]);
+// PTXTRIANGLE: call _optix_set_payload, ([[SLOT]], [[PAYLOAD]]);
+// PTXMISS: .visible .entry __miss__EmptyMiss_miss()
+// PTXMISS: call ([[PAYLOAD:%r[0-9]+]]), _optix_get_payload, ([[SLOT:%r[0-9]+]]);
+// PTXMISS: call _optix_set_payload, ([[SLOT]], [[PAYLOAD]]);
+// PTXCALLABLE: .visible .func __direct_callable__EmptyCallable_callable(
+// PTXCALLABLE: .param .b64
+// PTXCALLABLE: ret;

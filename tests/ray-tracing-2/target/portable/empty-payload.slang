@@ -1,6 +1,8 @@
 //TEST:SIMPLE(filecheck=HLSL): -experimental-feature -entry EmptyPayloadMiss -stage miss -target hlsl
 //TEST:SIMPLE(filecheck=SPIRV): -experimental-feature -entry EmptyPayloadMiss -stage miss -target spirv-assembly -emit-spirv-directly
 //TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry EmptyPayloadMiss -stage miss -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=CUDA): -experimental-feature -entry EmptyPayloadMiss -stage miss -target cuda -validate-ir
+//TEST:SIMPLE(filecheck=PTX): -experimental-feature -entry EmptyPayloadMiss -stage miss -target ptx -validate-ir -Xnvrtc -I"./external/optix-dev/include/"
 
 import slang.raytracing.portable;
 
@@ -34,3 +36,13 @@ struct EmptyPayloadMiss : rt::IMissShader
 // METAL: visible]] void EmptyPayloadMiss_miss(void thread* payload_
 // METAL-NOT: EmptyPayload_
 // METAL: return;
+
+// Empty payloads require no OptiX payload registers.
+// CUDA: __miss__EmptyPayloadMiss_miss()
+// CUDA-NOT: optixGetPayload_
+// CUDA-NOT: optixSetPayload_
+// CUDA: return;
+// PTX: .visible .entry __miss__EmptyPayloadMiss_miss()
+// PTX-NOT: _optix_get_payload
+// PTX-NOT: _optix_set_payload
+// PTX: ret;

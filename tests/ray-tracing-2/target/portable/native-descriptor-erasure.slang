@@ -1,6 +1,8 @@
 //TEST:SIMPLE(filecheck=HLSL): -experimental-feature -entry main -target hlsl
 //TEST:SIMPLE(filecheck=SPIRV): -experimental-feature -entry main -target spirv-assembly -emit-spirv-directly
 //TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry main -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=CUDA): -experimental-feature -entry main -target cuda -validate-ir
+//TEST:SIMPLE(filecheck=PTX): -experimental-feature -entry main -target ptx -validate-ir -Xnvrtc -I"./external/optix-dev/include/"
 
 import slang.raytracing.portable;
 
@@ -64,3 +66,17 @@ void main()
 // METAL-SAME: [[PARAMS]] constant* [[BOUND_PARAMS:parameters_[0-9]+]]
 // METAL-SAME: [[RESOURCES]] constant* parameters_program_
 // METAL: [[READ]]([[BOUND_PARAMS]]);
+
+// OptiX also erases the descriptor field before passing Parameters to the helper.
+// CUDA: struct [[PARAMS:Parameters_[0-9]+]]
+// CUDA-NEXT: {
+// CUDA-NEXT: float [[SCALE:scale_[0-9]+]];
+// CUDA-NEXT: };
+// CUDA: float [[READ:readScale_[0-9]+]]([[PARAMS]] * [[VALUE:[A-Za-z0-9_]+]])
+// CUDA: return [[VALUE]]->[[SCALE]];
+// CUDA: __raygen__main_{{[0-9]+}}()
+// CUDA: [[READ]](
+// PTX: .visible .entry __raygen__main_{{[0-9]+}}()
+// PTX: call.uni
+// PTX: readScale_
+// PTX: st.global.f32

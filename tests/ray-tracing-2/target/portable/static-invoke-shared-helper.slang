@@ -2,6 +2,8 @@
 //TEST:SIMPLE(filecheck=SPIRV): -experimental-feature -entry CallingMiss -stage miss -entry SharedMiss -stage miss -target spirv-assembly -emit-spirv-directly
 
 //TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry CallingMiss -stage miss -entry SharedMiss -stage miss -target metal -profile metallib_2_4 -whole-program -validate-ir
+//TEST:SIMPLE(filecheck=CUDA): -experimental-feature -entry CallingMiss -stage miss -entry SharedMiss -stage miss -target cuda -whole-program -validate-ir
+//TEST:SIMPLE(filecheck=PTX): -experimental-feature -entry CallingMiss -stage miss -entry SharedMiss -stage miss -target ptx -whole-program -validate-ir
 
 import slang.raytracing.portable;
 
@@ -84,3 +86,33 @@ struct CallingMiss : rt::IMissShader
 // METAL: {{\[\[visible\]\]}} void SharedMiss_miss(void thread* [[SE:payload[_0-9]*]],
 // METAL: [[SHARED]](([[PAYLOAD]] thread*)((ulong)([[SE]])));
 // SPIRV-COUNT-2: OpEntryPoint MissKHR
+
+// OptiX wrappers obtain their own payload; ordinary calls keep forwarding that payload's pointer.
+// CUDA: static __device__ void [[SHARED:SharedMiss_invoke[_0-9]*]]([[PAYLOAD:Payload[_0-9]*]] * [[SP:payload[_0-9]*]])
+// CUDA: [[SP]]->value{{[_0-9]*}} = [[SP]]->value{{[_0-9]*}} + 5U;
+// CUDA: extern "C" __global__ void __miss__SharedMiss_miss()
+// CUDA: optixGetPayload_0();
+// CUDA: [[PAYLOAD]] [[SE:_S[0-9]+]];
+// CUDA: [[SHARED]](&[[SE]]);
+// CUDA: optixSetPayload_0([[SE]].value{{[_0-9]*}});
+// CUDA: static __device__ void [[FORWARD:forwardToShared[_0-9]*]]([[PAYLOAD]] * [[FP:payload[_0-9]*]])
+// CUDA: [[FP]]->value{{[_0-9]*}} = [[FP]]->value{{[_0-9]*}} + 3U;
+// CUDA: [[SHARED]]([[FP]]);
+// CUDA: static __device__ void [[CALLING:CallingMiss_invoke[_0-9]*]]([[PAYLOAD]] * [[CP:payload[_0-9]*]])
+// CUDA: [[CP]]->value{{[_0-9]*}} = [[CP]]->value{{[_0-9]*}} + 2U;
+// CUDA: [[SHARED]]([[CP]]);
+// CUDA: [[FORWARD]]([[CP]]);
+// CUDA: extern "C" __global__ void __miss__CallingMiss_miss()
+// CUDA: optixGetPayload_0();
+// CUDA: [[PAYLOAD]] [[CE:_S[0-9]+]];
+// CUDA: [[CALLING]](&[[CE]]);
+// CUDA: optixSetPayload_0([[CE]].value{{[_0-9]*}});
+// The compiled PTX adds 5 for the standalone entry, and 2+5+3+5=15 for its caller.
+// PTX: .visible .entry __miss__SharedMiss_miss()
+// PTX: call ([[SP:%r[0-9]+]]), _optix_get_payload,
+// PTX: add.{{[su]}}32 [[SR:%r[0-9]+]], [[SP]], 5;
+// PTX: call _optix_set_payload, ({{%r[0-9]+}}, [[SR]]);
+// PTX: .visible .entry __miss__CallingMiss_miss()
+// PTX: call ([[CP:%r[0-9]+]]), _optix_get_payload,
+// PTX: add.{{[su]}}32 [[CR:%r[0-9]+]], [[CP]], 15;
+// PTX: call _optix_set_payload, ({{%r[0-9]+}}, [[CR]]);

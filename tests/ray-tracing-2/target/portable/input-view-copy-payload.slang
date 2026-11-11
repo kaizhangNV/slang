@@ -2,6 +2,8 @@
 //TEST:SIMPLE(filecheck=SPIRV): -experimental-feature -entry CopyingMiss -stage miss -target spirv-assembly -emit-spirv-directly
 //TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry CopyingMiss -stage miss -target metal -profile metallib_2_4 -validate-ir
 //TEST:SIMPLE(filecheck=DXIL): -experimental-feature -entry CopyingMiss -stage miss -target dxil-asm -profile lib_6_6 -validate-ir
+//TEST:SIMPLE(filecheck=CUDA): -experimental-feature -entry CopyingMiss -stage miss -target cuda -validate-ir
+//TEST:SIMPLE(filecheck=PTX): -experimental-feature -entry CopyingMiss -stage miss -target ptx -validate-ir
 
 import slang.raytracing.portable;
 
@@ -66,3 +68,23 @@ struct CopyingMiss : rt::IMissShader
 // SPIRV: OpEntryPoint MissKHR
 // SPIRV: OpVariable {{.*}} IncomingRayPayloadKHR
 // DXIL: define void @
+
+// OptiX passes one payload pointer through the same ordinary calls, then writes back both fields.
+// CUDA: static __device__ void [[OVERWRITE:overwriteThroughCopy[_0-9]*]]([[PAYLOAD:Payload[_0-9]*]] * [[HELPER:payload[_0-9]*]])
+// CUDA: [[HELPER]]->value{{[_0-9]*}} = 47U;
+// CUDA: static __device__ void [[INVOKE:CopyingMiss_invoke[_0-9]*]]([[PAYLOAD]] * [[CALLER:payload[_0-9]*]])
+// CUDA: [[CALLER]]->value{{[_0-9]*}} = 3U;
+// CUDA: [[OVERWRITE]]([[CALLER]]);
+// CUDA: [[CALLER]]->observed{{[_0-9]*}} = [[CALLER]]->value{{[_0-9]*}};
+// CUDA: extern "C" __global__ void __miss__CopyingMiss_miss()
+// CUDA: optixGetPayload_0();
+// CUDA: optixGetPayload_1();
+// CUDA: [[PAYLOAD]] [[ENTRY:_S[0-9]+]];
+// CUDA: [[INVOKE]](&[[ENTRY]]);
+// CUDA: optixSetPayload_0(
+// CUDA: optixSetPayload_1(
+// NVRTC resolves the helper and all copies: both output payload registers receive 47.
+// PTX: .visible .entry __miss__CopyingMiss_miss()
+// PTX: mov.u32 [[RESULT:%r[0-9]+]], 47;
+// PTX: call _optix_set_payload, ({{%r[0-9]+}}, [[RESULT]]);
+// PTX: call _optix_set_payload, ({{%r[0-9]+}}, [[RESULT]]);

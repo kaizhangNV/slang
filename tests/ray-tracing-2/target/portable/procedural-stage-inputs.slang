@@ -8,6 +8,12 @@
 //TEST:SIMPLE(filecheck=METALCH): -experimental-feature -entry ProceduralClosestHit -stage closesthit -target metal -profile metallib_2_4 -validate-ir
 //TEST:SIMPLE(filecheck=METALAH): -experimental-feature -entry ProceduralAnyHit -stage anyhit -target metal -profile metallib_2_4 -validate-ir
 //TEST:SIMPLE(filecheck=METALIS): -experimental-feature -entry ProceduralIntersection -stage intersection -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=CUDACH): -experimental-feature -entry ProceduralClosestHit -stage closesthit -target cuda -validate-ir
+//TEST:SIMPLE(filecheck=PTXCH): -experimental-feature -entry ProceduralClosestHit -stage closesthit -target ptx -validate-ir -Xnvrtc -I"./external/optix-dev/include/"
+//TEST:SIMPLE(filecheck=CUDAAH): -experimental-feature -entry ProceduralAnyHit -stage anyhit -target cuda -validate-ir
+//TEST:SIMPLE(filecheck=PTXAH): -experimental-feature -entry ProceduralAnyHit -stage anyhit -target ptx -validate-ir -Xnvrtc -I"./external/optix-dev/include/"
+//TEST:SIMPLE(filecheck=CUDAIS): -experimental-feature -entry ProceduralIntersection -stage intersection -target cuda -validate-ir
+//TEST:SIMPLE(filecheck=PTXIS): -experimental-feature -entry ProceduralIntersection -stage intersection -target ptx -validate-ir -Xnvrtc -I"./external/optix-dev/include/"
 
 import slang.raytracing.portable;
 
@@ -108,3 +114,32 @@ struct ProceduralIntersection : rt::IIntersectionShader
 // METALIS: ->committedAttributes_
 // METALIS: visible]] uint ProceduralIntersection_intersection(void thread* candidateState_
 // METALIS-SAME: visible_function_table<uint(void thread*, uchar thread*)>
+
+// OptiX consumes custom attributes as registers and provides builtins through intrinsics.
+// CUDACH-DAG: optixGetInstanceId()
+// CUDACH-DAG: optixGetPrimitiveIndex()
+// CUDACH: __closesthit__ProceduralClosestHit_closesthit()
+// CUDACH: optixGetAttribute_0()
+// CUDACH: optixGetAttribute_1()
+// CUDACH: optixSetPayload_0(
+// CUDAAH: __anyhit__ProceduralAnyHit_anyhit()
+// CUDAAH: optixGetAttribute_1()
+// CUDAAH: optixIgnoreIntersection()
+// CUDAAH: optixSetPayload_0(
+// CUDAIS: optixReportIntersection(distance_{{[0-9]+}}, hitKind_{{[0-9]+}}, __float_as_uint({{.*}}->uv_{{[0-9]+}})->x)), __float_as_uint({{.*}}->uv_{{[0-9]+}})->y)))
+// CUDAIS: __intersection__ProceduralIntersection_intersection()
+// PTXCH: .visible .entry __closesthit__ProceduralClosestHit_closesthit()
+// PTXCH-DAG: _optix_get_attribute_0
+// PTXCH-DAG: _optix_read_primitive_idx
+// PTXCH-DAG: _optix_read_instance_id
+// PTXCH: _optix_set_payload
+// PTXAH: .visible .entry __anyhit__ProceduralAnyHit_anyhit()
+// PTXAH: _optix_get_attribute_1
+// PTXAH: _optix_ignore_intersection
+// PTXAH: _optix_get_hit_kind
+// PTXAH: _optix_set_payload
+// PTXIS: .visible .entry __intersection__ProceduralIntersection_intersection()
+// PTXIS-DAG: _optix_get_object_ray_origin_x
+// PTXIS-DAG: _optix_get_object_ray_origin_y
+// PTXIS-DAG: _optix_get_ray_tmin
+// PTXIS: _optix_report_intersection_2

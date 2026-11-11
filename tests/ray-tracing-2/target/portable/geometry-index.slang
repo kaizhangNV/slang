@@ -2,6 +2,7 @@
 //TEST:SIMPLE(filecheck=SPIRV): -experimental-feature -entry GeometryClosestHit -stage closesthit -target spirv-assembly -emit-spirv-directly -validate-ir
 //TEST:SIMPLE(filecheck=CUDA): -experimental-feature -entry GeometryClosestHit -stage closesthit -target cuda -validate-ir
 //TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry GeometryClosestHit -stage closesthit -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=PTX): -experimental-feature -entry GeometryClosestHit -stage closesthit -target ptx -validate-ir -Xnvrtc -I"./external/optix-dev/include/"
 
 import slang.raytracing.portable;
 
@@ -42,3 +43,8 @@ struct GeometryClosestHit : rt::IClosestHitShader
 // METAL: visible]] void GeometryClosestHit_closesthit(
 // METAL-SAME: uint [[ENTRY_INDEX:geometryIndex_[0-9]+]],
 // METAL: GeometryClosestHit_invoke_{{[0-9]+}}({{.*}}, [[ENTRY_INDEX]]);
+
+// PTX must write the SBT GAS index into the payload returned by this invocation.
+// PTX: .visible .entry __closesthit__GeometryClosestHit_closesthit()
+// PTX: call ([[INDEX:%r[0-9]+]]), _optix_read_sbt_gas_idx, ();
+// PTX: call _optix_set_payload, ({{%r[0-9]+}}, [[INDEX]]);

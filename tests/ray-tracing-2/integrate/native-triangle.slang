@@ -2,6 +2,8 @@
 //TEST:SIMPLE(filecheck=SPIRV): -experimental-feature -entry RayGeneration -stage raygeneration -entry TriangleClosestHit -stage closesthit -entry BackgroundMiss -stage miss -target spirv-assembly -emit-spirv-directly
 //TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry TriangleClosestHit -stage closesthit -entry BackgroundMiss -stage miss -target metal -profile metallib_2_4 -validate-ir
 //DIAGNOSTIC_TEST:SIMPLE(filecheck=METAL_RAYGEN): -experimental-feature -entry RayGeneration -stage raygeneration -entry TriangleClosestHit -stage closesthit -entry BackgroundMiss -stage miss -target metal -profile metallib_2_4
+//TEST:SIMPLE(filecheck=CUDA): -experimental-feature -entry RayGeneration -stage raygeneration -entry TriangleClosestHit -stage closesthit -entry BackgroundMiss -stage miss -target cuda -validate-ir
+//TEST:SIMPLE(filecheck=PTX): -experimental-feature -entry RayGeneration -stage raygeneration -entry TriangleClosestHit -stage closesthit -entry BackgroundMiss -stage miss -target ptx -validate-ir
 
 // Metal stage code generation is checked below; full raygen compilation diagnoses the missing
 // portable launch-index query because legacy DispatchRaysIndex() does not support Metal.
@@ -108,3 +110,24 @@ void RayGeneration()
 
 // METAL_RAYGEN: error[E36107]: unavailable features in entry point
 // METAL_RAYGEN: note: see using of 'DispatchRaysIndex'
+
+// OptiX supplies triangle attributes to closest-hit and writes both stages' payload results back.
+// CUDA: __raygen__RayGeneration()
+// CUDA: optixTrace(
+// CUDA: __closesthit__TriangleClosestHit_closesthit()
+// CUDA: optixGetPayload_0()
+// CUDA: optixGetAttribute_0()
+// CUDA: optixGetAttribute_1()
+// CUDA: TriangleClosestHit_invoke_
+// CUDA: optixSetPayload_0(
+// CUDA: __miss__BackgroundMiss_miss()
+// CUDA: BackgroundMiss_invoke_
+// CUDA: optixSetPayload_0(
+// PTX: .visible .entry __raygen__RayGeneration()
+// PTX: _optix_trace_typed_
+// PTX: .visible .entry __closesthit__TriangleClosestHit_closesthit()
+// PTX: _optix_get_attribute_0
+// PTX: _optix_get_attribute_1
+// PTX: _optix_set_payload
+// PTX: .visible .entry __miss__BackgroundMiss_miss()
+// PTX: _optix_set_payload

@@ -1,6 +1,8 @@
 //TEST:SIMPLE(filecheck=HLSL): -experimental-feature -entry RayGeneration -stage raygeneration -entry AddThirtyOne -stage callable -target hlsl
 //TEST:SIMPLE(filecheck=SPIRV): -experimental-feature -entry RayGeneration -stage raygeneration -entry AddThirtyOne -stage callable -target spirv-assembly -emit-spirv-directly
 //TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry RayGeneration -stage raygeneration -entry AddThirtyOne -stage callable -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=CUDA): -experimental-feature -entry RayGeneration -stage raygeneration -entry AddThirtyOne -stage callable -target cuda -validate-ir
+//TEST:SIMPLE(filecheck=PTX): -experimental-feature -entry RayGeneration -stage raygeneration -entry AddThirtyOne -stage callable -target ptx -validate-ir
 
 import slang.raytracing.portable;
 
@@ -61,3 +63,16 @@ void RayGeneration()
 // METAL-DAG: callableFunctions_{{[0-9]+}}[_slang_callable_function_index](&value_
 // METAL-DAG: visible]] void AddThirtyOne_callable(
 // METAL-DAG: AddThirtyOne_invoke_{{[0-9]+}}((uint thread*)((ulong)(data_
+
+// OptiX calls the selected callable with the caller's data pointer and returns its mutation.
+// CUDA: __raygen__RayGeneration()
+// CUDA: optixDirectCall<void>(0U, &[[DATA:value_[0-9]+]]);
+// CUDA: = [[DATA]];
+// CUDA: void [[INVOKE:AddThirtyOne_invoke_[0-9]+]](uint * [[PAYLOAD:data_[0-9]+]])
+// CUDA: *[[PAYLOAD]] = *[[PAYLOAD]] + 31U;
+// CUDA: __direct_callable__AddThirtyOne_callable(uint * [[ENTRY:data_[0-9]+]])
+// CUDA: [[INVOKE]]([[ENTRY]]);
+// PTX: .visible .entry __raygen__RayGeneration()
+// PTX: _optix_call_direct_callable
+// PTX: .visible .func __direct_callable__AddThirtyOne_callable(
+// PTX: add.s32 {{.*}}, 31;

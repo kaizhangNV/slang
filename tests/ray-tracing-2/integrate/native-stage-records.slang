@@ -2,7 +2,7 @@
 //TEST:SIMPLE(filecheck=SPIRV): -experimental-feature -entry Hit -stage closesthit -entry Filter -stage anyhit -entry Intersect -stage intersection -entry Miss -stage miss -entry Callable -stage callable -target spirv-assembly -emit-spirv-directly
 //TEST:SIMPLE(filecheck=CUDA): -experimental-feature -entry Hit -stage closesthit -entry Filter -stage anyhit -entry Intersect -stage intersection -entry Miss -stage miss -entry Callable -stage callable -target cuda
 //TEST:SIMPLE(filecheck=DXIL): -experimental-feature -entry Intersect -stage intersection -target dxil-asm -profile lib_6_6
-//TEST:SIMPLE(filecheck=PTX): -experimental-feature -entry Callable -stage callable -target ptx -Xnvrtc -I"./external/optix-dev/include/"
+//TEST:SIMPLE(filecheck=PTX): -experimental-feature -entry Hit -stage closesthit -entry Filter -stage anyhit -entry Intersect -stage intersection -entry Miss -stage miss -entry Callable -stage callable -target ptx -validate-ir
 //TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry Hit -stage closesthit -entry Filter -stage anyhit -entry Intersect -stage intersection -entry Miss -stage miss -entry Callable -stage callable -target metal -profile metallib_2_4 -validate-ir
 
 import slang.raytracing.portable;
@@ -110,7 +110,6 @@ struct Callable : rt::ICallableShader
 // CUDA-COUNT-6: optixGetSbtDataPointer()
 // DXIL: call {{.*}} @dx.op.cbufferLoadLegacy
 // DXIL: call {{.*}} @dx.op.reportHit
-// PTX: .visible .func __direct_callable__Callable_callable(
 
 // METAL: visible]] void Hit_closesthit(
 // METAL: *(Record_{{[0-9]+}} device*)((ulong)(recordData_
@@ -122,3 +121,17 @@ struct Callable : rt::ICallableShader
 // METAL: *(Record_{{[0-9]+}} device*)((ulong)(recordData_
 // METAL: visible]] void Callable_callable(
 // METAL: *(Record_{{[0-9]+}} device*)((ulong)(recordData_
+
+// Every OptiX stage obtains its invocation's record through the SBT data pointer.
+// PTX: .visible .entry __closesthit__Hit_closesthit()
+// PTX: _optix_get_sbt_data_ptr_64
+// PTX: .visible .entry __anyhit__Filter_anyhit()
+// PTX: _optix_get_sbt_data_ptr_64
+// PTX: _optix_ignore_intersection
+// PTX: .visible .entry __intersection__Intersect_intersection()
+// PTX: _optix_get_sbt_data_ptr_64
+// PTX: _optix_report_intersection
+// PTX: .visible .entry __miss__Miss_miss()
+// PTX: _optix_get_sbt_data_ptr_64
+// PTX: .visible .func __direct_callable__Callable_callable(
+// PTX: _optix_get_sbt_data_ptr_64

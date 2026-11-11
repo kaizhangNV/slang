@@ -65,10 +65,13 @@ static void portableRayTracingTriangleTestImpl(IDevice* device, UnitTestContext*
     auto globalSession = context->slangGlobalSession;
     const bool isD3D = device->getDeviceType() == DeviceType::D3D12;
     const bool isMetal = device->getDeviceType() == DeviceType::Metal;
+    const bool isOptix = device->getDeviceType() == DeviceType::CUDA;
     slang::TargetDesc targetDesc = {};
-    targetDesc.format = isMetal ? SLANG_METAL_LIB : (isD3D ? SLANG_DXIL : SLANG_SPIRV);
-    targetDesc.profile =
-        globalSession->findProfile(isMetal ? "metallib_2_4" : (isD3D ? "sm_6_6" : "spirv_1_5"));
+    targetDesc.format =
+        isMetal ? SLANG_METAL_LIB : (isOptix ? SLANG_PTX : (isD3D ? SLANG_DXIL : SLANG_SPIRV));
+    if (!isOptix)
+        targetDesc.profile =
+            globalSession->findProfile(isMetal ? "metallib_2_4" : (isD3D ? "sm_6_6" : "spirv_1_5"));
     slang::CompilerOptionEntry experimental = {};
     experimental.name = slang::CompilerOptionName::ExperimentalFeature;
     experimental.value.kind = slang::CompilerOptionValueKind::Int;
@@ -270,6 +273,11 @@ SLANG_UNIT_TEST(portableRayTracingTriangleVulkan)
 SLANG_UNIT_TEST(portableRayTracingTriangleD3D12)
 {
     runTestImpl(portableRayTracingTriangleTestImpl, unitTestContext, DeviceType::D3D12);
+}
+
+SLANG_UNIT_TEST(portableRayTracingTriangleOptix)
+{
+    runTestImpl(portableRayTracingTriangleTestImpl, unitTestContext, DeviceType::CUDA);
 }
 
 SLANG_UNIT_TEST(portableRayTracingTriangleMetal)

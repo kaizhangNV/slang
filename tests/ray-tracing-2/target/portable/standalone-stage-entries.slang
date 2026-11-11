@@ -4,6 +4,10 @@
 //TEST:SIMPLE(filecheck=SPIRV): -experimental-feature -entry Stages.Background.invoke -target spirv-assembly -emit-spirv-directly
 //TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry Stages.Background -stage miss -target metal -profile metallib_2_4 -validate-ir
 //TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry Stages.Background.invoke -stage miss -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=CUDA): -experimental-feature -entry Stages.Background -stage miss -target cuda -validate-ir
+//TEST:SIMPLE(filecheck=PTX): -experimental-feature -entry Stages.Background -stage miss -target ptx -validate-ir -Xnvrtc -I"./external/optix-dev/include/"
+//TEST:SIMPLE(filecheck=CUDA): -experimental-feature -entry Stages.Background.invoke -stage miss -target cuda -validate-ir
+//TEST:SIMPLE(filecheck=PTX): -experimental-feature -entry Stages.Background.invoke -stage miss -target ptx -validate-ir -Xnvrtc -I"./external/optix-dev/include/"
 
 import slang.raytracing.portable;
 
@@ -45,3 +49,13 @@ struct Background : rt::IMissShader
 // METAL: *[[PAYLOAD]] = float3(0.25f, 0.5f, 1.0f);
 // METAL: visible]] void Stages_Background_miss(void thread* [[ENTRY_PAYLOAD:payload_[0-9]+]],
 // METAL: [[INVOKE]]((float3 thread*)((ulong)([[ENTRY_PAYLOAD]])));
+
+// Selecting either declaration emits the same OptiX entry and writes all three payload words.
+// CUDA: void [[INVOKE:Stages_Background_invoke_[0-9]+]](float3 {{ *}}* [[PAYLOAD:[A-Za-z0-9_]+]])
+// CUDA: *[[PAYLOAD]] = make_float3 (0.25f, 0.5f, 1.0f);
+// CUDA: __miss__Stages_Background_miss()
+// CUDA: optixSetPayload_0(
+// CUDA: optixSetPayload_1(
+// CUDA: optixSetPayload_2(
+// PTX: .visible .entry __miss__Stages_Background_miss()
+// PTX-COUNT-3: call _optix_set_payload,

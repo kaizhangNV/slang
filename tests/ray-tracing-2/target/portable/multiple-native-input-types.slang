@@ -1,6 +1,8 @@
 //TEST:SIMPLE(filecheck=HLSL): -experimental-feature -entry SharedHit -stage closesthit -entry CallingHit -stage closesthit -entry OtherHit -stage closesthit -entry TriangleHit -stage closesthit -target hlsl -whole-program -validate-ir
 //TEST:SIMPLE(filecheck=IR): -experimental-feature -entry SharedHit -stage closesthit -entry CallingHit -stage closesthit -entry OtherHit -stage closesthit -entry TriangleHit -stage closesthit -target hlsl -whole-program -validate-ir -dump-ir-after lowerPortableRayTracingEntryPoints
 //TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry SharedHit -stage closesthit -entry CallingHit -stage closesthit -entry OtherHit -stage closesthit -entry TriangleHit -stage closesthit -target metal -profile metallib_2_4 -whole-program -validate-ir
+//TEST:SIMPLE(filecheck=CUDA): -experimental-feature -entry SharedHit -stage closesthit -entry CallingHit -stage closesthit -entry OtherHit -stage closesthit -entry TriangleHit -stage closesthit -target cuda -whole-program -validate-ir
+//TEST:SIMPLE(filecheck=PTX): -experimental-feature -entry SharedHit -stage closesthit -entry CallingHit -stage closesthit -entry OtherHit -stage closesthit -entry TriangleHit -stage closesthit -target ptx -whole-program -validate-ir -Xnvrtc -I"./external/optix-dev/include/"
 
 import slang.raytracing.portable;
 
@@ -145,3 +147,42 @@ struct TriangleHit : rt::IClosestHitShader
 // METAL-SAME: uchar device* [[TR:recordData_[0-9]+]],
 // METAL: *([[OTHER_RECORD]] device*)((ulong)([[TR]]))
 // METAL: [[TRIANGLE]]({{.*}}, [[BARY]]);
+
+// OptiX forwards payload and custom attributes through helpers. Record reads use the
+// current invocation's SBT pointer, including inside another selected stage's invoke.
+// CUDA: void [[SHARED:SharedHit_invoke_[0-9]+]](float * [[P:payload_[0-9]+]], [[SHARED_TYPE:SharedData_[0-9]+]] * [[A:attributes_[0-9]+]])
+// CUDA: [[A]]->value_
+// CUDA: *[[P]] = *[[P]] + ({{.*}} + (*(([[SHARED_TYPE]]*)optixGetSbtDataPointer())).{{value_[0-9]+}} * 10.0f);
+// CUDA: __closesthit__SharedHit_closesthit()
+// CUDA: optixGetAttribute_0()
+// CUDA: [[SHARED]](
+// CUDA: void [[CALLING:CallingHit_invoke_[0-9]+]](float * [[CP:payload_[0-9]+]], [[SHARED_TYPE]] * [[CA:attributes_[0-9]+]])
+// CUDA: [[SHARED]]([[CP]], [[CA]]);
+// CUDA: *[[CP]] = *[[CP]] + (*(([[SHARED_TYPE]]*)optixGetSbtDataPointer())).value_
+// CUDA: __closesthit__CallingHit_closesthit()
+// CUDA: [[CALLING]](
+// CUDA: void OtherHit_invoke_{{[0-9]+}}(float * {{payload_[0-9]+}}, OtherAttributes_{{[0-9]+}} * attributes_
+// CUDA: OtherRecord_{{[0-9]+}}*)optixGetSbtDataPointer()
+// CUDA: __closesthit__OtherHit_closesthit()
+// CUDA: optixGetAttribute_0()
+// CUDA: optixGetAttribute_1()
+// CUDA: void TriangleHit_invoke_{{[0-9]+}}(float * {{payload_[0-9]+}}, float2 {{ *}}attributes_
+// CUDA: OtherRecord_{{[0-9]+}}*)optixGetSbtDataPointer()
+// CUDA: __closesthit__TriangleHit_closesthit()
+// PTX: .visible .entry __closesthit__SharedHit_closesthit()
+// PTX: _optix_get_attribute_0
+// PTX: SharedHit_invoke_
+// PTX: _optix_set_payload
+// PTX: .visible .entry __closesthit__CallingHit_closesthit()
+// PTX: _optix_get_attribute_0
+// PTX: SharedHit_invoke_
+// PTX: _optix_get_sbt_data_ptr_64
+// PTX: _optix_set_payload
+// PTX: .visible .entry __closesthit__OtherHit_closesthit()
+// PTX: _optix_get_attribute_0
+// PTX: _optix_get_sbt_data_ptr_64
+// PTX: _optix_set_payload
+// PTX: .visible .entry __closesthit__TriangleHit_closesthit()
+// PTX: _optix_get_attribute_1
+// PTX: _optix_get_sbt_data_ptr_64
+// PTX: _optix_set_payload

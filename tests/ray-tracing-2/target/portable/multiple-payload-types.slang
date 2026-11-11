@@ -2,6 +2,8 @@
 //TEST:SIMPLE(filecheck=IR): -experimental-feature -entry FirstMiss -stage miss -entry SharedMiss -stage miss -entry OtherMiss -stage miss -entry UnusedMiss -stage miss -entry Callable -stage callable -target hlsl -whole-program -validate-ir -dump-ir-after lowerPortableRayTracingEntryPoints
 //TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry FirstMiss -stage miss -entry SharedMiss -stage miss -entry OtherMiss -stage miss -entry UnusedMiss -stage miss -entry Callable -stage callable -entry LibraryMiss -stage miss -entry LibraryCallable -stage callable -target metal -profile metallib_2_4 -whole-program -validate-ir
 //DIAGNOSTIC_TEST:SIMPLE(filecheck=UNBOUND): -experimental-feature -entry FirstMiss -stage miss -entry SharedMiss -stage miss -entry OtherMiss -stage miss -entry UnusedMiss -stage miss -entry Callable -stage callable -target metal -profile metallib_2_4 -whole-program -validate-ir
+//TEST:SIMPLE(filecheck=CUDA): -experimental-feature -entry FirstMiss -stage miss -entry SharedMiss -stage miss -entry OtherMiss -stage miss -entry UnusedMiss -stage miss -entry Callable -stage callable -target cuda -whole-program -validate-ir
+//TEST:SIMPLE(filecheck=PTX): -experimental-feature -entry FirstMiss -stage miss -entry SharedMiss -stage miss -entry OtherMiss -stage miss -entry UnusedMiss -stage miss -entry Callable -stage callable -target ptx -whole-program -validate-ir -Xnvrtc -I"./external/optix-dev/include/"
 
 import slang.raytracing.portable;
 
@@ -171,3 +173,49 @@ struct LibraryCallable : rt::ICallableShader
 // UNBOUND: error[E38111]: Metal ray-tracing operation has no stage invocation ABI
 // UNBOUND: operation 'portableRTGetCallableData' in an exported helper has no invocation state provider
 // UNBOUND-NOT: error[E99997]
+
+// OptiX miss entries use payload registers; direct callables use a data pointer. Exported
+// helpers are also lowered when their types are absent from the selected entry list.
+// CUDA: void [[SHARED:SharedMiss_invoke_[0-9]+]]([[SHARED_TYPE:SharedPayload_[0-9]+]] * [[SP:payload_[0-9]+]])
+// CUDA: [[SP]]->{{sharedValue_[0-9]+}} = [[SP]]->{{sharedValue_[0-9]+}} + 5U;
+// CUDA: __miss__SharedMiss_miss()
+// CUDA: optixGetPayload_0()
+// CUDA: [[SHARED]](
+// CUDA: optixSetPayload_0(
+// CUDA: void [[FIRST:FirstMiss_invoke_[0-9]+]]([[SHARED_TYPE]] * [[FP:payload_[0-9]+]])
+// CUDA: [[FP]]->{{sharedValue_[0-9]+}} = [[FP]]->{{sharedValue_[0-9]+}} + 2U;
+// CUDA: [[SHARED]]([[FP]]);
+// CUDA: __miss__FirstMiss_miss()
+// CUDA: [[FIRST]](
+// CUDA: __miss__OtherMiss_miss()
+// CUDA: optixSetPayload_0((slang_bit_cast<uint>(
+// CUDA: __miss__UnusedMiss_miss()
+// CUDA: uint [[UNUSED:[A-Za-z0-9_]+]] = optixGetPayload_0();
+// CUDA: optixSetPayload_0([[UNUSED]]);
+// CUDA: void [[CALLABLE:Callable_invoke_[0-9]+]]([[SHARED_TYPE]] * [[DATA:data_[0-9]+]])
+// CUDA: [[DATA]]->{{sharedValue_[0-9]+}} = [[DATA]]->{{sharedValue_[0-9]+}} + 11U;
+// CUDA: __direct_callable__Callable_callable([[SHARED_TYPE]] * [[ENTRY_DATA:data_[0-9]+]])
+// CUDA: [[CALLABLE]]([[ENTRY_DATA]]);
+// CUDA: void updateLibraryPayload_{{[0-9]+}}([[LIBRARY_TYPE:LibraryPayload_[0-9]+]] * [[LP:payload_[0-9]+]])
+// CUDA: [[LP]]->{{libraryValue_[0-9]+}} = [[LP]]->{{libraryValue_[0-9]+}} + 23U;
+// CUDA: void updateLibraryData_{{[0-9]+}}([[LIBRARY_TYPE]] * [[LD:data_[0-9]+]])
+// CUDA: [[LD]]->{{libraryValue_[0-9]+}} = [[LD]]->{{libraryValue_[0-9]+}} + 29U;
+// PTX: .visible .entry __miss__SharedMiss_miss()
+// PTX: SharedMiss_invoke_
+// PTX: _optix_set_payload
+// PTX: .visible .entry __miss__FirstMiss_miss()
+// PTX: add.s32 {{.*}}, 2;
+// PTX: SharedMiss_invoke_
+// PTX: _optix_set_payload
+// PTX: .visible .entry __miss__OtherMiss_miss()
+// PTX: add.f32
+// PTX: _optix_set_payload
+// PTX: .visible .entry __miss__UnusedMiss_miss()
+// PTX: _optix_get_payload
+// PTX: _optix_set_payload
+// PTX: .visible .func __direct_callable__Callable_callable(
+// PTX: add.s32 {{.*}}, 11;
+// PTX: .visible .func {{[A-Za-z0-9_]*}}updateLibraryPayload_
+// PTX: add.s32 {{.*}}, 23;
+// PTX: .visible .func {{[A-Za-z0-9_]*}}updateLibraryData_
+// PTX: add.s32 {{.*}}, 29;

@@ -3,6 +3,12 @@
 //TEST:COMPILE: tests/ray-tracing-2/ir/identity/schema-contract.slang -experimental-feature -o tests/ray-tracing-2/ir/identity/schema-contract-cache.slang-module
 //TEST:SIMPLE_EX(filecheck=CHECK): -experimental-feature tests/ray-tracing-2/ir/identity/schema-contract-cache.slang-module -entry TraceEntry -stage miss -target metal -profile metallib_2_4 -validate-ir -dump-ir-after specializeModule
 //TEST:SIMPLE_EX(filecheck=LIVENESS): -experimental-feature tests/ray-tracing-2/ir/identity/schema-contract-cache.slang-module -entry TraceEntry -stage miss -target metal -profile metallib_2_4 -validate-ir -dump-ir-after specializeModule
+//TEST:SIMPLE(filecheck=CHECK,CUDA): -experimental-feature -entry TraceEntry -stage miss -target cuda -validate-ir -dump-ir-after specializeModule
+//TEST:SIMPLE(filecheck=LIVENESS): -experimental-feature -entry TraceEntry -stage miss -target cuda -validate-ir -dump-ir-after specializeModule
+//TEST:SIMPLE_EX(filecheck=CHECK,CUDA): -experimental-feature tests/ray-tracing-2/ir/identity/schema-contract-cache.slang-module -entry TraceEntry -stage miss -target cuda -validate-ir -dump-ir-after specializeModule
+//TEST:SIMPLE_EX(filecheck=LIVENESS): -experimental-feature tests/ray-tracing-2/ir/identity/schema-contract-cache.slang-module -entry TraceEntry -stage miss -target cuda -validate-ir -dump-ir-after specializeModule
+//TEST:SIMPLE(filecheck=PTX): -experimental-feature -entry TraceEntry -stage miss -target ptx -validate-ir -Xnvrtc -I"./external/optix-dev/include/"
+//TEST:SIMPLE_EX(filecheck=PTX): -experimental-feature tests/ray-tracing-2/ir/identity/schema-contract-cache.slang-module -entry TraceEntry -stage miss -target ptx -validate-ir -Xnvrtc -I"./external/optix-dev/include/"
 
 // The descriptor operands and list decorations must contain concrete types after specialization,
 // including after loading a serialized module. They must not retain unselected shader bodies.
@@ -199,3 +205,11 @@ struct TraceEntry : rt::IMissShader
         tracer.trace({}, scene, copyDescriptor<Schema>(program), input.payload);
     }
 }
+
+// Both descriptor spellings also lower to ordinary OptiX traces after specialization.
+// CUDA-COUNT-2: optixTrace(
+// CUDA: __miss__TraceEntry_miss()
+// CUDA: optixSetPayload_0(
+// PTX: .visible .entry __miss__TraceEntry_miss()
+// PTX-COUNT-2: _optix_trace_
+// PTX: _optix_set_payload

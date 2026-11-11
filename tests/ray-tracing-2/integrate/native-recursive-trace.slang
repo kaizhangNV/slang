@@ -3,6 +3,8 @@
 //TEST:SIMPLE(filecheck=DXIL): -experimental-feature -entry RecursiveClosestHit -stage closesthit -target dxil -profile sm_6_6 -validate-ir
 //TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry RecursiveClosestHit -stage closesthit -entry SecondaryMiss -stage miss -target metal -profile metallib_2_4 -validate-ir
 //DIAGNOSTIC_TEST:SIMPLE(filecheck=METAL_RAYGEN): -experimental-feature -entry RayGeneration -stage raygeneration -entry RecursiveClosestHit -stage closesthit -entry SecondaryMiss -stage miss -target metal -profile metallib_2_4
+//TEST:SIMPLE(filecheck=CUDA): -experimental-feature -entry RayGeneration -stage raygeneration -entry RecursiveClosestHit -stage closesthit -entry SecondaryMiss -stage miss -target cuda -validate-ir
+//TEST:SIMPLE(filecheck=PTX): -experimental-feature -entry RayGeneration -stage raygeneration -entry RecursiveClosestHit -stage closesthit -entry SecondaryMiss -stage miss -target ptx -validate-ir
 
 // Metal stage code generation is checked below; full raygen compilation diagnoses the missing
 // portable launch-index query because legacy DispatchRaysIndex() does not support Metal.
@@ -139,3 +141,27 @@ void RayGeneration()
 
 // METAL_RAYGEN: error[E36107]: unavailable features in entry point
 // METAL_RAYGEN: note: see using of 'DispatchRaysIndex'
+
+// OptiX keeps the secondary trace in its helper and restores the outer invocation after the call.
+// CUDA: __raygen__RayGeneration()
+// CUDA: optixTrace(
+// CUDA: __noinline__ void [[TRACE:traceSecondary_[0-9]+]](uint * [[SECONDARY:payload_[0-9]+]])
+// CUDA: optixTrace({{.*}}, [[SECONDARY]]);
+// CUDA: RecursiveClosestHit_invoke_
+// CUDA: [[TRACE]](&secondaryPayload_
+// CUDA: __closesthit__RecursiveClosestHit_closesthit()
+// CUDA: optixGetAttribute_0()
+// CUDA: optixSetPayload_0(
+// CUDA: __miss__SecondaryMiss_miss()
+// CUDA: optixSetPayload_0(
+// PTX: .visible .entry __raygen__RayGeneration()
+// PTX: _optix_trace_typed_
+// PTX: .func {{.*}}traceSecondary_
+// PTX: _optix_trace_typed_
+// PTX: .visible .entry __closesthit__RecursiveClosestHit_closesthit()
+// PTX: _optix_get_ray_tmax
+// PTX: _optix_get_launch_dimension_x
+// PTX: _optix_set_payload
+// PTX: .visible .entry __miss__SecondaryMiss_miss()
+// PTX: _optix_get_launch_index_x
+// PTX: _optix_set_payload

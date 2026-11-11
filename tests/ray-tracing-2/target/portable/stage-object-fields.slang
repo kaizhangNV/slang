@@ -1,6 +1,8 @@
 //TEST:SIMPLE(filecheck=HLSL): -experimental-feature -entry StatefulMiss -stage miss -target hlsl
 //TEST:SIMPLE(filecheck=SPIRV): -experimental-feature -entry StatefulMiss -stage miss -target spirv-assembly -emit-spirv-directly
 //TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry StatefulMiss -stage miss -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=CUDA): -experimental-feature -entry StatefulMiss -stage miss -target cuda -validate-ir
+//TEST:SIMPLE(filecheck=PTX): -experimental-feature -entry StatefulMiss -stage miss -target ptx -validate-ir -Xnvrtc -I"./external/optix-dev/include/"
 
 import slang.raytracing.portable;
 
@@ -50,3 +52,15 @@ struct StatefulMiss : rt::IMissShader
 // METAL: [[INVOKE]]((uint thread*)((ulong)([[ENTRY_PAYLOAD]])));
 // METAL-NOT: ordinaryState
 // METAL-NOT: ordinaryVector
+
+// CUDA-NOT: ordinaryState
+// CUDA-NOT: ordinaryVector
+// CUDA: void [[INVOKE:StatefulMiss_invoke_[0-9]+]](uint * [[PAYLOAD:[A-Za-z0-9_]+]])
+// CUDA: *[[PAYLOAD]] = 11U;
+// CUDA: __miss__StatefulMiss_miss()
+// CUDA: optixSetPayload_0(
+// CUDA-NOT: ordinaryState
+// CUDA-NOT: ordinaryVector
+// PTX: .visible .entry __miss__StatefulMiss_miss()
+// PTX: mov.u32 [[VALUE:%r[0-9]+]], 11;
+// PTX: call _optix_set_payload, ({{%r[0-9]+}}, [[VALUE]]);

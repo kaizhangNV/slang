@@ -2,6 +2,8 @@
 //TEST:SIMPLE(filecheck=SPIRV): -experimental-feature -entry RayGeneration -stage raygeneration -target spirv-assembly -emit-spirv-directly
 //TEST:SIMPLE(filecheck=METAL): -experimental-feature -target metal -entry WrongHit -stage closesthit -entry FirstHit -stage closesthit -entry SecondHit -stage closesthit -entry WrongMiss -stage miss -entry SelectedMiss -stage miss -entry WrongCallable -stage callable -entry SelectedCallable -stage callable -profile metallib_2_4 -validate-ir
 //DIAGNOSTIC_TEST:SIMPLE(filecheck=METAL_RAYGEN): -experimental-feature -entry RayGeneration -stage raygeneration -target metal -profile metallib_2_4
+//TEST:SIMPLE(filecheck=CUDA): -experimental-feature -entry RayGeneration -stage raygeneration -target cuda -entry WrongHit -stage closesthit -entry FirstHit -stage closesthit -entry SecondHit -stage closesthit -entry WrongMiss -stage miss -entry SelectedMiss -stage miss -entry WrongCallable -stage callable -entry SelectedCallable -stage callable -validate-ir
+//TEST:SIMPLE(filecheck=PTX): -experimental-feature -entry RayGeneration -stage raygeneration -target ptx -entry WrongHit -stage closesthit -entry FirstHit -stage closesthit -entry SecondHit -stage closesthit -entry WrongMiss -stage miss -entry SelectedMiss -stage miss -entry WrongCallable -stage callable -entry SelectedCallable -stage callable -validate-ir
 
 // Metal stage code generation is checked below; full raygen compilation diagnoses the missing
 // portable launch-index query because legacy DispatchRaysIndex() does not support Metal.
@@ -166,3 +168,29 @@ void RayGeneration()
 
 // METAL_RAYGEN: error[E36107]: unavailable features in entry point
 // METAL_RAYGEN: note: see using of 'DispatchRaysIndex'
+
+// OptiX preserves the SBT addressing operands and exports every shader selected by the host.
+// CUDA: optixGetSbtGASIndex()
+// CUDA: __raygen__RayGeneration()
+// CUDA: ->sbtOffset_{{[0-9]+}} = 1U;
+// CUDA: ->sbtStride_{{[0-9]+}} = 2U;
+// CUDA: ->missIndex_{{[0-9]+}} = 1U;
+// CUDA: optixTrace({{.*}}.sbtOffset_{{[0-9]+}}, {{.*}}.sbtStride_{{[0-9]+}}, {{.*}}.missIndex_
+// CUDA: optixDirectCall<void>(1U,
+// CUDA: __closesthit__FirstHit_closesthit()
+// CUDA: __closesthit__SecondHit_closesthit()
+// CUDA: __miss__SelectedMiss_miss()
+// CUDA: __direct_callable__SelectedCallable_callable(
+// PTX: .visible .entry __raygen__RayGeneration()
+// PTX: _optix_trace_typed_
+// PTX: _optix_call_direct_callable
+// PTX: .visible .entry __closesthit__WrongHit_closesthit()
+// PTX: _optix_read_sbt_gas_idx
+// PTX: .visible .entry __closesthit__FirstHit_closesthit()
+// PTX: _optix_read_sbt_gas_idx
+// PTX: .visible .entry __closesthit__SecondHit_closesthit()
+// PTX: _optix_read_sbt_gas_idx
+// PTX: .visible .entry __miss__WrongMiss_miss()
+// PTX: .visible .entry __miss__SelectedMiss_miss()
+// PTX: .visible .func __direct_callable__WrongCallable_callable(
+// PTX: .visible .func __direct_callable__SelectedCallable_callable(
