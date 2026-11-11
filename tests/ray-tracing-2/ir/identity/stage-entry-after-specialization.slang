@@ -2,6 +2,9 @@
 //TEST:SIMPLE(filecheck=SPIRV): -experimental-feature -entry SharedMiss -stage miss -entry CallingMiss -stage miss -target spirv-assembly -emit-spirv-directly -whole-program -denorm-mode-fp16 preserve -denorm-mode-fp32 ftz -denorm-mode-fp64 preserve -validate-ir
 //TEST:SIMPLE(filecheck=NATIVE_MODES): -experimental-feature -entry SharedMiss -stage miss -entry CallingMiss -stage miss -entry nativeCompute -stage compute -target hlsl -whole-program -denorm-mode-fp16 preserve -denorm-mode-fp32 ftz -denorm-mode-fp64 preserve -validate-ir -dump-ir-after lowerPortableRayTracingEntryPoints
 //TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry SharedMiss -stage miss -entry CallingMiss -stage miss -entry nativeCompute -stage compute -target metal -profile metallib_2_4 -whole-program -denorm-mode-fp16 preserve -denorm-mode-fp32 ftz -denorm-mode-fp64 preserve -validate-ir -dump-ir-after lowerPortableRayTracingEntryPoints
+//TEST:SIMPLE(filecheck=CUDA): -experimental-feature -entry SharedMiss -stage miss -entry CallingMiss -stage miss -entry nativeCompute -stage compute -target cuda -whole-program -validate-ir
+//TEST:SIMPLE(filecheck=PTX): -experimental-feature -entry SharedMiss -stage miss -entry CallingMiss -stage miss -entry nativeCompute -stage compute -target ptx -whole-program -validate-ir -Xnvrtc -I"./external/optix-dev/include/"
+//TEST:SIMPLE(filecheck=PTX): -experimental-feature -entry nativeCompute -stage compute -entry SharedMiss -stage miss -entry CallingMiss -stage miss -target ptx -whole-program -validate-ir -Xnvrtc -I"./external/optix-dev/include/"
 //DIAGNOSTIC_TEST:SIMPLE(filecheck=UNIFORMITY): -experimental-feature -entry SharedMiss -stage miss -entry CallingMiss -stage miss -entry nativeCompute -stage compute -target hlsl -whole-program -validate-uniformity -DTEST_UNIFORMITY
 
 // Specialization must still see the original portable entry signatures and ordinary call.
@@ -171,3 +174,25 @@ void nativeCompute(uniform float scale, uint3 tid : SV_DispatchThreadID)
     expectUniform(float(tid.x));
 #endif
 }
+
+// Ordinary compute parameters still use their normal CUDA ABI beside OptiX stage wrappers.
+// CUDA: void [[SHARED:SharedMiss_invoke_[0-9]+]](Payload_{{[0-9]+}} * {{payload_[0-9]+}})
+// CUDA: optixGetSbtDataPointer()
+// CUDA: __miss__SharedMiss_miss()
+// CUDA: [[SHARED]](
+// CUDA: void [[CALLING:CallingMiss_invoke_[0-9]+]](Payload_{{[0-9]+}} * [[PAYLOAD:payload_[0-9]+]])
+// CUDA: [[SHARED]]([[PAYLOAD]]);
+// CUDA: __miss__CallingMiss_miss()
+// CUDA: [[CALLING]](
+// CUDA: __global__ void nativeCompute(float [[SCALE:scale_[0-9]+]])
+// CUDA: [(blockIdx * blockDim + threadIdx).x]) = [[SCALE]];
+
+// Both entry orders need OptiX support for the RT entries and keep the ordinary compute ABI.
+// PTX-DAG: .visible .entry __miss__SharedMiss_miss()
+// PTX-DAG: .visible .entry __miss__CallingMiss_miss()
+// PTX-DAG: .visible .entry nativeCompute(
+// PTX-DAG: .param .f32 nativeCompute_param_0
+// PTX-DAG: _optix_get_sbt_data_ptr_64
+// PTX-DAG: _optix_get_payload
+// PTX-DAG: _optix_set_payload
+// PTX-DAG: st.global.f32
