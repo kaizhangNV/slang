@@ -534,10 +534,10 @@ struct IntroduceExplicitGlobalContextPass
         return parameter->findDecoration<IRMetalRTGlobalResourceDecoration>() != nullptr;
     }
 
-    // ProgramLayout owns declaration order before any shader body is optimized. A preserved
-    // layout coordinate gives separate getEntryPointCode calls the same resource order even
-    // when the linker discovers declarations differently or explicit bindings overlap. Resource
-    // legalization splits an aggregate into independently bound leaves, ordered by binding.
+    // Preservation assigns component globals a stable order before any shader body is optimized.
+    // Separate getEntryPointCode calls therefore agree even when linking discovers declarations
+    // differently or explicit bindings overlap. Resource legalization may split an aggregate into
+    // independently bound leaves; those share its ordinal and are ordered by binding.
     struct ResourceBinding
     {
         LayoutResourceKind kind;

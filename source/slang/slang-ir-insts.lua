@@ -2302,7 +2302,7 @@ local insts = {
 				ExplicitGlobalContextDecoration = {},
 			},
 			{
-				-- Marks a component parameter that belongs to the shared resource layout.
+				-- Gives a component parameter its stable position in the shared resource layout.
 				MetalRTGlobalResourceDecoration = { operands = { { "layoutIndex", "IRIntLit" } } },
 			},
 			{
@@ -2317,14 +2317,6 @@ local insts = {
 				-- An explicitly selected logical Metal stage remains an ordinary exported
 				-- helper. It is an executable analysis root, not a native shader entry.
 				MetalRTStandaloneStageDecoration = {},
-			},
-			{
-				-- Global collection may keep a resource in the global-scope layout without
-				-- placing it in the synthesized nominal struct. Preserve its checked value
-				-- type on the replacement layout-only key while the producer still owns it.
-				LayoutFieldTypeDecoration = {
-					operands = { { "fieldType", "IRType" } },
-				},
 			},
 			{
 				-- Marks a physical function exported for a generated visible-function table.

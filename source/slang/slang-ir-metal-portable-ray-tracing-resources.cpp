@@ -132,20 +132,44 @@ IRTypeLayout* createPhysicalLayout(
     return groupBuilder.build();
 }
 
+// Finds the wrapper made by collectGlobalUniformParameters. Both that pass and entry-point
+// parameter collection mark their synthesized structs, but moveEntryPointUniformParamsToGlobalScope
+// also marks the latter globals with EntryPointParamDecoration. At this stage that distinction
+// identifies the one wrapper whose layout still describes standalone global resources.
+IRStructType* findCollectedGlobalParamsType(IRModule* module)
+{
+    IRStructType* result = nullptr;
+    for (auto inst : module->getGlobalInsts())
+    {
+        auto parameter = as<IRGlobalParam>(inst);
+        if (!parameter || parameter->findDecoration<IREntryPointParamDecoration>())
+            continue;
+        auto type = parameter->getDataType();
+        if (auto group = as<IRUniformParameterGroupType>(type))
+            type = group->getElementType();
+        auto structType = as<IRStructType>(type);
+        if (!structType || !structType->findDecoration<IRSynthesizedParameterGroupDecoration>())
+            continue;
+        SLANG_RELEASE_ASSERT(!result || result == structType);
+        result = structType;
+    }
+    return result;
+}
+
 // Rewrites a concrete type and its layout together. Consider Holder<FirstSchema> and
 // Holder<SecondSchema>: both specialized structs may reuse the same source field key, but their
 // descriptor fields must retain different physical types. The nominal owner resolves that key.
-// Layout-only global fields instead carry their checked type from global-parameter collection.
 struct LayoutPhysicalizationContext
 {
     IRBuilder builder;
+    IRStructType* collectedGlobalParamsType;
     Dictionary<IRType*, const MetalRTDescriptorResources*> resourcesByPhysicalType;
     Dictionary<KeyValuePair<IRType*, IRTypeLayout*>, IRTypeLayout*> rewrittenLayouts;
 
     LayoutPhysicalizationContext(
         IRModule* module,
         const List<MetalRTDescriptorResources>& resources)
-        : builder(module)
+        : builder(module), collectedGlobalParamsType(findCollectedGlobalParamsType(module))
     {
         for (const auto& resource : resources)
             resourcesByPhysicalType.add(resource.physicalParameterBlockType, &resource);
@@ -156,18 +180,6 @@ struct LayoutPhysicalizationContext
         auto typeLayout = rewriteTypeLayout(type, layout->getTypeLayout());
         return typeLayout == layout->getTypeLayout() ? layout
                                                      : cloneVarLayout(builder, layout, typeLayout);
-    }
-
-    // Reads only the producer's canonical representations: an actual nominal field, or an
-    // explicitly typed layout-only key. Following arbitrary key uses would confuse generic owners.
-    IRType* getFieldType(IRStructType* type, IRInst* key)
-    {
-        if (auto structKey = as<IRStructKey>(key))
-            if (auto field = findStructField(type, structKey))
-                return field->getFieldType();
-        auto decoration = key->findDecoration<IRLayoutFieldTypeDecoration>();
-        SLANG_RELEASE_ASSERT(decoration);
-        return decoration->getFieldType();
     }
 
     IRTypeLayout* rewriteTypeLayout(IRType* type, IRTypeLayout* layout)
@@ -191,9 +203,27 @@ struct LayoutPhysicalizationContext
                 for (auto field : structLayout->getFieldLayoutAttrs())
                 {
                     auto oldFieldLayout = field->getLayout();
-                    auto newFieldLayout = rewriteVarLayout(
-                        getFieldType(structType, field->getFieldKey()),
-                        oldFieldLayout);
+                    auto key = as<IRStructKey>(field->getFieldKey());
+                    auto nominalField = key ? findStructField(structType, key) : nullptr;
+                    if (!nominalField && structType == collectedGlobalParamsType)
+                    {
+                        // Consider these globals:
+                        //     uint selectedMiss;
+                        //     rt::TraceProgramDescriptor<Schema> descriptor;
+                        // Collection puts only selectedMiss in GlobalParams, but keeps both
+                        // entries in its layout. The descriptor's own global still owns its
+                        // type and binding. Omit that redundant entry from the wrapper's
+                        // storage layout; rewriting the standalone global handles it instead.
+                        // Apply this to both element layouts so neither retains a runtime
+                        // global reference that explicit-global-context conversion could read.
+                        SLANG_RELEASE_ASSERT(!oldFieldLayout->getTypeLayout()->findSizeAttr(
+                            LayoutResourceKind::Uniform));
+                        changed = true;
+                        continue;
+                    }
+                    SLANG_RELEASE_ASSERT(nominalField);
+                    auto newFieldLayout =
+                        rewriteVarLayout(nominalField->getFieldType(), oldFieldLayout);
                     changed |= oldFieldLayout != newFieldLayout;
                     replacement.addField(field->getFieldKey(), newFieldLayout);
                 }

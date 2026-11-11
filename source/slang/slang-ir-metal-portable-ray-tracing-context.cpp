@@ -7,29 +7,59 @@
 namespace Slang
 {
 
-void preserveMetalRTGlobalResources(IRModule* module, const List<IRGlobalParam*>& globalParams)
+void preserveMetalRTGlobalResources(IRModule* module, IRVarLayout* globalScopeVarLayout)
 {
+    if (!globalScopeVarLayout)
+        return;
+
     IRBuilder builder(module);
-    IRIntegerValue layoutIndex = 0;
     // Consider a miss shader that reads a global buffer while ray generation only calls trace.
-    // Both compilations need the same resource fields in MetalRTGlobalResources. Keep the linked
-    // component's runtime globals after uniform collection has replaced ordinary uniforms with
-    // their buffer. Its result list supplies layout order even though the layout's field keys no
-    // longer refer to those globals. Record that order before optimization can remove unused ones.
-    for (auto parameter : globalParams)
+    // Both compilations need the same resource fields in MetalRTGlobalResources. Source globals
+    // retain their linkage and layout after uniform collection. The collected uniform buffer
+    // has no linkage, but carries the component's scope layout. Compiler-generated buffers such
+    // as coverage instrumentation belong to the individual compilation and are excluded here.
+    List<IRGlobalParam*> globalParams;
+    IRGlobalParam* uniformBuffer = nullptr;
+    for (auto inst : module->getGlobalInsts())
     {
+        auto parameter = as<IRGlobalParam>(inst);
+        if (!parameter)
+            continue;
         auto layout = findVarLayout(parameter);
-        SLANG_RELEASE_ASSERT(layout);
-        if (!layout->findOffsetAttr(LayoutResourceKind::SpecializationConstant))
+        if (!layout || layout->findOffsetAttr(LayoutResourceKind::SpecializationConstant))
+            continue;
+        if (!parameter->findDecoration<IRLinkageDecoration>())
         {
-            builder.addDecoration(
-                parameter,
-                kIROp_MetalRTGlobalResourceDecoration,
-                builder.getIntValue(builder.getIntType(), layoutIndex));
-            if (!parameter->findDecoration<IRKeepAliveDecoration>())
-                builder.addKeepAliveDecoration(parameter);
+            if (layout != globalScopeVarLayout)
+                continue;
+            auto type = parameter->getDataType();
+            if (auto group = as<IRUniformParameterGroupType>(type))
+                type = group->getElementType();
+            SLANG_RELEASE_ASSERT(type->findDecoration<IRSynthesizedParameterGroupDecoration>());
+            SLANG_RELEASE_ASSERT(!uniformBuffer);
+            uniformBuffer = parameter;
         }
-        ++layoutIndex;
+        else
+            SLANG_RELEASE_ASSERT(getMangledName(parameter).getLength());
+        globalParams.add(parameter);
+    }
+
+    // Linking different entry points may discover the globals in different orders. Put the
+    // unnamed uniform buffer first, then sort by source linkage name. Unlike a binding number,
+    // a linkage name distinguishes declarations even when their explicit bindings overlap.
+    globalParams.sort([](IRGlobalParam* left, IRGlobalParam* right)
+                      { return compare(getMangledName(left), getMangledName(right)) < 0; });
+    for (Index i = 0; i < globalParams.getCount(); ++i)
+    {
+        auto parameter = globalParams[i];
+        if (i)
+            SLANG_RELEASE_ASSERT(getMangledName(globalParams[i - 1]) != getMangledName(parameter));
+        builder.addDecoration(
+            parameter,
+            kIROp_MetalRTGlobalResourceDecoration,
+            builder.getIntValue(builder.getIntType(), i));
+        if (!parameter->findDecoration<IRKeepAliveDecoration>())
+            builder.addKeepAliveDecoration(parameter);
     }
 }
 

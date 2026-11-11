@@ -47,16 +47,19 @@ SLANG_UNIT_TEST(metalPortableRayTracingRecordLayoutAndNestedDescriptors)
                     + uint(input.record.tail);
             }
         }
-        struct ConstantMiss : rt::IMissShader
+        struct BufferOnlyMiss : rt::IMissShader
         {
             typealias Context = MissContext;
-            static void invoke(rt::MissInput<Context> input) { input.payload = 11; }
+            static void invoke(rt::MissInput<Context> input)
+            {
+                input.payload = background[0] + 11;
+            }
         }
         struct Schema<let N : int> : rt::ITraceProgramSchema
         {
             typealias TraceContext = ::TraceContext;
             typealias HitGroups = rt::EmptyHitGroupList;
-            typealias MissShaders = rt::MissShaderList<Miss<N>, ConstantMiss>;
+            typealias MissShaders = rt::MissShaderList<Miss<N>, BufferOnlyMiss>;
             typealias CallableShaders = rt::EmptyCallableShaderList;
         }
         struct Holder<let N : int> { rt::TraceProgramDescriptor<Schema<N>> descriptor; }
@@ -113,7 +116,7 @@ SLANG_UNIT_TEST(metalPortableRayTracingRecordLayoutAndNestedDescriptors)
     SLANG_CHECK_ABORT(SLANG_SUCCEEDED(module->findEntryPointByName("main", entry.writeRef())));
     ComPtr<slang::IEntryPoint> selectedMiss;
     SLANG_CHECK_ABORT(SLANG_SUCCEEDED(module->findAndCheckEntryPoint(
-        "ConstantMiss",
+        "BufferOnlyMiss",
         SLANG_STAGE_MISS,
         selectedMiss.writeRef(),
         diagnostics.writeRef())));
@@ -168,10 +171,10 @@ SLANG_UNIT_TEST(metalPortableRayTracingRecordLayoutAndNestedDescriptors)
     SLANG_CHECK(sourceLayout->findTypeByName("Schema<1>") == firstSchema);
     SLANG_CHECK(sourceLayout->findTypeByName("Schema<2>") == secondSchema);
 
-    // The selected Miss has no trace/call operation and does not read a global. It nevertheless
-    // shares this component's full resource layout with ray generation, including both nested
-    // descriptor specializations. Their physical resource fields must therefore exist here
-    // without retaining the ray-generation body or either unselected Miss implementation.
+    // The selected Miss reads background but has no trace/call operation and never accesses a
+    // nested descriptor. Reading one resource requires interpreting the shared resource pointer,
+    // so its structure must include the component's nested descriptor specializations as well.
+    // This must not retain ray generation or either unselected Miss implementation.
     ComPtr<slang::IBlob> providerCode;
     result = linked->getEntryPointCode(1, 0, providerCode.writeRef(), diagnostics.writeRef());
     if (SLANG_FAILED(result) && diagnostics)
@@ -183,6 +186,7 @@ SLANG_UNIT_TEST(metalPortableRayTracingRecordLayoutAndNestedDescriptors)
         static_cast<const char*>(providerCode->getBufferPointer()),
         providerCode->getBufferSize());
     SLANG_CHECK(providerText.indexOf(UnownedStringSlice("[[visible]]")) >= 0);
+    SLANG_CHECK(providerText.indexOf(UnownedStringSlice("MetalRTGlobalResources")) >= 0);
     SLANG_CHECK(providerText.indexOf(UnownedStringSlice("PortableRTDescriptorResources")) >= 0);
     SLANG_CHECK(providerText.indexOf(UnownedStringSlice("readBackground")) < 0);
     SLANG_CHECK(providerText.indexOf(UnownedStringSlice("[[kernel]]")) < 0);

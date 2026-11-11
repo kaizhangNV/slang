@@ -1396,18 +1396,9 @@ Result linkAndOptimizeIR(
         validateIRModuleIfEnabled(codeGenContext, irModule);
     }
 
-    {
-        List<IRGlobalParam*> globalParams;
-        bool preserveMetalResources =
-            requiredLoweringPassSet.portableRayTracing && isMetalTarget(targetRequest);
-        SLANG_PASS(
-            collectGlobalUniformParameters,
-            outLinkedIR.globalScopeVarLayout,
-            target,
-            preserveMetalResources ? &globalParams : nullptr);
-        if (preserveMetalResources)
-            SLANG_PASS(preserveMetalRTGlobalResources, globalParams);
-    }
+    SLANG_PASS(collectGlobalUniformParameters, outLinkedIR.globalScopeVarLayout, target);
+    if (requiredLoweringPassSet.portableRayTracing && isMetalTarget(targetRequest))
+        SLANG_PASS(preserveMetalRTGlobalResources, outLinkedIR.globalScopeVarLayout);
     validateIRModuleIfEnabled(codeGenContext, irModule);
 
     SLANG_PASS(checkEntryPointDecorations, target, sink);

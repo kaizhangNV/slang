@@ -905,7 +905,6 @@ return {
 	["Decoration.metalIntersectionFunction"] = 963,
 	["metalRTTraceDispatch"] = 964,
 	["metalRTCallDispatch"] = 965,
-	["Decoration.LayoutFieldTypeDecoration"] = 966,
 	["Decoration.ExplicitGlobalContextDecoration"] = 967,
 	["Attr.PortableRTSchemaName"] = 968,
 	["Decoration.PortableRTSchemaNameDecoration"] = 969,

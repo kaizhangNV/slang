@@ -201,23 +201,22 @@ SLANG_UNIT_TEST(metalPortableDescriptorGlobalLayoutOnlyKeys)
     auto descriptor = builder.createGlobalParam(descriptorType);
     builder.addLayoutDecoration(
         descriptor,
-        createBinding(builder, opaqueLayout, LayoutResourceKind::MetalBuffer, 3));
+        createBinding(builder, opaqueLayout, LayoutResourceKind::MetalBuffer, 3, 2));
     IRTypeLayout::Builder scalarBuilder(&builder);
     scalarBuilder.addResourceUsage(LayoutResourceKind::Uniform, LayoutSize(4));
     auto scalarLayout = scalarBuilder.build();
     auto scalar = builder.createGlobalParam(builder.getUIntType());
 
     // Element and offset-element layouts deliberately use different field-layout attributes.
-    // Both keys must be replaced by collection even though the resource is not a nominal field.
+    // The descriptor remains a standalone global, so neither wrapper layout owns its storage.
     IRStructTypeLayout::Builder elementBuilder(&builder);
     elementBuilder.addResourceUsage(LayoutResourceKind::Uniform, LayoutSize(4));
-    elementBuilder.addResourceUsage(LayoutResourceKind::MetalBuffer, LayoutSize(1));
     elementBuilder.addField(
         scalar,
         createBinding(builder, scalarLayout, LayoutResourceKind::Uniform, 0));
     elementBuilder.addField(
         descriptor,
-        createBinding(builder, opaqueLayout, LayoutResourceKind::MetalBuffer, 3));
+        createBinding(builder, opaqueLayout, LayoutResourceKind::MetalBuffer, 3, 2));
     auto element = elementBuilder.build();
     IRStructTypeLayout::Builder offsetBuilder(&builder);
     offsetBuilder.addResourceUsageFrom(element);
@@ -226,7 +225,7 @@ SLANG_UNIT_TEST(metalPortableDescriptorGlobalLayoutOnlyKeys)
         createBinding(builder, scalarLayout, LayoutResourceKind::Uniform, 0));
     offsetBuilder.addField(
         descriptor,
-        createBinding(builder, opaqueLayout, LayoutResourceKind::MetalBuffer, 9));
+        createBinding(builder, opaqueLayout, LayoutResourceKind::MetalBuffer, 9, 2));
     IRParameterGroupTypeLayout::Builder groupBuilder(&builder);
     groupBuilder.addResourceUsage(LayoutResourceKind::MetalBuffer, LayoutSize(1));
     groupBuilder.setContainerVarLayout(
@@ -244,47 +243,83 @@ SLANG_UNIT_TEST(metalPortableDescriptorGlobalLayoutOnlyKeys)
             if (as<IRUniformParameterGroupType>(parameter->getDataType()))
                 collected = parameter;
     SLANG_CHECK_ABORT(collected);
+    builder.addKeepAliveDecoration(collected);
+
+    // Keep a real descriptor use through DCE so explicit-global-context conversion must
+    // replace it, after the obsolete wrapper layout attributes have been removed.
+    builder.setInsertInto(module);
+    auto descriptorGetter = builder.createFunc();
+    descriptorGetter->setFullType(builder.getFuncType(0, nullptr, descriptorType));
+    builder.addKeepAliveDecoration(descriptorGetter);
+    builder.setInsertInto(descriptorGetter);
+    builder.emitBlock();
+    builder.emitReturn(descriptor);
     physicalizeMetalRTDescriptorResources(module, resources);
 
     auto layout = cast<IRVarLayout>(collected->findDecoration<IRLayoutDecoration>()->getLayout());
     auto group = cast<IRParameterGroupTypeLayout>(layout->getTypeLayout());
     auto fields = cast<IRStructTypeLayout>(group->getElementVarLayout()->getTypeLayout());
     auto offsetFields = cast<IRStructTypeLayout>(group->getOffsetElementTypeLayout());
-    auto key = fields->getFieldLayoutAttrs()[1]->getFieldKey();
-    SLANG_CHECK(as<IRStructKey>(key));
-    SLANG_CHECK(key == offsetFields->getFieldLayoutAttrs()[1]->getFieldKey());
-    auto typeDecoration = key->findDecoration<IRLayoutFieldTypeDecoration>();
-    SLANG_CHECK_ABORT(typeDecoration);
-    SLANG_CHECK(typeDecoration->getFieldType() == resources[0].physicalParameterBlockType);
-    checkDescriptorLayout(fields->getFieldLayout(1)->getTypeLayout(), resources[0]);
-    checkDescriptorLayout(offsetFields->getFieldLayout(1)->getTypeLayout(), resources[0]);
+    SLANG_CHECK_ABORT(fields->getFieldCount() == 1);
+    SLANG_CHECK_ABORT(offsetFields->getFieldCount() == 1);
+    auto key = as<IRStructKey>(fields->getFieldLayoutAttrs()[0]->getFieldKey());
+    SLANG_CHECK_ABORT(key);
+    auto collectedType = cast<IRStructType>(
+        cast<IRUniformParameterGroupType>(collected->getDataType())->getElementType());
+    SLANG_CHECK_ABORT(findStructField(collectedType, key));
+    SLANG_CHECK(key == offsetFields->getFieldLayoutAttrs()[0]->getFieldKey());
     SLANG_CHECK(
-        fields->getFieldLayout(1)->findOffsetAttr(LayoutResourceKind::MetalBuffer)->getOffset() ==
-        3);
+        fields->getFieldLayout(0)->findOffsetAttr(LayoutResourceKind::Uniform)->getOffset() == 0);
     SLANG_CHECK(
-        offsetFields->getFieldLayout(1)
-            ->findOffsetAttr(LayoutResourceKind::MetalBuffer)
-            ->getOffset() == 9);
+        offsetFields->getFieldLayout(0)->findOffsetAttr(LayoutResourceKind::Uniform)->getOffset() ==
+        0);
+    SLANG_CHECK(layout->findOffsetAttr(LayoutResourceKind::MetalBuffer)->getOffset() == 1);
+
+    auto descriptorLayout = findVarLayout(descriptor);
+    auto descriptorBinding = descriptorLayout->findOffsetAttr(LayoutResourceKind::MetalBuffer);
+    SLANG_CHECK_ABORT(descriptorBinding);
+    SLANG_CHECK(descriptorBinding->getOffset() == 3 && descriptorBinding->getSpace() == 2);
+    SLANG_CHECK(descriptor->getDataType() == resources[0].physicalParameterBlockType);
+    checkDescriptorLayout(descriptorLayout->getTypeLayout(), resources[0]);
+
+    eliminateDeadCode(module, IRDeadCodeEliminationOptions());
+    SLANG_CHECK_ABORT(descriptor->hasUses());
+    for (auto use = descriptor->firstUse; use; use = use->nextUse)
+        SLANG_CHECK(!as<IRStructFieldLayoutAttr>(use->getUser()));
+    DiagnosticSink sink;
+    introduceExplicitGlobalContext(module, CodeGenTarget::Metal, &sink);
+    SLANG_CHECK(sink.getErrorCount() == 0);
+    SLANG_CHECK(!descriptor->hasUses());
 }
 
 SLANG_UNIT_TEST(metalPortableCollectedGlobalResources)
 {
     StaticUnitTestEnv env(unitTestContext);
-    for (bool hasUniforms : {false, true})
+    for (int variant = 0; variant < 4; ++variant)
     {
+        bool hasUniforms = (variant & 1) != 0;
+        bool reverseDiscovery = (variant & 2) != 0;
         IRFixtureBuilder fixture(env.getSessionImpl());
         auto module = fixture.getModule();
         IRBuilder builder(module);
         builder.setInsertInto(module);
 
-        // Consider globals declared as bufferA, exposure, bufferB, gain. Linking one entry
-        // can discover bufferB before bufferA, and explicit bindings can alias. Collection
-        // must report bufferA, the uniform wrapper, bufferB in the component's layout order.
-        // The resource-only case also needs this order when collection creates no wrapper.
-        auto secondBuffer = builder.createGlobalParam(
-            builder.getPtrType(builder.getFloatType(), AddressSpace::Global));
-        auto firstBuffer = builder.createGlobalParam(
-            builder.getPtrType(builder.getUIntType(), AddressSpace::Global));
+        // Linking different entries can discover bufferA and bufferB in either order. Their
+        // bindings alias, but their linkage names still give both compilations the same order.
+        // An ordinary uniform adds a wrapper that must be preserved before both source globals.
+        IRType* bufferTypes[] = {
+            builder.getPtrType(builder.getUIntType(), AddressSpace::Global),
+            builder.getPtrType(builder.getFloatType(), AddressSpace::Global)};
+        IRGlobalParam* buffers[2];
+        for (UInt i = 0; i < 2; ++i)
+        {
+            UInt index = reverseDiscovery ? 1 - i : i;
+            buffers[index] = builder.createGlobalParam(bufferTypes[index]);
+        }
+        auto firstBuffer = buffers[0];
+        auto secondBuffer = buffers[1];
+        builder.addExportDecoration(firstBuffer, UnownedStringSlice("_S_bufferA"));
+        builder.addExportDecoration(secondBuffer, UnownedStringSlice("_S_bufferB"));
         IRTypeLayout::Builder bufferBuilder(&builder);
         bufferBuilder.addResourceUsage(LayoutResourceKind::MetalBuffer, LayoutSize(1));
         auto bufferLayout = bufferBuilder.build();
@@ -293,8 +328,36 @@ SLANG_UNIT_TEST(metalPortableCollectedGlobalResources)
         builder.addLayoutDecoration(firstBuffer, bufferBinding);
         builder.addLayoutDecoration(secondBuffer, bufferBinding);
 
+        // Coverage instrumentation can create a laid-out global in only one compilation.
+        // It has no source linkage and must not change the shared resource structure.
+        IRGlobalParam* coverageBuffer = nullptr;
+        if (reverseDiscovery)
+        {
+            coverageBuffer = builder.createGlobalParam(bufferTypes[0]);
+            builder.addNameHintDecoration(coverageBuffer, UnownedStringSlice("coverageBuffer"));
+            builder.addLayoutDecoration(
+                coverageBuffer,
+                createBinding(builder, bufferLayout, LayoutResourceKind::MetalBuffer, 9));
+        }
+
+        // A specialization constant has source linkage and layout, but is not a runtime resource.
+        auto specialization = builder.createGlobalParam(builder.getUIntType());
+        builder.addExportDecoration(specialization, UnownedStringSlice("_S_A_specialization"));
+        IRTypeLayout::Builder specializationBuilder(&builder);
+        specializationBuilder.addResourceUsage(
+            LayoutResourceKind::SpecializationConstant,
+            LayoutSize(1));
+        auto specializationBinding = createBinding(
+            builder,
+            specializationBuilder.build(),
+            LayoutResourceKind::SpecializationConstant,
+            4);
+        builder.addLayoutDecoration(specialization, specializationBinding);
+
         IRStructTypeLayout::Builder fieldsBuilder(&builder);
         fieldsBuilder.addResourceUsage(LayoutResourceKind::MetalBuffer, LayoutSize(2));
+        fieldsBuilder.addResourceUsage(LayoutResourceKind::SpecializationConstant, LayoutSize(1));
+        fieldsBuilder.addField(specialization, specializationBinding);
         fieldsBuilder.addField(firstBuffer, bufferBinding);
         IRGlobalParam* secondUniform = nullptr;
         IRTypeLayout* scalarLayout = nullptr;
@@ -335,17 +398,32 @@ SLANG_UNIT_TEST(metalPortableCollectedGlobalResources)
             globalLayout = layoutBuilder.build();
         }
 
+        collectGlobalUniformParameters(module, globalLayout, CodeGenTarget::Metal);
         List<IRGlobalParam*> globalParams;
-        collectGlobalUniformParameters(module, globalLayout, CodeGenTarget::Metal, &globalParams);
-        SLANG_CHECK_ABORT(globalParams.getCount() == (hasUniforms ? 3 : 2));
-        SLANG_CHECK(globalParams[0] == firstBuffer);
-        SLANG_CHECK(globalParams.getLast() == secondBuffer);
         if (hasUniforms)
-            SLANG_CHECK(as<IRUniformParameterGroupType>(globalParams[1]->getDataType()));
+        {
+            for (auto inst : module->getGlobalInsts())
+                if (auto parameter = as<IRGlobalParam>(inst))
+                    if (findVarLayout(parameter) == globalLayout)
+                        globalParams.add(parameter);
+            SLANG_CHECK_ABORT(globalParams.getCount() == 1);
+            SLANG_CHECK(as<IRUniformParameterGroupType>(globalParams[0]->getDataType()));
+        }
+        globalParams.add(firstBuffer);
+        globalParams.add(secondBuffer);
 
-        // No shader body reads these globals yet. Preserving the reported parameters must
-        // keep both standalone resources and the new wrapper through ordinary parameter DCE.
-        preserveMetalRTGlobalResources(module, globalParams);
+        // No shader body reads these globals yet. Preservation must keep the source resources
+        // and wrapper through DCE, while excluding generated buffers and specialization constants.
+        preserveMetalRTGlobalResources(module, globalLayout);
+        for (Index i = 0; i < globalParams.getCount(); ++i)
+        {
+            auto decoration = globalParams[i]->findDecoration<IRMetalRTGlobalResourceDecoration>();
+            SLANG_CHECK_ABORT(decoration);
+            SLANG_CHECK(getIntVal(decoration->getOperand(0)) == i);
+        }
+        SLANG_CHECK(!specialization->findDecoration<IRMetalRTGlobalResourceDecoration>());
+        if (coverageBuffer)
+            SLANG_CHECK(!coverageBuffer->findDecoration<IRMetalRTGlobalResourceDecoration>());
         IRDeadCodeEliminationOptions dceOptions;
         dceOptions.keepGlobalParamsAlive = false;
         eliminateDeadCode(module, dceOptions);

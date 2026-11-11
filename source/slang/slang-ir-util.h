@@ -620,10 +620,6 @@ IRBlock* getBlock(IRInst* inst);
 
 IRVarLayout* findVarLayout(IRInst* value);
 
-/// Returns the global parameter used as a layout field key, including an existential wrapper.
-/// Returns null for other keys, such as a lowered varying's load or an ordinary struct key.
-IRGlobalParam* getGlobalParamFromLayoutFieldKey(IRInst* key);
-
 UnownedStringSlice getBuiltinFuncName(IRInst* callee);
 KnownBuiltinDeclName getBuiltinFuncEnum(IRInst* callee);
 

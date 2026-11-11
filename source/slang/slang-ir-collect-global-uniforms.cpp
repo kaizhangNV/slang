@@ -2,7 +2,6 @@
 #include "slang-ir-collect-global-uniforms.h"
 
 #include "slang-ir-insts.h"
-#include "slang-ir-util.h"
 
 namespace Slang
 {
@@ -51,48 +50,19 @@ struct CollectGlobalUniformParametersContext
     IRModule* module;
     IRVarLayout* globalScopeVarLayout;
     CodeGenTarget target = CodeGenTarget::Unknown;
-    List<IRGlobalParam*>* outGlobalParams = nullptr;
 
-    // Records the globals that remain after collection, before the layout keys are rewritten.
-    // Consider exposure, values, and gain in layout order, where exposure and gain are uniforms.
-    // The resulting list is globalParams, values: both uniforms share one wrapper. Use the
-    // original layout order even if the target needs a different order for the wrapper's fields.
-    void collectResultingGlobalParams(IRStructTypeLayout* layout, IRGlobalParam* wrapper)
+    IRGlobalParam* _getGlobalParamFromLayoutFieldKey(IRInst* key)
     {
-        if (!outGlobalParams)
-            return;
-        bool addedWrapper = false;
-        for (auto field : layout->getFieldLayoutAttrs())
+        switch (key->getOp())
         {
-            auto parameter = getGlobalParamFromLayoutFieldKey(field->getFieldKey());
-            if (!parameter)
-                continue;
-            if (wrapper &&
-                field->getLayout()->getTypeLayout()->findSizeAttr(LayoutResourceKind::Uniform))
-            {
-                if (!addedWrapper)
-                {
-                    outGlobalParams->add(wrapper);
-                    addedWrapper = true;
-                }
-            }
-            else
-                outGlobalParams->add(parameter);
+        case kIROp_GlobalParam:
+            return cast<IRGlobalParam>(key);
+        case kIROp_MakeExistential:
+        case kIROp_WrapExistential:
+            return as<IRGlobalParam>(key->getOperand(0));
+        default:
+            return nullptr;
         }
-    }
-
-    // Preserves the checked value type before a layout's global key becomes an untyped key.
-    // A global parameter already has its value type; a lowered varying can instead be a load
-    // of that value or the backing global variable, whose pointer must be unwrapped once.
-    IRType* getGlobalLayoutFieldValueType(IRBuilder* builder, IRInst* key)
-    {
-        if (auto globalParam = getGlobalParamFromLayoutFieldKey(key))
-            return globalParam->getFullType();
-        auto type = key->getDataType();
-        SLANG_RELEASE_ASSERT(type);
-        if (auto valueType = tryGetPointedToType(builder, type))
-            return valueType;
-        return type;
     }
 
     // This is a relatively simple pass, and it is all driven
@@ -133,12 +103,6 @@ struct CollectGlobalUniformParametersContext
                 globalParameterGroupTypeLayout->getElementVarLayout()->getTypeLayout();
         }
 
-        // We expect that the layout for the global-scope parameters is always
-        // computed for a `struct` type.
-        //
-        auto globalParamsStructTypeLayout = as<IRStructTypeLayout>(globalParamsTypeLayout);
-        SLANG_ASSERT(globalParamsStructTypeLayout);
-
         // As a special case (in order to avoid disruption to any downstream passes),
         // if the layout for the global-scope parameters doesn't include any "ordinary"
         // data (represented as `LayoutResourceKind::Uniform`), then we will not do
@@ -155,10 +119,13 @@ struct CollectGlobalUniformParametersContext
         //
         if (!globalParameterGroupTypeLayout &&
             !globalParamsTypeLayout->findSizeAttr(LayoutResourceKind::Uniform))
-        {
-            collectResultingGlobalParams(globalParamsStructTypeLayout, nullptr);
             return;
-        }
+
+        // We expect that the layout for the global-scope parameters is always
+        // computed for a `struct` type.
+        //
+        auto globalParamsStructTypeLayout = as<IRStructTypeLayout>(globalParamsTypeLayout);
+        SLANG_ASSERT(globalParamsStructTypeLayout);
 
         // We need to construct a single IR parameter that will represent
         // the collected global-scope parameters. The `IRBuilder` we construct
@@ -211,7 +178,6 @@ struct CollectGlobalUniformParametersContext
         IRGlobalParam* wrapperParam = builder->createGlobalParam(wrapperParamType);
         builder->addLayoutDecoration(wrapperParam, globalScopeVarLayout);
         builder->addNameHintDecoration(wrapperParam, UnownedTerminatedStringSlice("globalParams"));
-        collectResultingGlobalParams(globalParamsStructTypeLayout, wrapperParam);
 
         // With the setup work out of the way, we can iterate over the global
         // parameters that were present in the layout information (they are
@@ -232,7 +198,8 @@ struct CollectGlobalUniformParametersContext
 
             for (auto fieldLayoutAttr : fieldAttrs)
             {
-                auto globalParam = getGlobalParamFromLayoutFieldKey(fieldLayoutAttr->getFieldKey());
+                auto globalParam =
+                    _getGlobalParamFromLayoutFieldKey(fieldLayoutAttr->getFieldKey());
                 if (globalParam && as<IRUnsizedArrayType>(globalParam->getDataType()))
                 {
                     unsizedArrayFields.add(fieldLayoutAttr);
@@ -262,10 +229,8 @@ struct CollectGlobalUniformParametersContext
             // layout so that the "key" for the field is the corresponding
             // global shader parameter.
 
-            // Save the original key while it still carries its checked type. Layout-only
-            // resources have no nominal GlobalParams field from which to recover that type.
-            auto originalFieldKey = fieldLayoutAttr->getFieldKey();
-            auto globalParam = getGlobalParamFromLayoutFieldKey(originalFieldKey);
+            // Save the original global param before replacement.
+            auto globalParam = _getGlobalParamFromLayoutFieldKey(fieldLayoutAttr->getFieldKey());
 
             auto globalParamLayout = fieldLayoutAttr->getLayout();
 
@@ -297,27 +262,7 @@ struct CollectGlobalUniformParametersContext
             // passes can handle that case, since they would need to do so in general.
             //
             if (!globalParamLayout->getTypeLayout()->findSizeAttr(LayoutResourceKind::Uniform))
-            {
-                builder->addDecoration(
-                    fieldKey,
-                    kIROp_LayoutFieldTypeDecoration,
-                    getGlobalLayoutFieldValueType(builder, originalFieldKey));
-
-                // The element and offset-element layouts can use distinct field-layout attrs.
-                // Replace both here, while the original symbol and its checked type are known.
-                // Leaving one live global key would make later metadata rewrites appear to be
-                // executable global references during explicit-global-context legalization.
-                List<IRStructFieldLayoutAttr*> pairedFieldLayouts;
-                for (auto use = originalFieldKey->firstUse; use; use = use->nextUse)
-                {
-                    if (auto field = as<IRStructFieldLayoutAttr>(use->getUser()))
-                        if (field->getFieldKey() == originalFieldKey)
-                            pairedFieldLayouts.add(field);
-                }
-                for (auto field : pairedFieldLayouts)
-                    builder->replaceOperand(field->getOperands(), fieldKey);
                 continue;
-            }
 
             SLANG_ASSERT(globalParam);
 
@@ -446,16 +391,12 @@ struct CollectGlobalUniformParametersContext
 void collectGlobalUniformParameters(
     IRModule* module,
     IRVarLayout* globalScopeVarLayout,
-    CodeGenTarget target,
-    List<IRGlobalParam*>* outGlobalParams)
+    CodeGenTarget target)
 {
-    if (outGlobalParams)
-        outGlobalParams->clear();
     CollectGlobalUniformParametersContext context;
     context.module = module;
     context.globalScopeVarLayout = globalScopeVarLayout;
     context.target = target;
-    context.outGlobalParams = outGlobalParams;
 
     context.processModule();
 }
