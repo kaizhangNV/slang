@@ -650,8 +650,20 @@ void lowerMetalPortableRayTracing(
 {
     List<IRMetalTraceRay*> traces;
     List<IRMetalRTCallShader*> calls;
+    // Collect portable trace instructions into traces and callable-dispatch instructions into
+    // calls throughout the specialized module, including inside helper functions. These lists
+    // identify the operations to lower; they do not yet say which entry points reach them.
     collectDispatches(module->getModuleInst(), traces, calls);
+
+    // Map each referenced function or global (IRInst*) to the entry-point functions (IRFunc*)
+    // that reference it, directly or through other functions. Consider RayGenerationA and
+    // RayGenerationB both calling traceHelper, which contains a trace. The map then contains:
+    //     referencingEntries[traceHelper] = {RayGenerationA, RayGenerationB};
+    // A helper shared by several entries therefore has one key and several values in its set.
     Dictionary<IRInst*, HashSet<IRFunc*>> referencingEntries;
+    // Follow calls and global references from the module's entry points to populate the map.
+    // The loops below look up each dispatch's enclosing function to find all affected entries,
+    // including entries whose trace or callable dispatch is inside a helper.
     buildEntryPointReferenceGraph(referencingEntries, module);
     HashSet<IRFunc*> physicalRayGenerationEntries;
     for (auto trace : traces)
