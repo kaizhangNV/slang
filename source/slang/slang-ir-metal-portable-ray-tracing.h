@@ -17,8 +17,8 @@ void lowerMetalPortableRayTracing(
     DiagnosticSink* sink,
     bool& requiresResultTypeLowering);
 
-/// Diagnoses executable logical operations left without an invocation ABI. Run after DCE, so
-/// ordinary library helpers remain valid until selected roots and reachability are known.
+/// Diagnoses executable logical operations left without an invocation ABI. Run after stage
+/// lowering and DCE, but before type legalization removes their empty logical input operands.
 void diagnoseUnboundMetalPortableRayTracing(IRModule* module, DiagnosticSink* sink);
 
 } // namespace Slang

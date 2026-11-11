@@ -1658,6 +1658,16 @@ Result linkAndOptimizeIR(
         SLANG_PASS(lowerMatrixSwizzleStores);
     SLANG_PASS(eliminateDeadCode, deadCodeEliminationOptions);
 
+    // A retained library helper may still have logical invocation getters with no selected
+    // Metal stage to supply their values. Diagnose after DCE removes unused helpers, but before
+    // type legalization removes the empty logical input that these getters still reference.
+    if (isMetalTarget(targetRequest))
+    {
+        SLANG_PASS(diagnoseUnboundMetalPortableRayTracing, sink);
+        if (sink->getErrorCount() != 0)
+            return SLANG_FAIL;
+    }
+
     SLANG_PASS(finalizeSpecialization);
 
     // Lower DiffTypeInfo instructions to MakeTuple.
@@ -3005,14 +3015,6 @@ Result linkAndOptimizeIR(
             if (!targetProgram->getOrCreateLayout(sink))
                 return SLANG_FAIL;
         }
-    }
-    // Library exports may retain invocation getters without selecting a native stage/schema.
-    // Diagnose that target ABI boundary after DCE rather than restricting ordinary source calls.
-    if (isMetalTarget(targetRequest))
-    {
-        SLANG_PASS(diagnoseUnboundMetalPortableRayTracing, sink);
-        if (sink->getErrorCount() != 0)
-            return SLANG_FAIL;
     }
     SLANG_PASS(collectMetadata, targetProgram, *metadata);
 
