@@ -481,6 +481,9 @@ void lowerPortableRayTracingEntryPoints(
         return;
 
     List<NativeStage> stages;
+    // Replace each selected logical stage entry with a native wrapper, keeping its invoke
+    // callable by ordinary helpers. Save its input types and reflected Record layout so the
+    // following steps can build the wrapper's parameters and record resource.
     for (auto& entryPoint : entryPoints)
     {
         auto input = PortableRT::getEntryPointInputInfo(entryPoint);
@@ -505,15 +508,24 @@ void lowerPortableRayTracingEntryPoints(
         stages.add({entryPoint, input, recordLayout});
     }
 
+    // Remove any remaining entry markers and denormal modes from logical implementations.
+    // Selected stages now have wrappers; implementations reached only through calls are helpers.
     PortableRT::demoteStageImplementations(module);
 
     List<IRInst*> operations;
+    // A logical input such as MissInput<C> has no fields to load. Accesses such as input.record
+    // therefore remain portable operations (PortableRTGetRecord) whose implementation depends
+    // on the target. Collect them before replacing them with native parameters or record loads.
+    // These operations can occur in ordinary helpers as well as selected stage implementations.
     collectInputOperations(module->getModuleInst(), operations);
     lowerPayloads(module, stages, operations, false);
     lowerPayloads(module, stages, operations, true);
     lowerAttributes(module, stages, operations);
     lowerRecords(module, target, stages, operations);
 
+    // Rebuild each wrapper's parameter layout now that payload and attribute parameters exist.
+    // createAdapter started with an empty parameter layout. Reuse the layouts attached to the
+    // generated parameters and preserve the existing result layout.
     for (auto stage : stages)
     {
         IRBuilder builder(module);
