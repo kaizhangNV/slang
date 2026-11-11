@@ -1,6 +1,10 @@
 //TEST:SIMPLE(filecheck=HLSL): -experimental-feature -entry RayGeneration -stage raygeneration -target hlsl
 //TEST:SIMPLE(filecheck=SPIRV): -experimental-feature -entry RayGeneration -stage raygeneration -target spirv-assembly -emit-spirv-directly
+//TEST:SIMPLE(filecheck=METAL): -experimental-feature -target metal -entry WrongHit -stage closesthit -entry FirstHit -stage closesthit -entry SecondHit -stage closesthit -entry WrongMiss -stage miss -entry SelectedMiss -stage miss -entry WrongCallable -stage callable -entry SelectedCallable -stage callable -profile metallib_2_4 -validate-ir
+//DIAGNOSTIC_TEST:SIMPLE(filecheck=METAL_RAYGEN): -experimental-feature -entry RayGeneration -stage raygeneration -target metal -profile metallib_2_4
 
+// Metal stage code generation is checked below; full raygen compilation diagnoses the missing
+// portable launch-index query because legacy DispatchRaysIndex() does not support Metal.
 import slang.raytracing.portable;
 
 struct TraceContext : rt::ITraceContext
@@ -151,3 +155,14 @@ void RayGeneration()
 // HLSL-DAG: CallShader(1U,
 // SPIRV-DAG: OpTraceRayKHR
 // SPIRV-DAG: OpExecuteCallableKHR
+
+// METAL-DAG: visible]] void WrongHit_closesthit(
+// METAL-DAG: visible]] void FirstHit_closesthit(
+// METAL-DAG: visible]] void SecondHit_closesthit(
+// METAL-DAG: visible]] void WrongMiss_miss(
+// METAL-DAG: visible]] void SelectedMiss_miss(
+// METAL-DAG: visible]] void WrongCallable_callable(
+// METAL-DAG: visible]] void SelectedCallable_callable(
+
+// METAL_RAYGEN: error[E36107]: unavailable features in entry point
+// METAL_RAYGEN: note: see using of 'DispatchRaysIndex'

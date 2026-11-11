@@ -1,5 +1,6 @@
 //TEST:SIMPLE(filecheck=HLSL): -experimental-feature -entry nativeMiss -stage miss -entry PortableMiss -stage miss -target hlsl
 //TEST:SIMPLE(filecheck=SPIRV): -experimental-feature -entry nativeMiss -stage miss -entry PortableMiss -stage miss -target spirv-assembly -emit-spirv-directly
+//DIAGNOSTIC_TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry nativeMiss -stage miss -entry PortableMiss -stage miss -target metal -profile metallib_2_4 -validate-ir
 
 import slang.raytracing.portable;
 
@@ -47,3 +48,7 @@ struct PortableMiss : rt::IMissShader
 // HLSL-DAG: void nativeMiss(inout {{.*}})
 // HLSL-DAG: void PortableMiss_miss(inout {{.*}} : SV_RayPayload)
 // SPIRV-COUNT-2: OpEntryPoint MissKHR
+
+// Metal supports the portable visible adapter, but cannot compile the raw native miss ABI.
+// METAL: error[E39032]: target does not support ray tracing entry point parameters
+// METAL: void nativeMiss(inout Payload payload)

@@ -1,6 +1,10 @@
 //TEST:SIMPLE(filecheck=HLSL): -experimental-feature -entry RayGeneration -stage raygeneration -entry TriangleClosestHit -stage closesthit -entry BackgroundMiss -stage miss -target hlsl
 //TEST:SIMPLE(filecheck=SPIRV): -experimental-feature -entry RayGeneration -stage raygeneration -entry TriangleClosestHit -stage closesthit -entry BackgroundMiss -stage miss -target spirv-assembly -emit-spirv-directly
+//TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry TriangleClosestHit -stage closesthit -entry BackgroundMiss -stage miss -target metal -profile metallib_2_4 -validate-ir
+//DIAGNOSTIC_TEST:SIMPLE(filecheck=METAL_RAYGEN): -experimental-feature -entry RayGeneration -stage raygeneration -entry TriangleClosestHit -stage closesthit -entry BackgroundMiss -stage miss -target metal -profile metallib_2_4
 
+// Metal stage code generation is checked below; full raygen compilation diagnoses the missing
+// portable launch-index query because legacy DispatchRaysIndex() does not support Metal.
 import slang.raytracing.portable;
 
 struct TraceContext : rt::ITraceContext
@@ -96,3 +100,11 @@ void RayGeneration()
 // SPIRV-DAG: OpEntryPoint MissKHR
 // SPIRV-DAG: OpVariable {{.*}} HitAttributeKHR
 // SPIRV-DAG: OpTraceRayKHR
+
+// METAL: visible]] void TriangleClosestHit_closesthit(
+// METAL: TriangleClosestHit_invoke_{{[0-9]+}}((float4 thread*)((ulong)(payload_{{[0-9]+}})), barycentricCoord_{{[0-9]+}}, distance_
+// METAL: visible]] void BackgroundMiss_miss(
+// METAL: BackgroundMiss_invoke_{{[0-9]+}}((float4 thread*)((ulong)(payload_
+
+// METAL_RAYGEN: error[E36107]: unavailable features in entry point
+// METAL_RAYGEN: note: see using of 'DispatchRaysIndex'

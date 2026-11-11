@@ -1,5 +1,7 @@
 //TEST:SIMPLE(filecheck=HLSL): -experimental-feature -entry FirstMiss -stage miss -entry SharedMiss -stage miss -entry OtherMiss -stage miss -entry UnusedMiss -stage miss -entry Callable -stage callable -target hlsl -whole-program -validate-ir
 //TEST:SIMPLE(filecheck=IR): -experimental-feature -entry FirstMiss -stage miss -entry SharedMiss -stage miss -entry OtherMiss -stage miss -entry UnusedMiss -stage miss -entry Callable -stage callable -target hlsl -whole-program -validate-ir -dump-ir-after lowerPortableRayTracingEntryPoints
+//TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry FirstMiss -stage miss -entry SharedMiss -stage miss -entry OtherMiss -stage miss -entry UnusedMiss -stage miss -entry Callable -stage callable -entry LibraryMiss -stage miss -entry LibraryCallable -stage callable -target metal -profile metallib_2_4 -whole-program -validate-ir
+//DIAGNOSTIC_TEST:SIMPLE(filecheck=UNBOUND): -experimental-feature -entry FirstMiss -stage miss -entry SharedMiss -stage miss -entry OtherMiss -stage miss -entry UnusedMiss -stage miss -entry Callable -stage callable -target metal -profile metallib_2_4 -whole-program -validate-ir
 
 import slang.raytracing.portable;
 
@@ -79,7 +81,8 @@ struct Callable : rt::ICallableShader
     }
 }
 
-// These getters are the only uses of LibraryPayload: no selected stage names that type.
+// The native runs leave LibraryMiss and LibraryCallable unselected. Their exported helpers
+// test getter-only type discovery: no selected native stage names LibraryPayload.
 export void updateLibraryPayload(in rt::MissInput<MissContext<LibraryPayload>> input)
 {
     input.payload.libraryValue += 23;
@@ -88,6 +91,20 @@ export void updateLibraryPayload(in rt::MissInput<MissContext<LibraryPayload>> i
 export void updateLibraryData(in rt::CallableInput<CallableContext<LibraryPayload>> input)
 {
     input.data.libraryValue += 29;
+}
+
+// Metal needs a selected stage to supply invocation state to each exported helper. The
+// successful Metal run selects these stages; the diagnostic run leaves them unselected.
+struct LibraryMiss : rt::IMissShader
+{
+    typealias Context = MissContext<LibraryPayload>;
+    static void invoke(in rt::MissInput<Context> input) { updateLibraryPayload(input); }
+}
+
+struct LibraryCallable : rt::ICallableShader
+{
+    typealias Context = CallableContext<LibraryPayload>;
+    static void invoke(in rt::CallableInput<Context> input) { updateLibraryData(input); }
 }
 
 // HLSL: void [[SHARED:SharedMiss_invoke[a-zA-Z0-9_]*]](inout [[SHARED_TYPE:SharedPayload[a-zA-Z0-9_]*]] [[SHARED_PARAM:[a-zA-Z0-9_]+]])
@@ -114,3 +131,43 @@ export void updateLibraryData(in rt::CallableInput<CallableContext<LibraryPayloa
 // IR-NOT: portableRTGetPayload
 // IR-NOT: portableRTGetCallableData
 // IR: ###
+
+// Metal threads the selected entries' concrete payload/data pointers through ordinary calls.
+// METAL: void [[SHARED:SharedMiss_invoke_[0-9]+]]([[SHARED_TYPE:SharedPayload_[0-9]+]] thread* [[SP:[A-Za-z0-9_]+]])
+// METAL: [[SP]]->{{sharedValue_[0-9]+}} = [[SP]]->{{sharedValue_[0-9]+}} + 5U;
+// METAL: void [[FIRST:FirstMiss_invoke_[0-9]+]]([[SHARED_TYPE]] thread* [[FP:[A-Za-z0-9_]+]])
+// METAL: [[FP]]->{{sharedValue_[0-9]+}} = [[FP]]->{{sharedValue_[0-9]+}} + 2U;
+// METAL: [[SHARED]]([[FP]]);
+// METAL: void [[OTHER:OtherMiss_invoke_[0-9]+]]([[OTHER_TYPE:OtherPayload_[0-9]+]] thread* [[OP:[A-Za-z0-9_]+]])
+// METAL: [[OP]]->{{otherValue_[0-9]+}} = [[OP]]->{{otherValue_[0-9]+}} + 3.0f;
+// METAL: void [[CALLABLE:Callable_invoke_[0-9]+]]([[SHARED_TYPE]] thread* [[CP:[A-Za-z0-9_]+]])
+// METAL: [[CP]]->{{sharedValue_[0-9]+}} = [[CP]]->{{sharedValue_[0-9]+}} + 11U;
+// METAL: void [[LIB_PAYLOAD:updateLibraryPayload_[0-9]+]]([[LIB_TYPE:LibraryPayload_[0-9]+]] thread* [[LP:[A-Za-z0-9_]+]])
+// METAL: [[LP]]->{{libraryValue_[0-9]+}} = [[LP]]->{{libraryValue_[0-9]+}} + 23U;
+// METAL: void [[LIB_MISS:LibraryMiss_invoke_[0-9]+]]([[LIB_TYPE]] thread* [[LMP:[A-Za-z0-9_]+]])
+// METAL: [[LIB_PAYLOAD]]([[LMP]]);
+// METAL: void [[LIB_DATA:updateLibraryData_[0-9]+]]([[LIB_TYPE]] thread* [[LD:[A-Za-z0-9_]+]])
+// METAL: [[LD]]->{{libraryValue_[0-9]+}} = [[LD]]->{{libraryValue_[0-9]+}} + 29U;
+// METAL: void [[LIB_CALLABLE:LibraryCallable_invoke_[0-9]+]]([[LIB_TYPE]] thread* [[LCD:[A-Za-z0-9_]+]])
+// METAL: [[LIB_DATA]]([[LCD]]);
+// METAL: visible]] void FirstMiss_miss(void thread* [[FEP:payload_[0-9]+]],
+// METAL: [[FIRST]](([[SHARED_TYPE]] thread*)((ulong)([[FEP]])));
+// METAL: visible]] void SharedMiss_miss(void thread* [[SEP:payload_[0-9]+]],
+// METAL: [[SHARED]](([[SHARED_TYPE]] thread*)((ulong)([[SEP]])));
+// METAL: visible]] void OtherMiss_miss(void thread* [[OEP:payload_[0-9]+]],
+// METAL: [[OTHER]](([[OTHER_TYPE]] thread*)((ulong)([[OEP]])));
+// METAL: visible]] void UnusedMiss_miss(void thread* payload_
+// METAL: visible]] void Callable_callable(void thread* [[CD:data_[0-9]+]],
+// METAL: [[CALLABLE]](([[SHARED_TYPE]] thread*)((ulong)([[CD]])));
+// METAL: visible]] void LibraryMiss_miss(void thread* [[LMEP:payload_[0-9]+]],
+// METAL: [[LIB_MISS]](([[LIB_TYPE]] thread*)((ulong)([[LMEP]])));
+// METAL: visible]] void LibraryCallable_callable(void thread* [[LCED:data_[0-9]+]],
+// METAL: [[LIB_CALLABLE]](([[LIB_TYPE]] thread*)((ulong)([[LCED]])));
+
+// Retaining an exported helper alone does not provide a Metal invocation ABI.
+// UNBOUND-NOT: error[E99997]
+// UNBOUND: error[E38111]: Metal ray-tracing operation has no stage invocation ABI
+// UNBOUND: operation 'portableRTGetPayload' in an exported helper has no invocation state provider
+// UNBOUND: error[E38111]: Metal ray-tracing operation has no stage invocation ABI
+// UNBOUND: operation 'portableRTGetCallableData' in an exported helper has no invocation state provider
+// UNBOUND-NOT: error[E99997]

@@ -1,5 +1,6 @@
 //TEST:SIMPLE(filecheck=HLSL): -experimental-feature -entry main -target hlsl
 //TEST:SIMPLE(filecheck=SPIRV): -experimental-feature -entry main -target spirv-assembly -emit-spirv-directly
+//TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry main -target metal -profile metallib_2_4 -validate-ir
 
 import slang.raytracing.portable;
 
@@ -47,3 +48,19 @@ void main()
 // HLSL: void main()
 // SPIRV: OpEntryPoint RayGenerationKHR
 // SPIRV: OpMemberDecorate {{.*}} 0 Offset 0
+
+// Metal materializes the descriptor as a separate resource binding. The ordinary scale
+// field still crosses the helper boundary in the constant-buffer portion of Parameters.
+// METAL: struct [[PARAMS:Parameters_[0-9]+]]
+// METAL-NEXT: {
+// METAL-NEXT: float [[SCALE:scale_[0-9]+]];
+// METAL-NEXT: };
+// METAL: struct [[RESOURCES:PortableRTDescriptorResources_[A-Za-z0-9_]+]]
+// METAL: intersection_function_table
+// METAL: visible_function_table
+// METAL: float [[READ:readScale_[0-9]+]](const [[PARAMS]] constant* [[VALUE:[A-Za-z0-9_]+]])
+// METAL: return [[VALUE]]->[[SCALE]];
+// METAL: kernel]] void main_{{[0-9]+}}(
+// METAL-SAME: [[PARAMS]] constant* [[BOUND_PARAMS:parameters_[0-9]+]]
+// METAL-SAME: [[RESOURCES]] constant* parameters_program_
+// METAL: [[READ]]([[BOUND_PARAMS]]);

@@ -1,7 +1,11 @@
 //TEST:SIMPLE(filecheck=HLSL): -experimental-feature -entry RayGeneration -stage raygeneration -entry RecursiveClosestHit -stage closesthit -entry SecondaryMiss -stage miss -target hlsl
 //TEST:SIMPLE(filecheck=SPIRV): -experimental-feature -entry RayGeneration -stage raygeneration -entry RecursiveClosestHit -stage closesthit -entry SecondaryMiss -stage miss -target spirv-assembly -emit-spirv-directly -validate-ir
 //TEST:SIMPLE(filecheck=DXIL): -experimental-feature -entry RecursiveClosestHit -stage closesthit -target dxil -profile sm_6_6 -validate-ir
+//TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry RecursiveClosestHit -stage closesthit -entry SecondaryMiss -stage miss -target metal -profile metallib_2_4 -validate-ir
+//DIAGNOSTIC_TEST:SIMPLE(filecheck=METAL_RAYGEN): -experimental-feature -entry RayGeneration -stage raygeneration -entry RecursiveClosestHit -stage closesthit -entry SecondaryMiss -stage miss -target metal -profile metallib_2_4
 
+// Metal stage code generation is checked below; full raygen compilation diagnoses the missing
+// portable launch-index query because legacy DispatchRaysIndex() does not support Metal.
 import slang.raytracing.portable;
 
 #ifndef TEST_NOINLINE_TRACE
@@ -125,3 +129,13 @@ void RayGeneration()
 // DXIL-DAG: Function Attrs: noinline
 // DXIL-DAG: traceSecondary
 // DXIL-DAG: @dx.op.traceRay
+
+// METAL-DAG: metal::raytracing::intersector<
+// METAL-DAG: [_slang_miss_function_index]({{.*}}invocationValue_{{[0-9]+}}, invocationValue_
+// METAL-DAG: visible]] void RecursiveClosestHit_closesthit(
+// METAL-DAG: RecursiveClosestHit_invoke_{{[0-9]+}}((float4 thread*)((ulong)(payload_{{[0-9]+}})), dispatchRaysIndex_{{[0-9]+}}, dispatchRaysDimensions_
+// METAL-DAG: visible]] void SecondaryMiss_miss(
+// METAL-DAG: SecondaryMiss_invoke_{{[0-9]+}}(dispatchRaysIndex_{{[0-9]+}}, dispatchRaysDimensions_{{[0-9]+}}, (uint thread*)((ulong)(payload_
+
+// METAL_RAYGEN: error[E36107]: unavailable features in entry point
+// METAL_RAYGEN: note: see using of 'DispatchRaysIndex'

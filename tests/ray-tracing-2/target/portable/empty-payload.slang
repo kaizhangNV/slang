@@ -1,5 +1,6 @@
 //TEST:SIMPLE(filecheck=HLSL): -experimental-feature -entry EmptyPayloadMiss -stage miss -target hlsl
 //TEST:SIMPLE(filecheck=SPIRV): -experimental-feature -entry EmptyPayloadMiss -stage miss -target spirv-assembly -emit-spirv-directly
+//TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry EmptyPayloadMiss -stage miss -target metal -profile metallib_2_4 -validate-ir
 
 import slang.raytracing.portable;
 
@@ -28,3 +29,8 @@ struct EmptyPayloadMiss : rt::IMissShader
 
 // HLSL: [shader("miss")]void EmptyPayloadMiss_miss(inout {{.*}} : SV_RayPayload)
 // SPIRV: OpEntryPoint MissKHR
+
+// Metal keeps its fixed visible-function ABI even when the payload type is empty.
+// METAL: visible]] void EmptyPayloadMiss_miss(void thread* payload_
+// METAL-NOT: EmptyPayload_
+// METAL: return;

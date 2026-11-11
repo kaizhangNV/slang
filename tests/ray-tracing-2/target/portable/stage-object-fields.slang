@@ -1,5 +1,6 @@
 //TEST:SIMPLE(filecheck=HLSL): -experimental-feature -entry StatefulMiss -stage miss -target hlsl
 //TEST:SIMPLE(filecheck=SPIRV): -experimental-feature -entry StatefulMiss -stage miss -target spirv-assembly -emit-spirv-directly
+//TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry StatefulMiss -stage miss -target metal -profile metallib_2_4 -validate-ir
 
 import slang.raytracing.portable;
 
@@ -38,3 +39,14 @@ struct StatefulMiss : rt::IMissShader
 // HLSL-NOT: ordinaryVector
 // SPIRV: OpEntryPoint MissKHR
 // SPIRV: OpVariable {{.*}} IncomingRayPayloadKHR
+
+// METAL-NOT: ordinaryState
+// METAL-NOT: ordinaryVector
+// METAL: void [[INVOKE:StatefulMiss_invoke_[0-9]+]](uint thread* [[PAYLOAD:[A-Za-z0-9_]+]])
+// METAL: *[[PAYLOAD]] = 11U;
+// METAL-NOT: ordinaryState
+// METAL-NOT: ordinaryVector
+// METAL: visible]] void StatefulMiss_miss(void thread* [[ENTRY_PAYLOAD:payload_[0-9]+]],
+// METAL: [[INVOKE]]((uint thread*)((ulong)([[ENTRY_PAYLOAD]])));
+// METAL-NOT: ordinaryState
+// METAL-NOT: ordinaryVector

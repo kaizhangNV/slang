@@ -2,6 +2,10 @@
 //TEST:SIMPLE(filecheck=HLSLTRIANGLE): -experimental-feature -entry EmptyTriangleAnyHit -stage anyhit -target hlsl
 //TEST:SIMPLE(filecheck=HLSLMISS): -experimental-feature -entry EmptyMiss -stage miss -target hlsl
 //TEST:SIMPLE(filecheck=HLSLCALLABLE): -experimental-feature -entry EmptyCallable -stage callable -target hlsl
+//TEST:SIMPLE(filecheck=METALCUSTOM): -experimental-feature -entry EmptyCustomClosestHit -stage closesthit -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=METALTRIANGLE): -experimental-feature -entry EmptyTriangleAnyHit -stage anyhit -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=METALMISS): -experimental-feature -entry EmptyMiss -stage miss -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=METALCALLABLE): -experimental-feature -entry EmptyCallable -stage callable -target metal -profile metallib_2_4 -validate-ir
 
 import slang.raytracing.portable;
 
@@ -81,3 +85,9 @@ struct EmptyCallable : rt::ICallableShader
 // HLSLTRIANGLE: [shader("anyhit")]void EmptyTriangleAnyHit_anyhit(inout {{.*}} : SV_RayPayload, {{.*}} : SV_IntersectionAttributes)
 // HLSLMISS: [shader("miss")]void EmptyMiss_miss(inout {{.*}} : SV_RayPayload)
 // HLSLCALLABLE: [shader("callable")]void EmptyCallable_callable(inout {{[^,)]+}})
+
+// Metal keeps its fixed visible-function signatures even when no input getter is used.
+// METALCUSTOM: visible]] void EmptyCustomClosestHit_closesthit(void thread* payload_{{[0-9]+}}, void thread* attributes_
+// METALTRIANGLE: visible]] uint EmptyTriangleAnyHit_anyhit(void thread* candidateState_{{[0-9]+}}, uchar thread* globalResourceContext_
+// METALMISS: visible]] void EmptyMiss_miss(void thread* payload_
+// METALCALLABLE: visible]] void EmptyCallable_callable(void thread* data_{{[0-9]+}}, uint3 dispatchRaysIndex_

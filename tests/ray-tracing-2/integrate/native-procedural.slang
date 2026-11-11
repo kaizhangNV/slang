@@ -5,7 +5,12 @@
 //TEST:SIMPLE(filecheck=CUDA): -experimental-feature -DTEST_NOINLINE_FILTER=1 -entry RayGeneration -stage raygeneration -entry ProceduralClosestHit -stage closesthit -entry FilterCandidate -stage anyhit -entry TwoCandidates -stage intersection -entry BackgroundMiss -stage miss -target cuda
 //TEST:SIMPLE(filecheck=DXIL): -experimental-feature -entry RayGeneration -stage raygeneration -entry ProceduralClosestHit -stage closesthit -entry FilterCandidate -stage anyhit -entry TwoCandidates -stage intersection -entry BackgroundMiss -stage miss -target dxil -profile sm_6_6
 //TEST:SIMPLE(filecheck=PTX): -experimental-feature -DTEST_NOINLINE_FILTER=1 -entry RayGeneration -stage raygeneration -entry ProceduralClosestHit -stage closesthit -entry FilterCandidate -stage anyhit -entry TwoCandidates -stage intersection -entry BackgroundMiss -stage miss -target ptx
+//TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry ProceduralClosestHit -stage closesthit -entry FilterCandidate -stage anyhit -entry TwoCandidates -stage intersection -entry BackgroundMiss -stage miss -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry ProceduralClosestHit -stage closesthit -entry FilterCandidate -stage anyhit -entry TwoCandidates -stage intersection -entry BackgroundMiss -stage miss -target metal -profile metallib_2_4 -validate-ir -DTEST_NOINLINE_FILTER=1
+//DIAGNOSTIC_TEST:SIMPLE(filecheck=METAL_RAYGEN): -experimental-feature -entry RayGeneration -stage raygeneration -entry ProceduralClosestHit -stage closesthit -entry FilterCandidate -stage anyhit -entry TwoCandidates -stage intersection -entry BackgroundMiss -stage miss -target metal -profile metallib_2_4
 
+// Metal stage code generation is checked below; full raygen compilation diagnoses the missing
+// portable launch-index query because legacy DispatchRaysIndex() does not support Metal.
 import slang.raytracing.portable;
 
 #ifndef TEST_NOINLINE_FILTER
@@ -163,3 +168,13 @@ void RayGeneration()
 // PTX-DAG: __anyhit__FilterCandidate_anyhit
 // PTX-DAG: _optix_report_intersection
 // PTX-DAG: _optix_ignore_intersection
+
+// METAL-DAG: visible]] void ProceduralClosestHit_closesthit(
+// METAL-DAG: visible]] uint FilterCandidate_anyhit(
+// METAL-DAG: visible]] uint TwoCandidates_intersection(
+// METAL-DAG: rt_IntersectionInput_reportHit_{{[0-9]+}}(1.0f, 7U,
+// METAL-DAG: rt_IntersectionInput_reportHit_{{[0-9]+}}(3.0f, 9U,
+// METAL-DAG: visible]] void BackgroundMiss_miss(
+
+// METAL_RAYGEN: error[E36107]: unavailable features in entry point
+// METAL_RAYGEN: note: see using of 'DispatchRaysIndex'

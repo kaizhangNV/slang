@@ -1,5 +1,6 @@
 //TEST:SIMPLE(filecheck=HLSL): -experimental-feature -entry RayGeneration -stage raygeneration -entry AddThirtyOne -stage callable -target hlsl
 //TEST:SIMPLE(filecheck=SPIRV): -experimental-feature -entry RayGeneration -stage raygeneration -entry AddThirtyOne -stage callable -target spirv-assembly -emit-spirv-directly
+//TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry RayGeneration -stage raygeneration -entry AddThirtyOne -stage callable -target metal -profile metallib_2_4 -validate-ir
 
 import slang.raytracing.portable;
 
@@ -55,3 +56,8 @@ void RayGeneration()
 // SPIRV-DAG: OpEntryPoint RayGenerationKHR
 // SPIRV-DAG: OpEntryPoint CallableKHR
 // SPIRV-DAG: OpExecuteCallableKHR
+
+// METAL-DAG: kernel]] void RayGeneration(
+// METAL-DAG: callableFunctions_{{[0-9]+}}[_slang_callable_function_index](&value_
+// METAL-DAG: visible]] void AddThirtyOne_callable(
+// METAL-DAG: AddThirtyOne_invoke_{{[0-9]+}}((uint thread*)((ulong)(data_

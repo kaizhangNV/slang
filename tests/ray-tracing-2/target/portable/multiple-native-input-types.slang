@@ -1,5 +1,6 @@
 //TEST:SIMPLE(filecheck=HLSL): -experimental-feature -entry SharedHit -stage closesthit -entry CallingHit -stage closesthit -entry OtherHit -stage closesthit -entry TriangleHit -stage closesthit -target hlsl -whole-program -validate-ir
 //TEST:SIMPLE(filecheck=IR): -experimental-feature -entry SharedHit -stage closesthit -entry CallingHit -stage closesthit -entry OtherHit -stage closesthit -entry TriangleHit -stage closesthit -target hlsl -whole-program -validate-ir -dump-ir-after lowerPortableRayTracingEntryPoints
+//TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry SharedHit -stage closesthit -entry CallingHit -stage closesthit -entry OtherHit -stage closesthit -entry TriangleHit -stage closesthit -target metal -profile metallib_2_4 -whole-program -validate-ir
 
 import slang.raytracing.portable;
 
@@ -114,3 +115,33 @@ struct TriangleHit : rt::IClosestHitShader
 // IR-NOT: portableRTGetTriangleBarycentricCoord
 // IR-NOT: portableRTGetRecord
 // IR: ###
+
+// Metal must also keep same-typed attributes and Record as separate arguments.
+// METAL: void [[SHARED:SharedHit_invoke_[0-9]+]](float thread* [[P:[A-Za-z0-9_]+]], const [[SHARED_TYPE:SharedData_[0-9]+]] thread* [[A:[A-Za-z0-9_]+]], const [[SHARED_TYPE]] thread* [[R:[A-Za-z0-9_]+]])
+// METAL: *[[P]] = *[[P]] + ([[A]]->{{value_[0-9]+}} + [[R]]->{{value_[0-9]+}} * 10.0f);
+// METAL: void [[CALLING:CallingHit_invoke_[0-9]+]](float thread* [[CP:[A-Za-z0-9_]+]], const [[SHARED_TYPE]] thread* [[CA:[A-Za-z0-9_]+]], const [[SHARED_TYPE]] thread* [[CR:[A-Za-z0-9_]+]])
+// METAL: [[SHARED]]([[CP]], [[CA]], [[CR]]);
+// METAL: *[[CP]] = *[[CP]] + [[CR]]->{{value_[0-9]+}};
+// METAL: void [[OTHER:OtherHit_invoke_[0-9]+]](float thread* {{[A-Za-z0-9_]+}}, const [[OTHER_ATTR:OtherAttributes_[0-9]+]] thread* {{[A-Za-z0-9_]+}}, const [[OTHER_RECORD:OtherRecord_[0-9]+]] thread*
+// METAL: void [[TRIANGLE:TriangleHit_invoke_[0-9]+]](float thread* {{[A-Za-z0-9_]+}}, const [[OTHER_RECORD]] thread* {{[A-Za-z0-9_]+}}, float2
+// Each adapter loads its own record data, independently of its attributes pointer.
+// METAL: visible]] void SharedHit_closesthit(void thread* payload_{{[0-9]+}}, void thread* [[SA:attributes_[0-9]+]],
+// METAL-SAME: uchar device* [[SR:recordData_[0-9]+]],
+// METAL: *(SharedData_{{[0-9]+}} device*)((ulong)([[SR]]))
+// METAL: *(SharedData_{{[0-9]+}} thread*)((ulong)([[SA]]))
+// METAL: [[SHARED]](
+// METAL: visible]] void CallingHit_closesthit(void thread* payload_{{[0-9]+}}, void thread* [[CEA:attributes_[0-9]+]],
+// METAL-SAME: uchar device* [[CER:recordData_[0-9]+]],
+// METAL: *(SharedData_{{[0-9]+}} device*)((ulong)([[CER]]))
+// METAL: *(SharedData_{{[0-9]+}} thread*)((ulong)([[CEA]]))
+// METAL: [[CALLING]](
+// METAL: visible]] void OtherHit_closesthit(void thread* payload_{{[0-9]+}}, void thread* [[OA:attributes_[0-9]+]],
+// METAL-SAME: uchar device* [[OR:recordData_[0-9]+]],
+// METAL: *([[OTHER_RECORD]] device*)((ulong)([[OR]]))
+// METAL: *([[OTHER_ATTR]] thread*)((ulong)([[OA]]))
+// METAL: [[OTHER]](
+// METAL: visible]] void TriangleHit_closesthit(
+// METAL-SAME: float2 [[BARY:barycentricCoord_[0-9]+]],
+// METAL-SAME: uchar device* [[TR:recordData_[0-9]+]],
+// METAL: *([[OTHER_RECORD]] device*)((ulong)([[TR]]))
+// METAL: [[TRIANGLE]]({{.*}}, [[BARY]]);

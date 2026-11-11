@@ -1,6 +1,7 @@
 //TEST:SIMPLE(filecheck=HLSL): -experimental-feature -entry GeometryClosestHit -stage closesthit -target hlsl -validate-ir
 //TEST:SIMPLE(filecheck=SPIRV): -experimental-feature -entry GeometryClosestHit -stage closesthit -target spirv-assembly -emit-spirv-directly -validate-ir
 //TEST:SIMPLE(filecheck=CUDA): -experimental-feature -entry GeometryClosestHit -stage closesthit -target cuda -validate-ir
+//TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry GeometryClosestHit -stage closesthit -target metal -profile metallib_2_4 -validate-ir
 
 import slang.raytracing.portable;
 
@@ -33,3 +34,11 @@ struct GeometryClosestHit : rt::IClosestHitShader
 // HLSL: GeometryIndex()
 // SPIRV: BuiltIn RayGeometryIndexKHR
 // CUDA: optixGetSbtGASIndex()
+
+// Metal forwards the geometry index supplied to this invocation's visible adapter.
+// METAL: uint [[GET:geometryIndex_get_[0-9]+]](uint [[INDEX:[A-Za-z0-9_]+]])
+// METAL: return [[INDEX]];
+// METAL: *{{[A-Za-z0-9_]+}} = [[GET]](
+// METAL: visible]] void GeometryClosestHit_closesthit(
+// METAL-SAME: uint [[ENTRY_INDEX:geometryIndex_[0-9]+]],
+// METAL: GeometryClosestHit_invoke_{{[0-9]+}}({{.*}}, [[ENTRY_INDEX]]);

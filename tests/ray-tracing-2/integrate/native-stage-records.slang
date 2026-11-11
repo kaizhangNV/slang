@@ -3,6 +3,7 @@
 //TEST:SIMPLE(filecheck=CUDA): -experimental-feature -entry Hit -stage closesthit -entry Filter -stage anyhit -entry Intersect -stage intersection -entry Miss -stage miss -entry Callable -stage callable -target cuda
 //TEST:SIMPLE(filecheck=DXIL): -experimental-feature -entry Intersect -stage intersection -target dxil-asm -profile lib_6_6
 //TEST:SIMPLE(filecheck=PTX): -experimental-feature -entry Callable -stage callable -target ptx -Xnvrtc -I"./external/optix-dev/include/"
+//TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry Hit -stage closesthit -entry Filter -stage anyhit -entry Intersect -stage intersection -entry Miss -stage miss -entry Callable -stage callable -target metal -profile metallib_2_4 -validate-ir
 
 import slang.raytracing.portable;
 
@@ -110,3 +111,14 @@ struct Callable : rt::ICallableShader
 // DXIL: call {{.*}} @dx.op.cbufferLoadLegacy
 // DXIL: call {{.*}} @dx.op.reportHit
 // PTX: .visible .func __direct_callable__Callable_callable(
+
+// METAL: visible]] void Hit_closesthit(
+// METAL: *(Record_{{[0-9]+}} device*)((ulong)(recordData_
+// METAL: visible]] uint Filter_anyhit(
+// METAL: *(Record_{{[0-9]+}} device*)((ulong)({{.*}}->record_
+// METAL: visible]] uint Intersect_intersection(
+// METAL: *(Record_{{[0-9]+}} device*)((ulong)({{.*}}->record_
+// METAL: visible]] void Miss_miss(
+// METAL: *(Record_{{[0-9]+}} device*)((ulong)(recordData_
+// METAL: visible]] void Callable_callable(
+// METAL: *(Record_{{[0-9]+}} device*)((ulong)(recordData_

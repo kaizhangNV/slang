@@ -64,9 +64,11 @@ static void portableRayTracingTriangleTestImpl(IDevice* device, UnitTestContext*
     // Enable the experimental module only for this test's compilation session.
     auto globalSession = context->slangGlobalSession;
     const bool isD3D = device->getDeviceType() == DeviceType::D3D12;
+    const bool isMetal = device->getDeviceType() == DeviceType::Metal;
     slang::TargetDesc targetDesc = {};
-    targetDesc.format = isD3D ? SLANG_DXIL : SLANG_SPIRV;
-    targetDesc.profile = globalSession->findProfile(isD3D ? "sm_6_6" : "spirv_1_5");
+    targetDesc.format = isMetal ? SLANG_METAL_LIB : (isD3D ? SLANG_DXIL : SLANG_SPIRV);
+    targetDesc.profile =
+        globalSession->findProfile(isMetal ? "metallib_2_4" : (isD3D ? "sm_6_6" : "spirv_1_5"));
     slang::CompilerOptionEntry experimental = {};
     experimental.name = slang::CompilerOptionName::ExperimentalFeature;
     experimental.value.kind = slang::CompilerOptionValueKind::Int;
@@ -268,6 +270,14 @@ SLANG_UNIT_TEST(portableRayTracingTriangleVulkan)
 SLANG_UNIT_TEST(portableRayTracingTriangleD3D12)
 {
     runTestImpl(portableRayTracingTriangleTestImpl, unitTestContext, DeviceType::D3D12);
+}
+
+SLANG_UNIT_TEST(portableRayTracingTriangleMetal)
+{
+    // DISABLED until slang-rhi supports portable RT dispatch and descriptor bindings on Metal.
+    // The fixture also needs a portable Metal replacement for raygen DispatchRaysIndex().
+    SLANG_IGNORE_TEST
+    runTestImpl(portableRayTracingTriangleTestImpl, unitTestContext, DeviceType::Metal);
 }
 
 } // namespace gfx_test

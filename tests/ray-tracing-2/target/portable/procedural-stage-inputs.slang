@@ -5,6 +5,9 @@
 //TEST:SIMPLE(filecheck=SPIRVAH): -experimental-feature -entry ProceduralAnyHit -stage anyhit -target spirv-assembly -emit-spirv-directly
 //TEST:SIMPLE(filecheck=SPIRVIS): -experimental-feature -entry ProceduralIntersection -stage intersection -target spirv-assembly -emit-spirv-directly
 //TEST:SIMPLE(filecheck=DXIL): -experimental-feature -entry ProceduralIntersection -stage intersection -target dxil-asm -profile lib_6_6 -validate-ir
+//TEST:SIMPLE(filecheck=METALCH): -experimental-feature -entry ProceduralClosestHit -stage closesthit -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=METALAH): -experimental-feature -entry ProceduralAnyHit -stage anyhit -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=METALIS): -experimental-feature -entry ProceduralIntersection -stage intersection -target metal -profile metallib_2_4 -validate-ir
 
 import slang.raytracing.portable;
 
@@ -85,3 +88,23 @@ struct ProceduralIntersection : rt::IIntersectionShader
 // SPIRVIS-DAG: OpVariable {{.*}} HitAttributeKHR
 // SPIRVIS: OpReportIntersectionKHR
 // DXIL: define void @
+
+// Metal's closest-hit adapter forwards custom attributes and the invocation's hit IDs.
+// METALCH: visible]] void ProceduralClosestHit_closesthit(void thread* [[P:payload_[0-9]+]], void thread* [[A:attributes_[0-9]+]],
+// METALCH-SAME: uint [[PRIMITIVE:primitiveIndex_[0-9]+]],
+// METALCH-SAME: uint [[INSTANCE:instanceID_[0-9]+]],
+// METALCH: *(Attributes_{{[0-9]+}} thread*)((ulong)([[A]]))
+// METALCH: ProceduralClosestHit_invoke_{{[0-9]+}}({{.*}}, [[PRIMITIVE]], [[INSTANCE]]);
+// Any-hit reads custom attributes from the candidate and reports IgnoreHit via its result.
+// METALAH: rt_AnyHitInput_ignoreHit_
+// METALAH: {{candidateAttributes_[0-9]+}}))).{{uv_[0-9]+}}.y) < 0.0f
+// METALAH: rt_AnyHitInput_ignoreHit_{{[0-9]+}}();
+// METALAH: visible]] uint ProceduralAnyHit_anyhit(void thread* candidateState_
+// METALAH: ProceduralAnyHit_invoke_{{[0-9]+}}({{.*}}->payload_
+// ReportHit writes the candidate attributes and invokes the supplied any-hit table slot.
+// METALIS: portableRTReportHit_{{[0-9]+}}({{.*}}visible_function_table<uint(void thread*, uchar thread*)> [[TABLE:[A-Za-z0-9_]+]], uint [[SLOT:[A-Za-z0-9_]+]],
+// METALIS: ->candidateAttributes_
+// METALIS: [[TABLE]]{{\[}}[[SLOT]]{{\]}}(
+// METALIS: ->committedAttributes_
+// METALIS: visible]] uint ProceduralIntersection_intersection(void thread* candidateState_
+// METALIS-SAME: visible_function_table<uint(void thread*, uchar thread*)>
