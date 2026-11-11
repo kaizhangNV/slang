@@ -206,47 +206,42 @@ void collectInputOperations(IRInst* parent, List<IRInst*>& result)
     }
 }
 
-/// Lowers mutable payload/data access through ordinary references. The native ABI still requires
-/// a payload parameter when a stage does not read it; empty and scalar payloads are left intact
-/// for the existing native payload legalization to adapt later.
-void lowerPayloads(
-    IRModule* module,
-    const List<NativeStage>& stages,
-    List<IRInst*>& operations,
-    bool callable)
+/// Groups the selected entries and getters that use one kind and type of invocation value.
+/// The stage pointers refer to the completed stages list, which stays unchanged during lowering.
+struct NativeInputUses
 {
-    // Group the wrappers and getters that use the same payload type.
-    struct PayloadUses
+    List<const NativeStage*> stages;
+    List<IRInst*> getters;
+};
+
+using NativeInputGroups = OrderedDictionary<IRType*, NativeInputUses>;
+
+/// Returns a type's group, preserving the order in which types are first encountered.
+NativeInputUses& getInputUses(NativeInputGroups& groups, IRType* type)
+{
+    groups.addIfNotExists(type, NativeInputUses());
+    return groups[type].getValue();
+}
+
+/// Supplies a group's entry values, then replaces its getters through ordinary helper parameters.
+/// Record handlers bind each entry's resource first; payload/attribute handlers create parameters
+/// here even when an entry has no getter, because those parameters are required by the native ABI.
+void lowerInputUses(PortableRTInvocationParameter& parameter, const NativeInputUses& uses)
+{
+    for (auto stage : uses.stages)
+        parameter.get(stage->adapter);
+    for (auto getter : uses.getters)
+        parameter.lower(getter);
+}
+
+/// Lowers mutable payload/data access through ordinary references. Empty and scalar payloads
+/// remain intact for the existing native payload legalization to adapt later.
+void lowerPayloadGroups(IRModule* module, NativeInputGroups& groups, bool callable)
+{
+    IRBuilder builder(module);
+    for (auto& group : groups)
     {
-        List<IRFunc*> adapters;
-        List<Index> operationIndices;
-    };
-    // Visit each stage and getter once instead of rescanning both lists for every type.
-    // Keep discovery order: types required by selected entries precede getter-only types.
-    OrderedDictionary<IRType*, PayloadUses> usesByType;
-    auto operationKind = callable ? kIROp_PortableRTGetCallableData : kIROp_PortableRTGetPayload;
-    for (auto stage : stages)
-    {
-        auto kind = Stage(stage.input->getStageKind()->getValue());
-        if ((kind == Stage::Callable) != callable || kind == Stage::Intersection)
-            continue;
-        auto type = stage.input->getPayloadType();
-        usesByType.addIfNotExists(type, PayloadUses());
-        usesByType[type].getValue().adapters.add(stage.adapter);
-    }
-    for (Index i = 0; i < operations.getCount(); ++i)
-    {
-        auto operation = operations[i];
-        if (!operation || operation->getOp() != operationKind)
-            continue;
-        auto type = cast<IRPtrTypeBase>(operation->getDataType())->getValueType();
-        usesByType.addIfNotExists(type, PayloadUses());
-        usesByType[type].getValue().operationIndices.add(i);
-    }
-    for (auto& typeUses : usesByType)
-    {
-        IRBuilder builder(module);
-        auto parameterType = builder.getBorrowInOutParamType(typeUses.key);
+        auto parameterType = builder.getBorrowInOutParamType(group.key);
         NativeInvocationParameter parameter = {
             module,
             parameterType,
@@ -255,92 +250,35 @@ void lowerPayloads(
             callable ? "data" : "payload",
             callable ? nullptr : "SV_RayPayload",
             true};
-        // Seed the native parameters even when no getter uses this payload type.
-        for (auto adapter : typeUses.value.adapters)
-            parameter.get(adapter);
-        for (auto operationIndex : typeUses.value.operationIndices)
-        {
-            // Clear consumed getters in the shared list before later lowering steps use it.
-            parameter.lower(operations[operationIndex]);
-            operations[operationIndex] = nullptr;
-        }
+        lowerInputUses(parameter, group.value);
     }
 }
 
-/// Selects the native triangle/custom attribute ABI from the primitive, not the attribute type's
-/// spelling. Built-in TriangleData is a property view; a procedural attribute is application data.
-void lowerAttributes(IRModule* module, const List<NativeStage>& stages, List<IRInst*>& operations)
+/// Supplies application-defined hit attributes through borrowed native parameters.
+void lowerAttributeGroups(IRModule* module, NativeInputGroups& groups)
 {
-    List<IRType*> customTypes;
-    HashSet<IRType*> seen;
-    bool needsTriangles = false;
-    for (auto stage : stages)
-    {
-        auto kind = Stage(stage.input->getStageKind()->getValue());
-        if (kind != Stage::ClosestHit && kind != Stage::AnyHit)
-            continue;
-        if (getPrimitiveKind(stage.input) == KnownBuiltinDeclName::RayTracingTrianglePrimitive)
-            needsTriangles = true;
-        else if (seen.add(stage.input->getAttributesType()))
-            customTypes.add(stage.input->getAttributesType());
-    }
     IRBuilder builder(module);
-    for (auto& operation : operations)
-    {
-        if (!operation)
-            continue;
-        if (operation->getOp() == kIROp_PortableRTGetTriangleBarycentricCoord)
-            needsTriangles = true;
-        if (operation->getOp() != kIROp_PortableRTGetHitAttributes)
-            continue;
-        auto input = PortableRT::getStageInputInfo(operation->getOperand(0)->getDataType());
-        SLANG_RELEASE_ASSERT(input);
-        if (getPrimitiveKind(input) == KnownBuiltinDeclName::RayTracingTrianglePrimitive)
-        {
-            // The aggregate is only a token for builtin properties. Each getter, including one
-            // called through an ordinary helper or a copied TriangleData value, reads native state.
-            builder.setInsertBefore(operation);
-            operation->replaceUsesWith(builder.emitDefaultConstruct(operation->getDataType()));
-            operation->removeAndDeallocate();
-            operation = nullptr;
-        }
-        else if (seen.add(operation->getDataType()))
-        {
-            customTypes.add(operation->getDataType());
-        }
-    }
-    for (auto type : customTypes)
+    for (auto& group : groups)
     {
         NativeInvocationParameter parameter = {
             module,
-            type,
-            builder.getBorrowInParamType(type, AddressSpace::Generic),
+            group.key,
+            builder.getBorrowInParamType(group.key, AddressSpace::Generic),
             LayoutResourceKind::HitAttributes,
             "attributes",
             "SV_IntersectionAttributes",
             false};
-        for (auto stage : stages)
-        {
-            auto kind = Stage(stage.input->getStageKind()->getValue());
-            if ((kind == Stage::ClosestHit || kind == Stage::AnyHit) &&
-                getPrimitiveKind(stage.input) !=
-                    KnownBuiltinDeclName::RayTracingTrianglePrimitive &&
-                stage.input->getAttributesType() == type)
-                parameter.get(stage.adapter);
-        }
-        for (auto& operation : operations)
-        {
-            if (operation && operation->getOp() == kIROp_PortableRTGetHitAttributes &&
-                operation->getDataType() == type)
-            {
-                parameter.lower(operation);
-                operation = nullptr;
-            }
-        }
+        lowerInputUses(parameter, group.value);
     }
-    if (!needsTriangles)
+}
+
+/// Extracts triangle barycentrics from the native attribute struct and forwards them to helpers.
+void lowerTriangleAttributes(IRModule* module, const NativeInputUses& uses)
+{
+    if (uses.stages.getCount() == 0 && uses.getters.getCount() == 0)
         return;
 
+    IRBuilder builder(module);
     builder.setInsertInto(module->getModuleInst());
     auto nativeType = builder.createStructType();
     builder.addNameHintDecoration(
@@ -359,103 +297,175 @@ void lowerAttributes(IRModule* module, const List<NativeStage>& stages, List<IRI
         "SV_IntersectionAttributes",
         false,
         barycentrics};
-    for (auto stage : stages)
-    {
-        auto kind = Stage(stage.input->getStageKind()->getValue());
-        if ((kind == Stage::ClosestHit || kind == Stage::AnyHit) &&
-            getPrimitiveKind(stage.input) == KnownBuiltinDeclName::RayTracingTrianglePrimitive)
-            parameter.get(stage.adapter);
-    }
-    for (auto& operation : operations)
-    {
-        if (operation && operation->getOp() == kIROp_PortableRTGetTriangleBarycentricCoord)
-        {
-            parameter.lower(operation);
-            operation = nullptr;
-        }
-    }
+    lowerInputUses(parameter, uses);
 }
 
 /// Gives each native invocation its selected SBT record while allowing helpers to share code.
-/// The resource is created at an adapter, not in the helper which reads it: two selected stages
-/// can call the same helper yet have different records. OptiX already has a native SBT pointer
-/// operation and needs no resource parameter or helper argument for that case.
-void lowerRecords(
+/// A record resource belongs to an entry, so two entries using the same record type still get
+/// separate resources. Empty records and OptiX SBT reads need no forwarded record parameter.
+void lowerRecordGroups(
+    IRModule* module,
+    TargetRequest* target,
+    NativeInputGroups& groups,
+    const List<IRType*>& usedTypes)
+{
+    IRBuilder builder(module);
+    for (auto recordType : usedTypes)
+    {
+        auto& uses = groups[recordType].getValue();
+        // Check each type once, even when many getters read the same nested record.
+        if (isEmptyType(recordType))
+        {
+            for (auto getter : uses.getters)
+            {
+                builder.setInsertBefore(getter);
+                getter->replaceUsesWith(
+                    as<IRVoidType>(recordType) ? builder.getVoidValue()
+                                               : builder.emitDefaultConstruct(recordType));
+                getter->removeAndDeallocate();
+            }
+            continue;
+        }
+
+        builder.setInsertInto(module->getModuleInst());
+        auto bufferType = builder.getConstantBufferType(
+            recordType,
+            builder.getType(kIROp_DefaultBufferLayoutType));
+        if (isCUDATarget(target))
+        {
+            for (auto getter : uses.getters)
+            {
+                builder.setInsertBefore(getter);
+                auto recordPointer =
+                    builder.emitIntrinsicInst(bufferType, kIROp_GetOptiXSbtDataPtr, 0, nullptr);
+                getter->replaceUsesWith(builder.emitLoad(recordPointer));
+                getter->removeAndDeallocate();
+            }
+            continue;
+        }
+
+        SLANG_RELEASE_ASSERT(isKhronosTarget(target) || isD3DTarget(target));
+        PortableRTInvocationParameter parameter(module, recordType, "record");
+        for (auto stage : uses.stages)
+        {
+            builder.setInsertBefore(stage->adapter);
+            auto record = builder.createGlobalParam(bufferType);
+            builder.addNameHintDecoration(record, UnownedTerminatedStringSlice("record"));
+            builder.addEntryPointParamDecoration(record, stage->adapter);
+            // Reuse the reflected storage, packing, and binding so the generated shader reads
+            // the record bytes that the host prepared for this particular entry.
+            SLANG_RELEASE_ASSERT(stage->recordLayout);
+            builder.addLayoutDecoration(record, stage->recordLayout);
+            builder.setInsertBefore(stage->adapter->getFirstBlock()->getFirstOrdinaryInst());
+            parameter.bind(stage->adapter, builder.emitLoad(record));
+        }
+        lowerInputUses(parameter, uses);
+    }
+}
+
+/// Lowers native stage inputs after collecting each entry and getter once.
+/// Consider a closest-hit shader that reads input.payload, input.attributes, and input.record.
+/// Each getter joins the group for its kind and type; only that group's entries and getters are
+/// visited when lowering it. Keep separate maps because attributes and records can share a type
+/// while referring to different invocation values. Each group uses the existing helper-parameter
+/// forwarding algorithm.
+void lowerNativeInputs(
     IRModule* module,
     TargetRequest* target,
     const List<NativeStage>& stages,
-    List<IRInst*>& operations)
+    DiagnosticSink* sink)
 {
-    IRBuilder builder(module);
-    List<IRType*> types;
-    HashSet<IRType*> seen;
-    for (auto& operation : operations)
-    {
-        if (!operation || operation->getOp() != kIROp_PortableRTGetRecord)
-            continue;
-        auto recordType = operation->getDataType();
-        builder.setInsertBefore(operation);
-        if (isEmptyType(recordType))
-        {
-            // Like an empty ConstantBuffer<T>, an empty record has no physical binding. Its
-            // logical value still exists and can flow through ordinary source helpers.
-            operation->replaceUsesWith(
-                as<IRVoidType>(recordType) ? builder.getVoidValue()
-                                           : builder.emitDefaultConstruct(recordType));
-            operation->removeAndDeallocate();
-            operation = nullptr;
-        }
-        else if (isCUDATarget(target))
-        {
-            auto bufferType = builder.getConstantBufferType(
-                recordType,
-                builder.getType(kIROp_DefaultBufferLayoutType));
-            auto recordPointer =
-                builder.emitIntrinsicInst(bufferType, kIROp_GetOptiXSbtDataPtr, 0, nullptr);
-            operation->replaceUsesWith(builder.emitLoad(recordPointer));
-            operation->removeAndDeallocate();
-            operation = nullptr;
-        }
-        else if (seen.add(recordType))
-        {
-            types.add(recordType);
-        }
-    }
-    if (!isKhronosTarget(target) && !isD3DTarget(target))
-        return;
+    NativeInputGroups payloads;
+    NativeInputGroups callableData;
+    NativeInputGroups attributes;
+    NativeInputUses triangles;
+    NativeInputGroups records;
+    List<IRType*> usedRecordTypes;
 
-    for (auto recordType : types)
+    // Index entries once. Payload and attribute groups also retain unused ABI parameters.
+    // Record entries are indexed here, but only a getter activates a record type below.
+    for (const auto& stage : stages)
     {
-        PortableRTInvocationParameter parameter(module, recordType, "record");
-        for (auto stage : stages)
+        auto kind = Stage(stage.input->getStageKind()->getValue());
+        if (kind != Stage::Intersection)
         {
-            if (stage.input->getRecordType() != recordType)
-                continue;
-            builder.setInsertBefore(stage.adapter);
-            auto bufferType = builder.getConstantBufferType(
-                recordType,
-                builder.getType(kIROp_DefaultBufferLayoutType));
-            auto record = builder.createGlobalParam(bufferType);
-            builder.addNameHintDecoration(record, UnownedTerminatedStringSlice("record"));
-            builder.addEntryPointParamDecoration(record, stage.adapter);
-            // The host can query this layout before code generation. Keep the same record
-            // storage, field packing, and D3D register binding on the generated buffer so the
-            // shader reads the bytes the host wrote using reflection.
-            SLANG_RELEASE_ASSERT(stage.recordLayout);
-            builder.addLayoutDecoration(record, stage.recordLayout);
-            builder.setInsertBefore(stage.adapter->getFirstBlock()->getFirstOrdinaryInst());
-            parameter.bind(stage.adapter, builder.emitLoad(record));
+            auto& groups = kind == Stage::Callable ? callableData : payloads;
+            getInputUses(groups, stage.input->getPayloadType()).stages.add(&stage);
         }
-        for (auto& operation : operations)
+        if (kind == Stage::ClosestHit || kind == Stage::AnyHit)
         {
-            if (operation && operation->getOp() == kIROp_PortableRTGetRecord &&
-                operation->getDataType() == recordType)
+            if (getPrimitiveKind(stage.input) == KnownBuiltinDeclName::RayTracingTrianglePrimitive)
+                triangles.stages.add(&stage);
+            else
+                getInputUses(attributes, stage.input->getAttributesType()).stages.add(&stage);
+        }
+        getInputUses(records, stage.input->getRecordType()).stages.add(&stage);
+    }
+
+    List<IRInst*> operations;
+    // Logical Input<C> structs have no fields to load. Their getters remain portable operations
+    // until this pass supplies native parameters or record loads, including inside helpers.
+    collectInputOperations(module->getModuleInst(), operations);
+    IRBuilder builder(module);
+    for (auto operation : operations)
+    {
+        switch (operation->getOp())
+        {
+        case kIROp_PortableRTGetPayload:
+        case kIROp_PortableRTGetCallableData:
             {
-                parameter.lower(operation);
-                operation = nullptr;
+                auto& groups =
+                    operation->getOp() == kIROp_PortableRTGetPayload ? payloads : callableData;
+                auto type = cast<IRPtrTypeBase>(operation->getDataType())->getValueType();
+                getInputUses(groups, type).getters.add(operation);
+                break;
             }
+        case kIROp_PortableRTGetHitAttributes:
+            {
+                auto input = PortableRT::getStageInputInfo(operation->getOperand(0)->getDataType());
+                SLANG_RELEASE_ASSERT(input);
+                if (getPrimitiveKind(input) == KnownBuiltinDeclName::RayTracingTrianglePrimitive)
+                {
+                    // TriangleData is a token for builtin properties. Barycentric getters below
+                    // obtain the native value, even through helpers or copied TriangleData values.
+                    builder.setInsertBefore(operation);
+                    operation->replaceUsesWith(
+                        builder.emitDefaultConstruct(operation->getDataType()));
+                    operation->removeAndDeallocate();
+                }
+                else
+                    getInputUses(attributes, operation->getDataType()).getters.add(operation);
+                break;
+            }
+        case kIROp_PortableRTGetTriangleBarycentricCoord:
+            triangles.getters.add(operation);
+            break;
+        case kIROp_PortableRTGetRecord:
+            {
+                auto type = operation->getDataType();
+                auto& uses = getInputUses(records, type);
+                // Process record types in getter order and create no resource for stage-only types.
+                if (uses.getters.getCount() == 0)
+                    usedRecordTypes.add(type);
+                uses.getters.add(operation);
+                break;
+            }
+        case kIROp_PortableRTGetCurveParameter:
+            sink->diagnose(Diagnostics::Unimplemented{
+                .feature = "portable ray-tracing curve input on a native SBT target",
+                .location = operation->sourceLoc});
+            break;
+        default:
+            SLANG_UNEXPECTED("unexpected portable ray-tracing input operation");
         }
     }
+
+    // Preserve native parameter order and the existing helper-argument order across input kinds.
+    lowerPayloadGroups(module, payloads, false);
+    lowerPayloadGroups(module, callableData, true);
+    lowerAttributeGroups(module, attributes);
+    lowerTriangleAttributes(module, triangles);
+    lowerRecordGroups(module, target, records, usedRecordTypes);
 }
 
 } // namespace
@@ -512,16 +522,7 @@ void lowerPortableRayTracingEntryPoints(
     // Selected stages now have wrappers; implementations reached only through calls are helpers.
     PortableRT::demoteStageImplementations(module);
 
-    List<IRInst*> operations;
-    // A logical input such as MissInput<C> has no fields to load. Accesses such as input.record
-    // therefore remain portable operations (PortableRTGetRecord) whose implementation depends
-    // on the target. Collect them before replacing them with native parameters or record loads.
-    // These operations can occur in ordinary helpers as well as selected stage implementations.
-    collectInputOperations(module->getModuleInst(), operations);
-    lowerPayloads(module, stages, operations, false);
-    lowerPayloads(module, stages, operations, true);
-    lowerAttributes(module, stages, operations);
-    lowerRecords(module, target, stages, operations);
+    lowerNativeInputs(module, target, stages, sink);
 
     // Rebuild each wrapper's parameter layout now that payload and attribute parameters exist.
     // createAdapter started with an empty parameter layout. Reuse the layouts attached to the
@@ -543,18 +544,6 @@ void lowerPortableRayTracingEntryPoints(
             builder.getEntryPointLayout(paramsLayout.build(), oldLayout->getResultLayout());
         layoutDecoration->removeAndDeallocate();
         builder.addLayoutDecoration(stage.adapter, layout);
-    }
-
-    for (auto operation : operations)
-    {
-        if (operation)
-        {
-            sink->diagnose(Diagnostics::Unimplemented{
-                .feature = operation->getOp() == kIROp_PortableRTGetRecord
-                               ? "portable ray-tracing shader-record binding"
-                               : "portable ray-tracing curve input on a native SBT target",
-                .location = operation->sourceLoc});
-        }
     }
 }
 } // namespace Slang
