@@ -215,29 +215,38 @@ void lowerPayloads(
     List<IRInst*>& operations,
     bool callable)
 {
-    List<IRType*> types;
-    HashSet<IRType*> seen;
+    // Group the wrappers and getters that use the same payload type.
+    struct PayloadUses
+    {
+        List<IRFunc*> adapters;
+        List<Index> operationIndices;
+    };
+    // Visit each stage and getter once instead of rescanning both lists for every type.
+    // Keep discovery order: types required by selected entries precede getter-only types.
+    OrderedDictionary<IRType*, PayloadUses> usesByType;
     auto operationKind = callable ? kIROp_PortableRTGetCallableData : kIROp_PortableRTGetPayload;
     for (auto stage : stages)
     {
         auto kind = Stage(stage.input->getStageKind()->getValue());
         if ((kind == Stage::Callable) != callable || kind == Stage::Intersection)
             continue;
-        if (seen.add(stage.input->getPayloadType()))
-            types.add(stage.input->getPayloadType());
+        auto type = stage.input->getPayloadType();
+        usesByType.addIfNotExists(type, PayloadUses());
+        usesByType[type].getValue().adapters.add(stage.adapter);
     }
-    for (auto operation : operations)
+    for (Index i = 0; i < operations.getCount(); ++i)
     {
+        auto operation = operations[i];
         if (!operation || operation->getOp() != operationKind)
             continue;
         auto type = cast<IRPtrTypeBase>(operation->getDataType())->getValueType();
-        if (seen.add(type))
-            types.add(type);
+        usesByType.addIfNotExists(type, PayloadUses());
+        usesByType[type].getValue().operationIndices.add(i);
     }
-    for (auto type : types)
+    for (auto& typeUses : usesByType)
     {
         IRBuilder builder(module);
-        auto parameterType = builder.getBorrowInOutParamType(type);
+        auto parameterType = builder.getBorrowInOutParamType(typeUses.key);
         NativeInvocationParameter parameter = {
             module,
             parameterType,
@@ -246,22 +255,14 @@ void lowerPayloads(
             callable ? "data" : "payload",
             callable ? nullptr : "SV_RayPayload",
             true};
-        for (auto stage : stages)
+        // Seed the native parameters even when no getter uses this payload type.
+        for (auto adapter : typeUses.value.adapters)
+            parameter.get(adapter);
+        for (auto operationIndex : typeUses.value.operationIndices)
         {
-            auto kind = Stage(stage.input->getStageKind()->getValue());
-            if ((kind == Stage::Callable) == callable && kind != Stage::Intersection &&
-                stage.input->getPayloadType() == type)
-                parameter.get(stage.adapter);
-        }
-        for (auto& operation : operations)
-        {
-            if (!operation || operation->getOp() != operationKind)
-                continue;
-            if (cast<IRPtrTypeBase>(operation->getDataType())->getValueType() == type)
-            {
-                parameter.lower(operation);
-                operation = nullptr;
-            }
+            // Clear consumed getters in the shared list before later lowering steps use it.
+            parameter.lower(operations[operationIndex]);
+            operations[operationIndex] = nullptr;
         }
     }
 }
@@ -481,9 +482,8 @@ void lowerPortableRayTracingEntryPoints(
         return;
 
     List<NativeStage> stages;
-    // Replace each selected logical stage entry with a native wrapper, keeping its invoke
-    // callable by ordinary helpers. Save its input types and reflected Record layout so the
-    // following steps can build the wrapper's parameters and record resource.
+    // Create a wrapper entry point for each selected PortableRT stage.
+    // Turn the original entry point into an ordinary function called by the wrapper.
     for (auto& entryPoint : entryPoints)
     {
         auto input = PortableRT::getEntryPointInputInfo(entryPoint);
