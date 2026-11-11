@@ -538,8 +538,8 @@ void lowerCallable(IRModule* module, IRMetalRTCallShader* call, Program& program
     call->removeAndDeallocate();
 }
 
-/// Collects source dispatch instructions after ordinary witness specialization. Both operations
-/// retain their canonical descriptor type, including a descriptor used only for callable dispatch.
+/// Collects TraceRay and CallShader instructions after specialization. Each instruction retains
+/// its descriptor type, including when the program uses CallShader without TraceRay.
 void collectDispatches(
     IRInst* parent,
     List<IRMetalTraceRay*>& traces,
@@ -650,20 +650,20 @@ void lowerMetalPortableRayTracing(
 {
     List<IRMetalTraceRay*> traces;
     List<IRMetalRTCallShader*> calls;
-    // Collect portable trace instructions into traces and callable-dispatch instructions into
-    // calls throughout the specialized module, including inside helper functions. These lists
-    // identify the operations to lower; they do not yet say which entry points reach them.
+    // Collect TraceRay instructions into traces and CallShader instructions into calls,
+    // including instructions inside helper functions. These lists identify the instructions
+    // to lower; they do not yet say which entry points reach them.
     collectDispatches(module->getModuleInst(), traces, calls);
 
     // Map each referenced function or global (IRInst*) to the entry-point functions (IRFunc*)
     // that reference it, directly or through other functions. Consider RayGenerationA and
-    // RayGenerationB both calling traceHelper, which contains a trace. The map then contains:
+    // RayGenerationB both calling traceHelper, which contains TraceRay. The map then contains:
     //     referencingEntries[traceHelper] = {RayGenerationA, RayGenerationB};
     // A helper shared by several entries therefore has one key and several values in its set.
     Dictionary<IRInst*, HashSet<IRFunc*>> referencingEntries;
     // Follow calls and global references from the module's entry points to populate the map.
-    // The loops below look up each dispatch's enclosing function to find all affected entries,
-    // including entries whose trace or callable dispatch is inside a helper.
+    // The loops below look up each TraceRay or CallShader instruction's enclosing function
+    // to find all entry points that reach it, including through helper calls.
     buildEntryPointReferenceGraph(referencingEntries, module);
     HashSet<IRFunc*> physicalRayGenerationEntries;
     for (auto trace : traces)
