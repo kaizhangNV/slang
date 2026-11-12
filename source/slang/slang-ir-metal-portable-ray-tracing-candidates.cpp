@@ -380,7 +380,7 @@ void lowerMutableInputs(
             operation->removeAndDeallocate();
             continue;
         }
-        auto context = parameter.ensureValue(getParentFunc(operation));
+        auto context = parameter.addParameterAndUpdateCallers(getParentFunc(operation));
         builder.setInsertBefore(operation);
         IRInst* value = nullptr;
         switch (operation->getOp())
@@ -1283,10 +1283,10 @@ VisibleAdapter createSelectedCandidateAdapter(
         {
             auto function = getParentFunc(operation);
             IRInst* arguments[] = {
-                stateParameter.ensureValue(function),
-                globalsParameter.ensureValue(function),
-                tableParameter.ensureValue(function),
-                indexParameter.ensureValue(function),
+                stateParameter.addParameterAndUpdateCallers(function),
+                globalsParameter.addParameterAndUpdateCallers(function),
+                tableParameter.addParameterAndUpdateCallers(function),
+                indexParameter.addParameterAndUpdateCallers(function),
                 operation->getOperand(0),
                 operation->getOperand(1),
                 operation->getOperand(2)};

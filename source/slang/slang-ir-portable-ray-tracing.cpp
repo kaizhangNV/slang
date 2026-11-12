@@ -20,10 +20,15 @@ KnownBuiltinDeclName getPrimitiveKind(IRPortableRTStageInputDecoration* info)
     return decoration ? decoration->getName() : KnownBuiltinDeclName::COUNT;
 }
 
-struct NativeStage
+struct NativeEntryPoint
 {
+    // The entry-point wrapper created by createAdapter.
     IRFunc* adapter;
+    // The logical input's decoration, which retains Context's payload, record, primitive,
+    // and other associated types for native lowering.
     IRPortableRTStageInputDecoration* input;
+    // This entry's reflected ConstantBuffer<Record> layout, including record field offsets
+    // and resource bindings. Reused when creating the entry's record resource.
     IRVarLayout* recordLayout;
 };
 
@@ -206,14 +211,36 @@ void collectInputOperations(IRInst* parent, List<IRInst*>& result)
     }
 }
 
-/// Groups the selected entries and getters that use one kind and type of invocation value.
-/// The stage pointers refer to the completed stages list, which stays unchanged during lowering.
+/// Lists the selected entry points and IR users of one kind and type of invocation value.
+/// The entry pointers refer to a completed list, which stays unchanged during lowering.
 struct NativeInputUses
 {
-    List<const NativeStage*> stages;
-    List<IRInst*> getters;
+    List<const NativeEntryPoint*> entryPoints;
+    List<IRInst*> users;
 };
 
+/// Maps an input value's type to the entry points and IR operations to process during lowering.
+///
+/// RT stage entry points receive logical input objects whose properties expose invocation state.
+/// On native SBT targets, properties such as worldToObject map directly to global intrinsics.
+/// Payload, callable data, hit attributes, and SBT record data need generated parameters or
+/// resource accesses.
+///
+/// Consider this example, shown conceptually:
+///     Before: void main(Input<Context> input) { let x = input.payload; }
+///     After:  void main(inout Payload payload) { let x = payload; }
+/// The implementation passes the payload reference from the generated entry wrapper through
+/// ordinary function parameters to each function that accesses it.
+///
+/// Each map handles one input kind:
+/// - Key: the value's IRType*, such as MyPayload.
+/// - Value: NativeInputUses, containing two lists:
+///     entryPoints: wrappers to initialize with native parameters or record resources.
+///     users: portable input-access instructions to replace, including those in helpers.
+/// For payloads, lowering updates signatures and calls to pass the payload reference, then replaces
+/// each PortableRTGetPayload instruction with that reference. Processing users can also add
+/// parameters to entries absent from entryPoints. The explicit entryPoints list ensures required
+/// payload/attribute parameters exist even when there are no users.
 using NativeInputGroups = OrderedDictionary<IRType*, NativeInputUses>;
 
 /// Returns a type's group, preserving the order in which types are first encountered.
@@ -223,15 +250,15 @@ NativeInputUses& getInputUses(NativeInputGroups& groups, IRType* type)
     return groups[type].getValue();
 }
 
-/// Supplies a group's entry values, then replaces its getters through ordinary helper parameters.
+/// Supplies a group's entry values, then replaces its users through ordinary helper parameters.
 /// Record handlers bind each entry's resource first; payload/attribute handlers create parameters
-/// here even when an entry has no getter, because those parameters are required by the native ABI.
+/// here even when an entry has no users, because those parameters are required by the native ABI.
 void lowerInputUses(PortableRTInvocationParameter& parameter, const NativeInputUses& uses)
 {
-    for (auto stage : uses.stages)
-        parameter.ensureValue(stage->adapter);
-    for (auto getter : uses.getters)
-        parameter.lower(getter);
+    for (auto entryPoint : uses.entryPoints)
+        parameter.addParameterAndUpdateCallers(entryPoint->adapter);
+    for (auto user : uses.users)
+        parameter.legalize(user);
 }
 
 /// Lowers mutable payload/data access through ordinary references. Empty and scalar payloads
@@ -275,7 +302,7 @@ void lowerAttributeGroups(IRModule* module, NativeInputGroups& groups)
 /// Extracts triangle barycentrics from the native attribute struct and forwards them to helpers.
 void lowerTriangleAttributes(IRModule* module, const NativeInputUses& uses)
 {
-    if (uses.stages.getCount() == 0 && uses.getters.getCount() == 0)
+    if (uses.entryPoints.getCount() == 0 && uses.users.getCount() == 0)
         return;
 
     IRBuilder builder(module);
@@ -316,13 +343,13 @@ void lowerRecordGroups(
         // Check each type once, even when many getters read the same nested record.
         if (isEmptyType(recordType))
         {
-            for (auto getter : uses.getters)
+            for (auto user : uses.users)
             {
-                builder.setInsertBefore(getter);
-                getter->replaceUsesWith(
+                builder.setInsertBefore(user);
+                user->replaceUsesWith(
                     as<IRVoidType>(recordType) ? builder.getVoidValue()
                                                : builder.emitDefaultConstruct(recordType));
-                getter->removeAndDeallocate();
+                user->removeAndDeallocate();
             }
             continue;
         }
@@ -333,46 +360,46 @@ void lowerRecordGroups(
             builder.getType(kIROp_DefaultBufferLayoutType));
         if (isCUDATarget(target))
         {
-            for (auto getter : uses.getters)
+            for (auto user : uses.users)
             {
-                builder.setInsertBefore(getter);
+                builder.setInsertBefore(user);
                 auto recordPointer =
                     builder.emitIntrinsicInst(bufferType, kIROp_GetOptiXSbtDataPtr, 0, nullptr);
-                getter->replaceUsesWith(builder.emitLoad(recordPointer));
-                getter->removeAndDeallocate();
+                user->replaceUsesWith(builder.emitLoad(recordPointer));
+                user->removeAndDeallocate();
             }
             continue;
         }
 
         SLANG_RELEASE_ASSERT(isKhronosTarget(target) || isD3DTarget(target));
         PortableRTInvocationParameter parameter(module, recordType, "record");
-        for (auto stage : uses.stages)
+        for (auto entryPoint : uses.entryPoints)
         {
-            builder.setInsertBefore(stage->adapter);
+            builder.setInsertBefore(entryPoint->adapter);
             auto record = builder.createGlobalParam(bufferType);
             builder.addNameHintDecoration(record, UnownedTerminatedStringSlice("record"));
-            builder.addEntryPointParamDecoration(record, stage->adapter);
+            builder.addEntryPointParamDecoration(record, entryPoint->adapter);
             // Reuse the reflected storage, packing, and binding so the generated shader reads
             // the record bytes that the host prepared for this particular entry.
-            SLANG_RELEASE_ASSERT(stage->recordLayout);
-            builder.addLayoutDecoration(record, stage->recordLayout);
-            builder.setInsertBefore(stage->adapter->getFirstBlock()->getFirstOrdinaryInst());
-            parameter.bind(stage->adapter, builder.emitLoad(record));
+            SLANG_RELEASE_ASSERT(entryPoint->recordLayout);
+            builder.addLayoutDecoration(record, entryPoint->recordLayout);
+            builder.setInsertBefore(entryPoint->adapter->getFirstBlock()->getFirstOrdinaryInst());
+            parameter.bind(entryPoint->adapter, builder.emitLoad(record));
         }
         lowerInputUses(parameter, uses);
     }
 }
 
-/// Lowers native stage inputs after collecting each entry and getter once.
+/// Lowers native stage inputs after collecting each entry point and input user once.
 /// Consider a closest-hit shader that reads input.payload, input.attributes, and input.record.
-/// Each getter joins the group for its kind and type; only that group's entries and getters are
+/// Each user joins the group for its kind and type; only that group's entry points and users are
 /// visited when lowering it. Keep separate maps because attributes and records can share a type
 /// while referring to different invocation values. Each group uses the existing helper-parameter
 /// forwarding algorithm.
 void lowerNativeInputs(
     IRModule* module,
     TargetRequest* target,
-    const List<NativeStage>& stages,
+    const List<NativeEntryPoint>& entryPoints,
     DiagnosticSink* sink)
 {
     NativeInputGroups payloads;
@@ -384,22 +411,27 @@ void lowerNativeInputs(
 
     // Index entries once. Payload and attribute groups also retain unused ABI parameters.
     // Record entries are indexed here, but only a getter activates a record type below.
-    for (const auto& stage : stages)
+    for (const auto& entryPoint : entryPoints)
     {
-        auto kind = Stage(stage.input->getStageKind()->getValue());
+        auto kind = Stage(entryPoint.input->getStageKind()->getValue());
+        // Intersection entries need no payload parameter unless they access the payload.
+        // OptiX permits that access; its users below cause helper forwarding to add the parameter.
+        // D3D/Vulkan reject the access during checking. Metal uses its own lowering path.
         if (kind != Stage::Intersection)
         {
             auto& groups = kind == Stage::Callable ? callableData : payloads;
-            getInputUses(groups, stage.input->getPayloadType()).stages.add(&stage);
+            getInputUses(groups, entryPoint.input->getPayloadType()).entryPoints.add(&entryPoint);
         }
         if (kind == Stage::ClosestHit || kind == Stage::AnyHit)
         {
-            if (getPrimitiveKind(stage.input) == KnownBuiltinDeclName::RayTracingTrianglePrimitive)
-                triangles.stages.add(&stage);
+            if (getPrimitiveKind(entryPoint.input) ==
+                KnownBuiltinDeclName::RayTracingTrianglePrimitive)
+                triangles.entryPoints.add(&entryPoint);
             else
-                getInputUses(attributes, stage.input->getAttributesType()).stages.add(&stage);
+                getInputUses(attributes, entryPoint.input->getAttributesType())
+                    .entryPoints.add(&entryPoint);
         }
-        getInputUses(records, stage.input->getRecordType()).stages.add(&stage);
+        getInputUses(records, entryPoint.input->getRecordType()).entryPoints.add(&entryPoint);
     }
 
     List<IRInst*> operations;
@@ -417,7 +449,7 @@ void lowerNativeInputs(
                 auto& groups =
                     operation->getOp() == kIROp_PortableRTGetPayload ? payloads : callableData;
                 auto type = cast<IRPtrTypeBase>(operation->getDataType())->getValueType();
-                getInputUses(groups, type).getters.add(operation);
+                getInputUses(groups, type).users.add(operation);
                 break;
             }
         case kIROp_PortableRTGetHitAttributes:
@@ -434,20 +466,20 @@ void lowerNativeInputs(
                     operation->removeAndDeallocate();
                 }
                 else
-                    getInputUses(attributes, operation->getDataType()).getters.add(operation);
+                    getInputUses(attributes, operation->getDataType()).users.add(operation);
                 break;
             }
         case kIROp_PortableRTGetTriangleBarycentricCoord:
-            triangles.getters.add(operation);
+            triangles.users.add(operation);
             break;
         case kIROp_PortableRTGetRecord:
             {
                 auto type = operation->getDataType();
                 auto& uses = getInputUses(records, type);
                 // Process record types in getter order and create no resource for stage-only types.
-                if (uses.getters.getCount() == 0)
+                if (uses.users.getCount() == 0)
                     usedRecordTypes.add(type);
-                uses.getters.add(operation);
+                uses.users.add(operation);
                 break;
             }
         case kIROp_PortableRTGetCurveParameter:
@@ -491,7 +523,7 @@ void lowerPortableRayTracingEntryPoints(
     if (!isD3DTarget(target) && !isKhronosTarget(target) && !isCUDATarget(target))
         return;
 
-    List<NativeStage> stages;
+    List<NativeEntryPoint> nativeEntryPoints;
     // Create a wrapper entry point for each selected PortableRT stage.
     // Turn the original entry point into an ordinary function called by the wrapper.
     for (auto& entryPoint : entryPoints)
@@ -515,35 +547,35 @@ void lowerPortableRayTracingEntryPoints(
             }
         }
         entryPoint = createAdapter(module, entryPoint);
-        stages.add({entryPoint, input, recordLayout});
+        nativeEntryPoints.add({entryPoint, input, recordLayout});
     }
 
     // Remove any remaining entry markers and denormal modes from logical implementations.
     // Selected stages now have wrappers; implementations reached only through calls are helpers.
     PortableRT::demoteStageImplementations(module);
 
-    lowerNativeInputs(module, target, stages, sink);
+    lowerNativeInputs(module, target, nativeEntryPoints, sink);
 
     // Rebuild each wrapper's parameter layout now that payload and attribute parameters exist.
     // createAdapter started with an empty parameter layout. Reuse the layouts attached to the
     // generated parameters and preserve the existing result layout.
-    for (auto stage : stages)
+    for (auto entryPoint : nativeEntryPoints)
     {
         IRBuilder builder(module);
         IRStructTypeLayout::Builder paramsTypeLayout(&builder);
-        for (auto param : stage.adapter->getParams())
+        for (auto param : entryPoint.adapter->getParams())
         {
             auto layout =
                 cast<IRVarLayout>(param->findDecoration<IRLayoutDecoration>()->getLayout());
             paramsTypeLayout.addField(builder.createStructKey(), layout);
         }
         IRVarLayout::Builder paramsLayout(&builder, paramsTypeLayout.build());
-        auto layoutDecoration = stage.adapter->findDecoration<IRLayoutDecoration>();
+        auto layoutDecoration = entryPoint.adapter->findDecoration<IRLayoutDecoration>();
         auto oldLayout = cast<IREntryPointLayout>(layoutDecoration->getLayout());
         auto layout =
             builder.getEntryPointLayout(paramsLayout.build(), oldLayout->getResultLayout());
         layoutDecoration->removeAndDeallocate();
-        builder.addLayoutDecoration(stage.adapter, layout);
+        builder.addLayoutDecoration(entryPoint.adapter, layout);
     }
 }
 } // namespace Slang

@@ -657,9 +657,9 @@ void lowerLaunchQueries(IRModule* module)
     LaunchParameter indexParameter(module, type, "dispatchIndex", "thread_position_in_grid");
     LaunchParameter dimensionsParameter(module, type, "dispatchDimensions", "threads_per_grid");
     for (auto index : indices)
-        indexParameter.lower(index);
+        indexParameter.legalize(index);
     for (auto dimension : dimensions)
-        dimensionsParameter.lower(dimension);
+        dimensionsParameter.legalize(dimension);
 }
 
 /// Reports only live operations that require invocation state. Exported helper libraries can

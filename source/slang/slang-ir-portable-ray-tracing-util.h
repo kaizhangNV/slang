@@ -49,11 +49,13 @@ public:
     void bind(IRFunc* function, IRInst* value);
 
     /// Adds a parameter and updates direct callers when this function has no bound value.
+    /// Adds parameters to callers as needed to forward the same invocation value.
     /// Returns this function's value. Call after generic and higher-order specialization.
-    IRInst* ensureValue(IRFunc* function);
+    IRInst* addParameterAndUpdateCallers(IRFunc* function);
 
     /// Replaces an invocation-state operation with the value supplied to its containing function.
-    void lower(IRInst* operation);
+    /// Adds parameters and updates callers as needed, then removes the original operation.
+    void legalize(IRInst* operation);
 
 protected:
     /// Adds an ordinary helper parameter. A target implementation may override this for its

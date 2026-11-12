@@ -700,10 +700,10 @@ void lowerVisibleStageInputs(IRModule* module, const List<VisibleAdapter>& adapt
             if (operation->getOp() != kIROp_MetalRTGetInstanceIndex &&
                 operation->getOp() != kIROp_MetalRTGetInstanceID)
             {
-                parameter.lower(operation);
+                parameter.legalize(operation);
                 continue;
             }
-            auto value = parameter.ensureValue(getParentFunc(operation));
+            auto value = parameter.addParameterAndUpdateCallers(getParentFunc(operation));
             if (value->getDataType() == operation->getDataType())
             {
                 // Only the ordinary two-level getter uses the scalar ABI, and it supplies level 0.
