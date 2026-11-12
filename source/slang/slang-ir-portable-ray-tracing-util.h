@@ -48,9 +48,9 @@ public:
     /// reference into Metal ray_data. Bind roots before lowering their reachable operations.
     void bind(IRFunc* function, IRInst* value);
 
-    /// Returns the invocation value in this function, adding a helper parameter and updating
-    /// its direct callers when necessary. Call after generic and higher-order specialization.
-    IRInst* get(IRFunc* function);
+    /// Adds a parameter and updates direct callers when this function has no bound value.
+    /// Returns this function's value. Call after generic and higher-order specialization.
+    IRInst* ensureValue(IRFunc* function);
 
     /// Replaces an invocation-state operation with the value supplied to its containing function.
     void lower(IRInst* operation);

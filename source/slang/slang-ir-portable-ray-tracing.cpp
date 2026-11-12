@@ -229,7 +229,7 @@ NativeInputUses& getInputUses(NativeInputGroups& groups, IRType* type)
 void lowerInputUses(PortableRTInvocationParameter& parameter, const NativeInputUses& uses)
 {
     for (auto stage : uses.stages)
-        parameter.get(stage->adapter);
+        parameter.ensureValue(stage->adapter);
     for (auto getter : uses.getters)
         parameter.lower(getter);
 }

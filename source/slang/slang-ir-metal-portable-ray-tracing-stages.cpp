@@ -703,7 +703,7 @@ void lowerVisibleStageInputs(IRModule* module, const List<VisibleAdapter>& adapt
                 parameter.lower(operation);
                 continue;
             }
-            auto value = parameter.get(getParentFunc(operation));
+            auto value = parameter.ensureValue(getParentFunc(operation));
             if (value->getDataType() == operation->getDataType())
             {
                 // Only the ordinary two-level getter uses the scalar ABI, and it supplies level 0.

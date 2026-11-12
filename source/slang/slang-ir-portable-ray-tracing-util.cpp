@@ -93,7 +93,7 @@ IRInst* PortableRTInvocationParameter::createParameter(IRFunc* function)
     return parameter;
 }
 
-IRInst* PortableRTInvocationParameter::get(IRFunc* function)
+IRInst* PortableRTInvocationParameter::ensureValue(IRFunc* function)
 {
     if (auto value = m_values.tryGetValue(function))
         return *value;
@@ -117,7 +117,7 @@ IRInst* PortableRTInvocationParameter::get(IRFunc* function)
         List<IRInst*> arguments;
         for (UInt i = 0; i < call->getArgCount(); ++i)
             arguments.add(call->getArg(i));
-        arguments.add(get(getParentFunc(call)));
+        arguments.add(ensureValue(getParentFunc(call)));
         builder.setInsertBefore(call);
         auto replacement = builder.emitCallInst(call->getDataType(), function, arguments);
         replacement->sourceLoc = call->sourceLoc;
@@ -131,7 +131,7 @@ IRInst* PortableRTInvocationParameter::get(IRFunc* function)
 
 void PortableRTInvocationParameter::lower(IRInst* operation)
 {
-    operation->replaceUsesWith(get(getParentFunc(operation)));
+    operation->replaceUsesWith(ensureValue(getParentFunc(operation)));
     operation->removeAndDeallocate();
 }
 
