@@ -172,7 +172,27 @@ bool getRecordStride(
     return true;
 }
 
-/// Reads the schema contract without resolving any stage implementation.
+/// Prepares the Metal traversal settings, stage arguments, and record strides for one schema.
+/// `type` is a TraceProgramDescriptor<Schema> whose associated types have already been resolved
+/// by specialization. The returned Program holds the choices used by createProgramResources
+/// to build descriptor resource types and by lowerTrace/lowerCallable to lower their operations.
+/// Deriving these choices from the schema lets ray generation and separately compiled stage
+/// implementations agree on their arguments, even when an implementation does not use them.
+///
+/// Consider a schema whose miss list contains two shaders with these Record types:
+///
+///     struct SmallRecord { uint value; }
+///     struct LargeRecord { uint values[5]; }
+///
+/// Their application data occupies 4 and 20 bytes. With the 16-byte record header and alignment,
+/// their individual strides are 32 and 48 bytes. The whole miss section uses the larger stride,
+/// 48 bytes, so a runtime miss-record index always advances by the same amount. The hit and
+/// callable sections each get their own maximum stride.
+///
+/// This function also creates the common ray-data header type. Payload storage, descriptor
+/// resources, and traversal callbacks are built later from the returned Program. Shader invoke
+/// bodies are compiled when their entries are selected separately. An unsupported traversal
+/// setting or Record layout is diagnosed at useSite and returns nullptr.
 RefPtr<Program> createProgram(
     IRModule* module,
     TargetRequest* target,
@@ -185,43 +205,67 @@ RefPtr<Program> createProgram(
     auto& program = *result;
     program.sourceType = type;
     program.index = programIndex;
+    // Read the concrete acceleration-structure and motion types, each hit group's Payload,
+    // Record, Primitive and Attributes, and the ordered miss/callable Record lists. The hit
+    // groups also say whether closest-hit, any-hit and intersection shaders are present.
     readSchemaContract(type, program.schema);
+
+    // Translate the declared acceleration-structure topology and motion mode into Metal options
+    // such as instancing and primitive_motion, plus a native traversal-depth limit. Check that
+    // the target supports these choices.
     TraceContextRequirements contextRequirements;
     if (!getTraceContextRequirements(program.schema, target, useSite, sink, contextRequirements))
         return nullptr;
     program.tags = contextRequirements.tags;
     program.maxLevels = contextRequirements.maxLevels;
+    // Every later Payload storage type starts with this header: the records-buffer pointer
+    // and the TraceRay call's SBT offset/stride, which traversal callbacks need to find a record.
     program.header = createHeader(module);
     auto accelerationStructure =
         cast<IRRaytracingAccelerationStructureType>(program.schema.accelerationStructure);
+    // An explicit topology uses instance-path arguments, including an explicit one-level
+    // topology. This describes the source input contract, not whether maxLevels is greater than 1.
     bool hasInstancePath = accelerationStructure->getOperandCount() != 0;
+    // Fix the values passed to each visible shader, such as Record, ray origin and launch index.
+    // Stage and topology determine these arguments; inspecting shader bodies would make the
+    // calling convention depend on which implementations happen to be compiled together.
     program.hitRequirements = getStageContractRequirements(Stage::ClosestHit, hasInstancePath);
     program.missRequirements = getStageContractRequirements(Stage::Miss, hasInstancePath);
     program.callableRequirements = getStageContractRequirements(Stage::Callable, hasInstancePath);
+    // getCarrier uses this union to decide which values travel with the ray's Payload.
+    // CallShader passes its CallableData pointer directly and does not use that ray storage.
     program.allRequirements.combine(program.hitRequirements);
     program.allRequirements.combine(program.missRequirements);
 
     bool firstGeometry = true;
     for (auto& group : program.schema.hitGroups)
     {
+        // A single primitive family permits a Metal geometry assumption. Mixed families leave
+        // geometry Unknown, so the emitted intersector does not assume triangles or another kind.
         auto geometry = getGeometry(group.primitiveType);
         program.geometry =
             firstGeometry
                 ? geometry
                 : (program.geometry == geometry ? geometry : MetalRTGeometryKind::Unknown);
         firstGeometry = false;
+        // Any-hit or intersection requires candidate callbacks during traversal. The Metal
+        // emitter uses this flag to pass the intersection-function table and ray data to intersect.
         program.hasCandidates |= group.anyHit.isPresent || group.intersection.isPresent;
-        // The primitive contract, rather than an implementation's getters, determines which
-        // traversal values can be supplied to independently compiled hit shaders.
+        // A triangle group can expose barycentrics; a curve group can expose curve parameters.
+        // These tags request those traversal values even if no shader body reads them.
         if (geometry == MetalRTGeometryKind::Triangle)
             program.tags |= UInt(MetalRTTag::TriangleData);
         if (geometry == MetalRTGeometryKind::Curve)
             program.tags |= UInt(MetalRTTag::CurveData);
+        // All runtime hit records use one stride, large enough for every group's Record.
+        // getRecordStride includes the header and alignment and rejects unsupported layouts.
         IRIntegerValue stride;
         if (!getRecordStride(target, group.recordType, useSite, sink, stride))
             return nullptr;
         program.hitStride = Math::Max(program.hitStride, stride);
     }
+    // Miss and callable records use separate sections, so compute their maximum strides
+    // independently. Program initializes each stride to the header size, including for void data.
     for (const auto& miss : program.schema.missShaders)
     {
         IRIntegerValue stride;
@@ -236,10 +280,15 @@ RefPtr<Program> createProgram(
             return nullptr;
         program.callableStride = Math::Max(program.callableStride, stride);
     }
+    // Instanced hit shaders need the traversal result's transforms and object-space ray values.
+    // Request those values even if the selected implementations do not read them.
     if ((program.tags & UInt(MetalRTTag::Instancing)) && program.schema.hitGroups.getCount())
         program.tags |= UInt(MetalRTTag::WorldSpaceData);
 
     IRBuilder builder(module);
+    // Use a Metal path type for the instance-path contract and an integer index for ordinary
+    // instancing. createProgramResources uses it for the SBT-contribution lookup when instancing
+    // is enabled.
     program.instancePathType =
         hasInstancePath ? builder.getType(kIROp_MetalRTInstancePath) : builder.getUIntType();
     return result;
