@@ -16,8 +16,8 @@ struct HitContext : rt::IHitContext
 }
 
 // Selecting a stage alongside ray generation emits one visible adapter with its selected name.
-// The ray-generation table contract uses the same scalar instance-ID ABI without synthesizing
-// a second implementation from the schema. The ordinary helper updates the supplied payload.
+// The ray-generation table and the adapter both pass instance IDs through a count and pointers,
+// without synthesizing a second implementation from the schema. The helper updates the payload.
 [noinline]
 void addInstanceID(rt::ClosestHitInput<HitContext> input)
 {
