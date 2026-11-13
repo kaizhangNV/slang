@@ -62,7 +62,7 @@ using namespace PortableRT::Metal;
 ///     +--------------------------------+      +--------------------------------+
 ///     | header (first):                |      | header (first):                |
 ///     |   records -> buffer above      |      |   records -> buffer above      |
-///     |   sbtOffset, sbtStride          |      |   sbtOffset, sbtStride          |
+///     |   sbtOffset, sbtStride         |      |   sbtOffset, sbtStride         |
 ///     +--------------------------------+      +--------------------------------+
 ///     | PayloadA                       |      | PayloadB                       |
 ///     | ray / launch state             |      | ray / launch state             |
