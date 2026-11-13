@@ -36,15 +36,15 @@ using namespace PortableRT::Metal;
 ///     | missFunctions (VFT)          |
 ///     | closestHitFunctions (VFT)    |       Records device buffer
 ///     | callableFunctions (VFT)      |       uint directory (16 bytes)
-///     | records ---------------------+------>+----------------------------------+
-///     | anyHitFunctions (VFT)        |       | [0] instance contributions       |
-///     | intersectionShaders (VFT)    |       | [1] hit records                  |
-///     +------------------------------+       | [2] miss records                 |
-///                                            | [3] callable records             |
-///                                            +----------------------------------+
-///                                            | Sections at those offsets        |
-///                                            | (the host may leave gaps)        |
-///                                            +----------------------------------+
+///     | records ---------------------+------>+------------------------------------+
+///     | anyHitFunctions (VFT)        |       | [0] instance contributions offset  |
+///     | intersectionShaders (VFT)    |       | [1] hit records offset             |
+///     +------------------------------+       | [2] miss records offset            |
+///                                            | [3] callable records offset        |
+///                                            +------------------------------------+
+///                                            | Sections at those offsets          |
+///                                            | (the host may leave gaps)          |
+///                                            +------------------------------------+
 ///
 /// The directory has four uint byte offsets (4 bytes each), relative to the buffer's start.
 /// Each offset locates a whole section. Section [0] stores 4-byte uint words: one contribution
@@ -52,14 +52,15 @@ using namespace PortableRT::Metal;
 /// multilevel instancing. Its total size depends on the host's instance graph; it has no
 /// shader-record headers.
 ///
-/// Each hit, miss, or callable record has this layout. Many runtime records may select the
+/// Each hit, miss, or callable section is an array of records. Many records may select the
 /// same functionIndex while supplying different application Record bytes.
 ///
-///     +------------------------+---------------------+--------------------+---------+
-///     | uint functionIndex     | reserved (12 bytes) | application Record | padding |
-///     +------------------------+---------------------+--------------------+---------+
-///     byte 0                   4                     16
-///     <-- section's byte stride: hitStride, missStride, callableStride -->
+///     record[0] = [16-byte header][Record data][padding]
+///     record[1] = [16-byte header][Record data][padding]
+///     ...
+///     record[N] = [16-byte header][Record data][padding]
+///                        |
+///                        +--> [functionIndex: 4 bytes][reserved: 12 bytes]
 ///
 /// For a given schema, every record in a section has the same byte size, but the three
 /// sections can use different sizes. Each stride includes the header and rounds up to 16:
