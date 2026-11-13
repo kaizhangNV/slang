@@ -338,19 +338,13 @@ RefPtr<TraceProgramDescriptor> createTraceProgramDescriptor(
     // Every Payload carrier starts with the records pointer, AS metadata pointer, and trace
     // SBT offset/stride. Candidate callbacks need these values to select the same hit record.
     programDescriptor.header = createHeader(module);
-    auto accelerationStructure =
-        cast<IRRaytracingAccelerationStructureType>(programDescriptor.schema.accelerationStructure);
-    // An explicit topology uses instance-path arguments, including an explicit one-level
-    // topology. This describes the source input contract, not whether maxLevels is greater than 1.
-    bool hasInstancePath = accelerationStructure->getOperandCount() == 2;
     // Fix the values passed to each visible shader, such as Record, ray origin and launch index.
-    // Stage and topology determine these arguments; inspecting shader bodies would make the
-    // calling convention depend on which implementations happen to be compiled together.
-    programDescriptor.hitRequirements =
-        getStageContractRequirements(Stage::ClosestHit, hasInstancePath);
-    programDescriptor.missRequirements = getStageContractRequirements(Stage::Miss, hasInstancePath);
-    programDescriptor.callableRequirements =
-        getStageContractRequirements(Stage::Callable, hasInstancePath);
+    // Hit stages always receive an instance count and paths. Ordinary instancing supplies one
+    // element, so AccelerationStructure and MultiLevelAccelerationStructure<2> share the same
+    // signature. Inspecting shader bodies would make independently compiled signatures disagree.
+    programDescriptor.hitRequirements = getStageContractRequirements(Stage::ClosestHit);
+    programDescriptor.missRequirements = getStageContractRequirements(Stage::Miss);
+    programDescriptor.callableRequirements = getStageContractRequirements(Stage::Callable);
     // getCarrier uses this union to decide which values travel with the ray's Payload.
     // CallShader passes its CallableData pointer directly and does not use that ray storage.
     programDescriptor.allRequirements.combine(programDescriptor.hitRequirements);
@@ -406,11 +400,11 @@ RefPtr<TraceProgramDescriptor> createTraceProgramDescriptor(
         programDescriptor.tags |= UInt(MetalRTTag::WorldSpaceData);
 
     IRBuilder builder(module);
-    // Use a Metal path type for the instance-path contract and an integer index for ordinary
-    // instancing. createDescriptorResources uses it for the SBT-contribution lookup when instancing
-    // is enabled.
-    programDescriptor.instancePathType =
-        hasInstancePath ? builder.getType(kIROp_MetalRTInstancePath) : builder.getUIntType();
+    // The contribution lookup consumes Metal's native traversal input: a path for deeper
+    // traversal, or one scalar instance index for ordinary instancing.
+    programDescriptor.instancePathType = programDescriptor.maxLevels > 0
+                                             ? builder.getType(kIROp_MetalRTInstancePath)
+                                             : builder.getUIntType();
     return result;
 }
 

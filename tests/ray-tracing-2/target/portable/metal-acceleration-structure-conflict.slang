@@ -48,4 +48,7 @@ void RayGeneration()
 
 // INDEPENDENT-DAG: acceleration_structure<metal::raytracing::instancing>
 // INDEPENDENT-DAG: acceleration_structure<metal::raytracing::instancing, metal::raytracing::primitive_motion>
+// Each scene binds its native AS and instance metadata together through an argument buffer.
+// INDEPENDENT-DAG: PortableRTAccelerationStructureResources{{[A-Za-z0-9_]*}} constant* staticScene{{[_0-9]*}} {{\[\[}}buffer(
+// INDEPENDENT-DAG: PortableRTAccelerationStructureResources{{[A-Za-z0-9_]*}} constant* movingScene{{[_0-9]*}} {{\[\[}}buffer(
 // CONFLICT: error[E38099]

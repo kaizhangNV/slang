@@ -411,6 +411,7 @@ Result IRTypeLayoutRules::calcSizeAndAlignment(
     case kIROp_ComPtrType:
     case kIROp_NativeStringType:
     case kIROp_RaytracingAccelerationStructureType:
+    case kIROp_MetalAccelerationStructureType:
     case kIROp_FuncType:
         // If we don't know the target, we can't tell the size of these types
         // yet as it is target-dependent.

@@ -193,7 +193,7 @@ public interface IAccelerationStructure {}
 /// @par Constraints
 /// Conforms to the sealed `IAccelerationStructure` contract. `Handle` can be stored in ordinary
 /// buffer data and resolves to this resource through the usual descriptor-handle operations.
-__intrinsic_type(RaytracingAccelerationStructure, 0)
+__intrinsic_type(RaytracingAccelerationStructure, 2)
 [KnownBuiltin("RayTracingAccelerationStructure")]
 public struct AccelerationStructure
     : IAccelerationStructure, __IDynamicResourceCastable<__DynamicResourceKind.General>
@@ -235,8 +235,8 @@ internal interface IMultiLevelAccelerationStructure : IAccelerationStructure
 /// Represents Metal traversal with an explicit maximum acceleration-structure depth.
 ///
 /// `maxLevelCount` includes the primitive acceleration structure and every instance level on the
-/// path to it. A value of one represents direct primitive-AS traversal; larger values enable
-/// Metal's multi-level traversal. A hit path therefore contains at most `maxLevelCount - 1`
+/// path to it. One represents direct primitive-AS traversal, two uses ordinary instancing,
+/// and larger values enable Metal's multi-level traversal. A hit path therefore contains at most `maxLevelCount - 1`
 /// instances. Like `AccelerationStructure`, this binds a Metal argument buffer containing the
 /// native acceleration structure and its instance-contribution data for the whole path.
 ///
@@ -245,10 +245,10 @@ internal interface IMultiLevelAccelerationStructure : IAccelerationStructure
 ///
 /// @par Constraints
 /// Requires Metal and conforms to the internal `IMultiLevelAccelerationStructure` contract,
-/// which inherits `IAccelerationStructure`. The parameter is declared as `int` with no
-/// language-level range constraint; the caller must select a depth supported by Metal.
+/// which inherits `IAccelerationStructure`. The level count must be in [1, 32]. A generic or
+/// link-time count is checked when specialization or linking supplies its concrete value.
 [require(metal)]
-__intrinsic_type(RaytracingAccelerationStructure, -1)
+__intrinsic_type(RaytracingAccelerationStructure)
 [KnownBuiltin("RayTracingMultiLevelAccelerationStructure")]
 public struct MultiLevelAccelerationStructure<let maxLevelCount : int>
     : IMultiLevelAccelerationStructure

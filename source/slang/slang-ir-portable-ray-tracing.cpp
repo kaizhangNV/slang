@@ -24,16 +24,21 @@ void lowerNativeAccelerationStructureTypes(IRModule* module)
     List<IRType*> portableTypes;
     for (auto inst : module->getGlobalInsts())
     {
-        if (inst->getOp() != kIROp_RaytracingAccelerationStructureType || !inst->getOperandCount())
+        if (inst->getOp() != kIROp_RaytracingAccelerationStructureType)
             continue;
-        // Multi-level traversal is Metal-only and cannot reach this native-target pass.
-        SLANG_RELEASE_ASSERT(inst->getOperandCount() == 1 && getIntVal(inst->getOperand(0)) == 0);
+        SLANG_RELEASE_ASSERT(inst->getOperandCount() == 1);
+        auto levelCount = getIntVal(inst->getOperand(0));
+        if (levelCount == -1)
+            continue;
+        // Only ordinary two-level portable traversal is supported by native RT targets.
+        SLANG_RELEASE_ASSERT(levelCount == 2);
         portableTypes.add(cast<IRType>(inst));
     }
     if (!portableTypes.getCount())
         return;
     IRBuilder builder(module);
-    auto nativeType = builder.getType(kIROp_RaytracingAccelerationStructureType);
+    IRInst* legacy = builder.getIntValue(builder.getIntType(), -1);
+    auto nativeType = builder.getType(kIROp_RaytracingAccelerationStructureType, 1, &legacy);
     for (auto type : portableTypes)
     {
         type->replaceUsesWith(nativeType);

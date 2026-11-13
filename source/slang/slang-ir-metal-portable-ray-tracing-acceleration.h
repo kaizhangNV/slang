@@ -15,7 +15,8 @@ namespace Metal
 {
 
 /// Describes the normalized trace-wide topology and motion signature. Optional stage-data tags
-/// are added from the primitive/stage contracts; maxLevels is zero for ordinary instancing/N=1.
+/// are added from the primitive/stage contracts; maxLevels is zero for primitive traversal/N=1 and
+/// ordinary instancing/N=2.
 struct TraceContextRequirements
 {
     UInt tags = UInt(MetalRTTag::Instancing);

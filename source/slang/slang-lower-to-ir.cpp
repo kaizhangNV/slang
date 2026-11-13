@@ -2922,8 +2922,8 @@ struct ValLoweringVisitor : ValVisitor<ValLoweringVisitor, LoweredValInfo, Lower
         IROp op = IROp(intrinsicTypeModifier->irOp);
         List<IRInst*> operands;
         // Fixed operands distinguish representations that share an opcode. For example,
-        // portable AccelerationStructure declares operand 0, while MultiLevel<N> declares -1
-        // followed by its generic N argument. The core native type has neither operand.
+        // the core acceleration structure declares -1 and portable AccelerationStructure declares
+        // 2. MultiLevel<N> instead supplies its level count through the generic argument below.
         for (auto operand : intrinsicTypeModifier->irOperands)
             operands.add(getBuilder()->getIntValue(getBuilder()->getIntType(), operand));
         // If there are any substitutions attached to the declRef,
@@ -2936,6 +2936,15 @@ struct ValLoweringVisitor : ValVisitor<ValLoweringVisitor, LoweredValInfo, Lower
                     SLANG_ASSERT(argVal);
                     operands.add(argVal);
                 });
+        if (PortableRT::isAccelerationStructureType(type))
+        {
+            SLANG_RELEASE_ASSERT(operands.getCount() == 1);
+            return PortableRT::lowerAccelerationStructureType(
+                getBuilder(),
+                type,
+                operands[0],
+                context->getSink());
+        }
         if (auto descriptorType = as<TraceProgramDescriptorType>(type))
         {
             // Lower the schema types needed for backend synthesis before creating the descriptor.

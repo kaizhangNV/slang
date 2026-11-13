@@ -6,6 +6,7 @@
 #include "slang-lookup.h"
 #include "slang-mangle.h"
 #include "slang-module.h"
+#include "slang-rich-diagnostics.h"
 #include "slang-session.h"
 #include "slang-syntax.h"
 
@@ -292,6 +293,57 @@ bool isAccelerationStructureType(Type* type)
     default:
         return false;
     }
+}
+
+IRType* lowerAccelerationStructureType(
+    IRBuilder* builder,
+    Type* type,
+    IRInst* levelCount,
+    DiagnosticSink* sink)
+{
+    auto typeDecl = isDeclRefTypeOf<AggTypeDecl>(type).getDecl();
+    auto role = _getBuiltin(typeDecl);
+    SLANG_RELEASE_ASSERT(
+        role == KnownBuiltinDeclName::RayTracingAccelerationStructure ||
+        role == KnownBuiltinDeclName::RayTracingMultiLevelAccelerationStructure);
+    bool explicitDepth = role == KnownBuiltinDeclName::RayTracingMultiLevelAccelerationStructure;
+    auto literal = as<IRIntLit>(levelCount);
+    if (explicitDepth && literal && (literal->getValue() < 1 || literal->getValue() > 32))
+    {
+        // Diagnose before type construction: MultiLevel<-1> would otherwise become the same IR
+        // type as the legacy API. The error stops successful compilation; lowering can continue
+        // using its ordinary recovery path after reporting the invalid source argument.
+        auto sourceLoc = builder->getSourceLocInfo();
+        sink->diagnose(Diagnostics::InvalidMetalRayTracingMaxLevels{
+            .levelCount = Int(literal->getValue()),
+            .location = sourceLoc ? sourceLoc->sourceLoc : typeDecl->loc});
+    }
+    auto result = builder->getType(kIROp_RaytracingAccelerationStructureType, 1, &levelCount);
+    if (explicitDepth && !literal)
+    {
+        // Consider a generic struct field of type MultiLevel<N>. N is still symbolic here,
+        // so specialization must check its range. Put the assertion beside the canonical type,
+        // not at the current source use: that use might be inside a struct or a dead branch,
+        // while later uses reuse the same cached type. This also preserves link-time constants.
+        IRBuilder checkBuilder(builder->getModule());
+        checkBuilder.setSourceLocInfo(builder->getSourceLocInfo());
+        checkBuilder.setInsertAfter(result);
+        auto boolType = checkBuilder.getBoolType();
+        auto one = checkBuilder.getIntValue(levelCount->getDataType(), 1);
+        auto maximum = checkBuilder.getIntValue(levelCount->getDataType(), 32);
+        auto lowerBound = checkBuilder.emitConstexprLeq(boolType, one, levelCount);
+        auto upperBound = checkBuilder.emitConstexprLeq(boolType, levelCount, maximum);
+        IRInst* operands[] = {
+            checkBuilder.emitConstexprAnd(boolType, lowerBound, upperBound),
+            checkBuilder.getStringValue(
+                toSlice("MultiLevelAccelerationStructure requires a level count in [1, 32]"))};
+        checkBuilder.emitIntrinsicInst(
+            checkBuilder.getVoidType(),
+            kIROp_StaticAssert,
+            SLANG_COUNT_OF(operands),
+            operands);
+    }
+    return result;
 }
 
 Stage getStageInputKind(AggTypeDecl* typeDecl)

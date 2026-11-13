@@ -939,4 +939,5 @@ return {
 	-- Retired: descriptor schema types are now ordinary operands of TraceProgramDescriptor.
 	["Decoration.PortableRTProgramDecoration"] = 980,
 	["Layout.TypeLayout.traceProgramDescriptorTypeLayout"] = 981,
+	["Type.UntypedBufferResourceType.MetalAccelerationStructure"] = 982,
 }

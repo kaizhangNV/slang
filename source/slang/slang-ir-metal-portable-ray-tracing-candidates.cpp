@@ -738,8 +738,8 @@ void initializeInstancePath(
     SLANG_RELEASE_ASSERT(indices && ids);
     auto uintType = builder.getUIntType();
     bool indexed = indices->getDataType()->getOp() == kIROp_MetalRTInstancePath;
-    // maxLevels belongs to the explicit multilevel contract. Ordinary instancing uses scalar
-    // builtins and has one path element even when no max_levels tag is present.
+    // Only traversal deeper than two levels uses native array_ref paths. Two-level traversal
+    // uses scalar builtins and supplies one element to the same provider path ABI.
     SLANG_RELEASE_ASSERT(!indexed || maxLevels > 1);
     auto capacity = indexed ? maxLevels - 1 : 1;
     auto arrayType = builder.getArrayType(uintType, builder.getIntValue(uintType, capacity));

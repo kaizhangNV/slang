@@ -842,33 +842,28 @@ void MetalSourceEmitter::emitMetalRTTraceDispatch(IRMetalRTTraceDispatch* trace)
         {
             m_writer->emit(", _slang_result.geometry_id");
         }
-        if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::InstanceIndex))
-        {
-            m_writer->emit(hasInstancing ? ", _slang_result.instance_id" : ", 0U");
-            if (maxLevels > 0)
-                m_writer->emit("[_slang_result.instance_count - 1]");
-        }
-        if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::InstanceID))
-        {
-            m_writer->emit(hasInstancing ? ", _slang_result.user_instance_id" : ", 0U");
-            if (maxLevels > 0)
-                m_writer->emit("[_slang_result.instance_count - 1]");
-        }
         if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::InstanceCount))
         {
-            m_writer->emit(hasInstancing ? ", _slang_result.instance_count" : ", 0u");
+            m_writer->emit(
+                !hasInstancing  ? ", 0u"
+                : maxLevels > 0 ? ", _slang_result.instance_count"
+                                : ", 1u");
         }
         if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::InstanceIndexAtLevel))
         {
+            // Ordinary instancing has a scalar builtin. Its address is a one-element path,
+            // matching the same visible-function signature used by MultiLevel<2> providers.
             m_writer->emit(
-                hasInstancing ? ", (thread uint*)_slang_result.instance_id"
-                              : ", (thread uint*)nullptr");
+                !hasInstancing  ? ", (thread uint*)nullptr"
+                : maxLevels > 0 ? ", (thread uint*)_slang_result.instance_id"
+                                : ", &_slang_result.instance_id");
         }
         if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::InstanceIDAtLevel))
         {
             m_writer->emit(
-                hasInstancing ? ", (thread uint*)_slang_result.user_instance_id"
-                              : ", (thread uint*)nullptr");
+                !hasInstancing  ? ", (thread uint*)nullptr"
+                : maxLevels > 0 ? ", (thread uint*)_slang_result.user_instance_id"
+                                : ", &_slang_result.user_instance_id");
         }
         if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::ObjectSpaceRay))
         {
@@ -2146,15 +2141,18 @@ void MetalSourceEmitter::emitSimpleTypeImpl(IRType* type)
             m_writer->emit("uint32_t device*");
             break;
         case kIROp_RaytracingAccelerationStructureType:
+        case kIROp_MetalAccelerationStructureType:
             {
-                // Traced resources carry a canonical physical motion mask. An untouched source
-                // resource still has its topology alone, or no operands for ordinary instancing.
-                SLANG_RELEASE_ASSERT(type->getOperandCount() <= 2);
                 IRIntegerValue tags = IRIntegerValue(MetalRTTag::Instancing);
-                if (type->getOperandCount() == 2)
-                    tags = getIntVal(type->getOperand(1));
-                else if (type->getOperandCount() == 1 && getIntVal(type->getOperand(0)) == 1)
-                    tags = 0;
+                if (auto metalType = as<IRMetalAccelerationStructureType>(type))
+                    tags = metalType->getTagMask()->getValue();
+                else
+                {
+                    // Only the core native AS type reaches emission here. Portable source types
+                    // have already become argument buffers containing a Metal AS field.
+                    SLANG_RELEASE_ASSERT(
+                        type->getOperandCount() == 1 && getIntVal(type->getOperand(0)) == -1);
+                }
                 m_writer->emit("metal::raytracing::acceleration_structure<");
                 _emitMetalRayTracingTagList(m_writer, tags, 0);
                 m_writer->emit(">");

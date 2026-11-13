@@ -66,6 +66,15 @@ bool isExecutableStageInterface(InterfaceDecl* interfaceDecl);
 /// The core RaytracingAccelerationStructure is a separate native resource type.
 bool isAccelerationStructureType(Type* type);
 
+/// Lowers a portable acceleration-structure type, checking an explicit maximum depth while its
+/// source declaration still distinguishes MultiLevel<-1> from the legacy native AS(-1) type.
+/// A symbolic depth receives an ordinary static assertion in the lowered type's hoisted scope.
+IRType* lowerAccelerationStructureType(
+    IRBuilder* builder,
+    Type* type,
+    IRInst* levelCount,
+    DiagnosticSink* sink);
+
 /// Returns the stage named by the input struct's KnownBuiltin annotation, or Stage::Unknown.
 Stage getStageInputKind(AggTypeDecl* typeDecl);
 

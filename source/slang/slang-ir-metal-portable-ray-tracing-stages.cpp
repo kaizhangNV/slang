@@ -112,8 +112,6 @@ enum class ParameterKind
     WorldDirection,
     PrimitiveIndex,
     GeometryIndex,
-    InstanceIndex,
-    InstanceID,
     InstanceCount,
     InstanceIndices,
     InstanceIDs,
@@ -213,14 +211,6 @@ List<ParameterInfo> getVisibleParameters(
              uintType,
              "geometryIndex",
              kIROp_MetalRTGetGeometryIndex});
-    if (requirements.has(MetalRTStageRequirement::InstanceIndex))
-        result.add(
-            {ParameterKind::InstanceIndex,
-             uintType,
-             "instanceIndex",
-             kIROp_MetalRTGetInstanceIndex});
-    if (requirements.has(MetalRTStageRequirement::InstanceID))
-        result.add({ParameterKind::InstanceID, uintType, "instanceID", kIROp_MetalRTGetInstanceID});
     if (requirements.has(MetalRTStageRequirement::InstanceCount))
         result.add(
             {ParameterKind::InstanceCount,
@@ -398,7 +388,7 @@ void collectStageInputOperations(IRFunc* invoke, List<IRInst*>& operations)
             operations.add(operation);
 }
 
-StageRequirements getStageContractRequirements(Stage stage, bool multiLevel)
+StageRequirements getStageContractRequirements(Stage stage)
 {
     StageRequirements result;
     result.add(MetalRTStageRequirement::Record);
@@ -429,17 +419,9 @@ StageRequirements getStageContractRequirements(Stage stage, bool multiLevel)
     result.add(MetalRTStageRequirement::ObjectSpaceRay);
     result.add(MetalRTStageRequirement::ObjectToWorld);
     result.add(MetalRTStageRequirement::WorldToObject);
-    if (multiLevel)
-    {
-        result.add(MetalRTStageRequirement::InstanceCount);
-        result.add(MetalRTStageRequirement::InstanceIndexAtLevel);
-        result.add(MetalRTStageRequirement::InstanceIDAtLevel);
-    }
-    else
-    {
-        result.add(MetalRTStageRequirement::InstanceIndex);
-        result.add(MetalRTStageRequirement::InstanceID);
-    }
+    result.add(MetalRTStageRequirement::InstanceCount);
+    result.add(MetalRTStageRequirement::InstanceIndexAtLevel);
+    result.add(MetalRTStageRequirement::InstanceIDAtLevel);
     return result;
 }
 
@@ -723,23 +705,13 @@ void lowerVisibleStageInputs(IRModule* module, const List<VisibleAdapter>& adapt
                 continue;
             }
             auto value = parameter.addParameterAndUpdateCallers(getParentFunc(operation));
-            if (value->getDataType() == operation->getDataType())
-            {
-                // Only the ordinary two-level getter uses the scalar ABI, and it supplies level 0.
-                SLANG_RELEASE_ASSERT(cast<IRIntLit>(operation->getOperand(0))->getValue() == 0);
-                operation->replaceUsesWith(value);
-            }
-            else
-            {
-                // MultiLevelAccelerationStructure<1> has an empty path and works on targets
-                // predating Metal's array_ref type. All multilevel VFTs therefore pass plain
-                // thread pointers plus a count, while native traversal owns their storage.
-                IRBuilder builder(module);
-                SLANG_RELEASE_ASSERT(as<IRPtrType>(value->getDataType()));
-                builder.setInsertBefore(operation);
-                operation->replaceUsesWith(
-                    builder.emitLoad(builder.emitGetOffsetPtr(value, operation->getOperand(0))));
-            }
+            // Every hit-stage ABI passes a thread pointer plus a count. Ordinary instancing
+            // supplies one element, and its scalar source getter indexes that element at zero.
+            IRBuilder builder(module);
+            SLANG_RELEASE_ASSERT(as<IRPtrType>(value->getDataType()));
+            builder.setInsertBefore(operation);
+            operation->replaceUsesWith(
+                builder.emitLoad(builder.emitGetOffsetPtr(value, operation->getOperand(0))));
             operation->removeAndDeallocate();
         }
     }

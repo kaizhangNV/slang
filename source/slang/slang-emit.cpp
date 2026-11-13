@@ -701,8 +701,10 @@ void calcRequiredLoweringPassSet(
         break;
     case kIROp_RaytracingAccelerationStructureType:
         // Portable AS declarations need target representation even when this entry does not
-        // trace. The native RayQuery resource has no operands and keeps its existing binding.
-        if (inst->getOperandCount() != 0)
+        // trace. The native RayQuery resource uses -1 and keeps its existing binding.
+        SLANG_RELEASE_ASSERT(inst->getOperandCount() == 1);
+        if (auto levelCount = as<IRIntLit>(inst->getOperand(0));
+            !levelCount || levelCount->getValue() != -1)
             result.portableRayTracing = true;
         break;
     case kIROp_MatrixType:

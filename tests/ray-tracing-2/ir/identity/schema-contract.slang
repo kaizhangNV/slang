@@ -18,11 +18,11 @@
 // CHECK: result code = 0
 // CHECK: ### AFTER specializeModule:
 // CHECK: func %copyDescriptor : Func(TraceProgramDescriptor(%Schema, [[WITNESS:%[A-Za-z0-9_]+]],
-// CHECK-SAME: RaytracingAccelerationStructure(0 : Int), %rtx5FNoMotion, [[HITS:%[A-Za-z0-9_]+]], [[MISSES:%[A-Za-z0-9_]+]], [[CALLABLES:%[A-Za-z0-9_]+]]),
+// CHECK-SAME: RaytracingAccelerationStructure(2 : Int), %rtx5FNoMotion, [[HITS:%[A-Za-z0-9_]+]], [[MISSES:%[A-Za-z0-9_]+]], [[CALLABLES:%[A-Za-z0-9_]+]]),
 // CHECK-SAME: TraceProgramDescriptor(%Schema, [[WITNESS]],
-// CHECK-SAME: RaytracingAccelerationStructure(0 : Int), %rtx5FNoMotion, [[HITS]], [[MISSES]], [[CALLABLES]]))
+// CHECK-SAME: RaytracingAccelerationStructure(2 : Int), %rtx5FNoMotion, [[HITS]], [[MISSES]], [[CALLABLES]]))
 // CHECK: param %descriptor : TraceProgramDescriptor(%Schema, [[WITNESS]],
-// CHECK-SAME: RaytracingAccelerationStructure(0 : Int), %rtx5FNoMotion, [[HITS]], [[MISSES]], [[CALLABLES]])):
+// CHECK-SAME: RaytracingAccelerationStructure(2 : Int), %rtx5FNoMotion, [[HITS]], [[MISSES]], [[CALLABLES]])):
 
 // Miss and callable lists retain only their entry types and Record types. Hit-only operands
 // are empty packs. The refined Miss interface still resolves to Record = uint.
@@ -49,9 +49,9 @@
 // CHECK-NEXT: [nameHint("rt.HitGroupList")]
 // CHECK-NEXT: struct [[HITS]] : Type;
 // CHECK: let %program : TraceProgramDescriptor(%Schema, [[WITNESS]],
-// CHECK-SAME: RaytracingAccelerationStructure(0 : Int), %rtx5FNoMotion, [[HITS]], [[MISSES]], [[CALLABLES]]) = global_param
+// CHECK-SAME: RaytracingAccelerationStructure(2 : Int), %rtx5FNoMotion, [[HITS]], [[MISSES]], [[CALLABLES]]) = global_param
 // CHECK: let {{%[A-Za-z0-9_]+}} : TraceProgramDescriptor(%Schema, [[WITNESS]],
-// CHECK-SAME: RaytracingAccelerationStructure(0 : Int), %rtx5FNoMotion, [[HITS]], [[MISSES]], [[CALLABLES]]) = call %copyDescriptor(%program)
+// CHECK-SAME: RaytracingAccelerationStructure(2 : Int), %rtx5FNoMotion, [[HITS]], [[MISSES]], [[CALLABLES]]) = call %copyDescriptor(%program)
 
 // Scan the entire specialized module separately: the descriptor's type dependencies must not
 // retain the unselected invoke bodies or their shared helper. Metal intentionally

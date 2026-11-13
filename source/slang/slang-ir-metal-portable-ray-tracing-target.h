@@ -35,8 +35,6 @@ enum class MetalRTStageRequirement : UInt
     CallableDispatch = 1 << 9,
     PrimitiveIndex = 1 << 10,
     GeometryIndex = 1 << 11,
-    InstanceIndex = 1 << 12,
-    InstanceID = 1 << 13,
     ObjectSpaceRay = 1 << 14,
     ObjectToWorld = 1 << 15,
     WorldToObject = 1 << 16,

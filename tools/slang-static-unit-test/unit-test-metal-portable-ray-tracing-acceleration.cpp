@@ -16,13 +16,23 @@ SLANG_UNIT_TEST(metalPortableAccelerationStructureComponents)
     auto module = fixture.getModule();
     IRBuilder builder(module);
     builder.setInsertInto(module);
-    IRInst* topology = builder.getIntValue(builder.getIntType(), 0);
+    IRInst* topology = builder.getIntValue(builder.getIntType(), 2);
     auto sourceType = builder.getType(kIROp_RaytracingAccelerationStructureType, 1, &topology);
-    auto nativeType = builder.getType(kIROp_RaytracingAccelerationStructureType, 0, nullptr);
+    IRInst* nativeTopology = builder.getIntValue(builder.getIntType(), -1);
+    auto nativeType =
+        builder.getType(kIROp_RaytracingAccelerationStructureType, 1, &nativeTopology);
     auto nativeScene = builder.createGlobalParam(nativeType);
     auto first = builder.createGlobalParam(sourceType);
     auto second = builder.createGlobalParam(sourceType);
     auto independent = builder.createGlobalParam(sourceType);
+    // Different traversal depths share the same native AS type when their tags agree.
+    IRInst* threeLevels = builder.getIntValue(builder.getIntType(), 3);
+    IRInst* fourLevels = builder.getIntValue(builder.getIntType(), 4);
+    auto threeLevelType =
+        builder.getType(kIROp_RaytracingAccelerationStructureType, 1, &threeLevels);
+    auto fourLevelType = builder.getType(kIROp_RaytracingAccelerationStructureType, 1, &fourLevels);
+    auto threeLevelScene = builder.createGlobalParam(threeLevelType);
+    auto fourLevelScene = builder.createGlobalParam(fourLevelType);
     auto condition = builder.createGlobalParam(builder.getBoolType());
     auto fieldKey = builder.createStructKey();
     auto holder = builder.createStructType();
@@ -62,6 +72,8 @@ SLANG_UNIT_TEST(metalPortableAccelerationStructureComponents)
     auto moving = UInt(MetalRTTag::Instancing) | UInt(MetalRTTag::PrimitiveMotion);
     uses.add({loaded, moving, loaded});
     uses.add({independent, UInt(MetalRTTag::Instancing), independent});
+    uses.add({threeLevelScene, moving, threeLevelScene});
+    uses.add({fourLevelScene, moving, fourLevelScene});
     DiagnosticSink sink;
     List<PortableRT::Metal::MetalRTAccelerationStructureResources> resources;
     SLANG_CHECK_ABORT(
@@ -70,16 +82,28 @@ SLANG_UNIT_TEST(metalPortableAccelerationStructureComponents)
     auto physicalType = loaded->getDataType();
     SLANG_CHECK(physicalType != sourceType);
     SLANG_CHECK(physicalType->getOp() == kIROp_ParameterBlockType);
+    SLANG_CHECK(threeLevelScene->getDataType() == physicalType);
+    SLANG_CHECK(fourLevelScene->getDataType() == physicalType);
+    SLANG_CHECK(resources.getCount() == 2); // One wrapper per moving/static native tag mask.
+    // Source types retain their depth for traversal even when native resource tags agree.
+    SLANG_CHECK(sourceType->getOperandCount() == 1);
+    SLANG_CHECK(getIntVal(sourceType->getOperand(0)) == 2);
+    SLANG_CHECK(threeLevelType != fourLevelType);
+    SLANG_CHECK(threeLevelType->getOperandCount() == 1);
+    SLANG_CHECK(getIntVal(threeLevelType->getOperand(0)) == 3);
+    SLANG_CHECK(fourLevelType->getOperandCount() == 1);
+    SLANG_CHECK(getIntVal(fourLevelType->getOperand(0)) == 4);
     bool foundMovingResources = false;
     for (const auto& resource : resources)
     {
         if (resource.physicalParameterBlockType != physicalType)
             continue;
         foundMovingResources = true;
-        auto nativeAS = resource.nativeASField->getFieldType();
-        SLANG_CHECK(nativeAS->getOp() == kIROp_RaytracingAccelerationStructureType);
-        SLANG_CHECK(nativeAS->getOperandCount() == 2);
-        SLANG_CHECK(getIntVal(nativeAS->getOperand(1)) == moving);
+        auto nativeAS =
+            as<IRMetalAccelerationStructureType>(resource.nativeASField->getFieldType());
+        SLANG_CHECK_ABORT(nativeAS);
+        SLANG_CHECK(nativeAS->getOperandCount() == 1); // Only the native tag mask remains.
+        SLANG_CHECK(nativeAS->getTagMask()->getValue() == moving);
         auto metadata = as<IRPtrTypeBase>(resource.metadataField->getFieldType());
         SLANG_CHECK_ABORT(metadata);
         SLANG_CHECK(metadata->getValueType() == builder.getUIntType());
@@ -110,7 +134,7 @@ SLANG_UNIT_TEST(metalPortableAccelerationStructureArrays)
     auto module = fixture.getModule();
     IRBuilder builder(module);
     builder.setInsertInto(module);
-    IRInst* topology = builder.getIntValue(builder.getIntType(), 0);
+    IRInst* topology = builder.getIntValue(builder.getIntType(), 2);
     auto sourceType = builder.getType(kIROp_RaytracingAccelerationStructureType, 1, &topology);
     auto count = builder.getIntValue(builder.getIntType(), 2);
     auto stride = builder.getIntValue(builder.getIntType(), 16);
@@ -170,7 +194,7 @@ SLANG_UNIT_TEST(metalPortableAccelerationStructureMotionConflict)
     auto module = fixture.getModule();
     IRBuilder builder(module);
     builder.setInsertInto(module);
-    IRInst* topology = builder.getIntValue(builder.getIntType(), 0);
+    IRInst* topology = builder.getIntValue(builder.getIntType(), 2);
     auto sourceType = builder.getType(kIROp_RaytracingAccelerationStructureType, 1, &topology);
     auto first = builder.createGlobalParam(sourceType);
     List<PortableRT::Metal::AccelerationStructureUse> uses;
@@ -192,7 +216,7 @@ SLANG_UNIT_TEST(metalPortableAccelerationStructureHandles)
     auto module = fixture.getModule();
     IRBuilder builder(module);
     builder.setInsertInto(module);
-    IRInst* topology = builder.getIntValue(builder.getIntType(), 0);
+    IRInst* topology = builder.getIntValue(builder.getIntType(), 2);
     auto sourceType = builder.getType(kIROp_RaytracingAccelerationStructureType, 1, &topology);
     IRInst* resourceType = sourceType;
     auto handleType = builder.getType(kIROp_DescriptorHandleType, 1, &resourceType);

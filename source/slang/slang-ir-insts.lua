@@ -537,14 +537,25 @@ local insts = {
 							},
 						},
 					},
-					-- The core native resource has no operands. Portable source types use [0]
-					-- for AccelerationStructure and [-1, N] for MultiLevelAccelerationStructure<N>.
-					-- The family marker keeps even invalid MultiLevel<0> distinct from the ordinary
-					-- type, so target lowering can diagnose its depth. Native RT targets erase [0].
-					-- Metal replaces portable types with argument buffers and represents their
-					-- native AS field using [topology, tagMask], where both values are nonnegative.
-					-- Topology is zero for ordinary instancing; tagMask selects instancing/motion.
-					{ RaytracingAccelerationStructure = { struct_name = "RaytracingAccelerationStructureType" } },
+					-- Source types have one operand: -1 for the core native resource, or the maximum
+					-- level count N in [1, 32] for portable traversal. AccelerationStructure and
+					-- MultiLevelAccelerationStructure<2> share [2]. Native RT targets erase N to -1.
+					-- Metal replaces portable types with argument buffers. N=1 selects primitive
+					-- traversal, N=2 ordinary instancing, and N>2 multilevel traversal.
+					{
+						RaytracingAccelerationStructure = {
+							struct_name = "RaytracingAccelerationStructureType",
+							operands = { { "maxLevelCount" } },
+						},
+					},
+					-- The lowered Metal resource needs only instancing/motion tags. Traversal
+					-- depth stays in the source schema and the intersector/table configuration.
+					{
+						MetalAccelerationStructure = {
+							struct_name = "MetalAccelerationStructureType",
+							operands = { { "tagMask", "IRIntLit" } },
+						},
+					},
 					{
 						MetalIntersectionFunctionTable = {
 							operands = { { "tagMask", "IRIntLit" }, { "maxLevels", "IRIntLit" } },

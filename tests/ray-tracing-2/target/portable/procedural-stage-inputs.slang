@@ -96,9 +96,11 @@ struct ProceduralIntersection : rt::IIntersectionShader
 // DXIL: define void @
 
 // Metal's closest-hit adapter forwards custom attributes and the invocation's hit IDs.
+// METALCH: uint rt_ClosestHitInput_instanceID_get_{{[0-9]+}}(uint thread* [[INSTANCE_PATH:invocationValue_[0-9]+]])
+// METALCH: return *([[INSTANCE_PATH]] + 0U);
 // METALCH: visible]] void ProceduralClosestHit_closesthit(void thread* [[P:payload_[0-9]+]], void thread* [[A:attributes_[0-9]+]],
 // METALCH-SAME: uint [[PRIMITIVE:primitiveIndex_[0-9]+]],
-// METALCH-SAME: uint [[INSTANCE:instanceID_[0-9]+]],
+// METALCH-SAME: uint thread* [[INSTANCE:instanceIDs_[0-9]+]],
 // METALCH: *(Attributes_{{[0-9]+}} thread*)((ulong)([[A]]))
 // METALCH: ProceduralClosestHit_invoke_{{[0-9]+}}({{.*}}, [[PRIMITIVE]], [[INSTANCE]]);
 // Any-hit reads custom attributes from the candidate and reports IgnoreHit via its result.

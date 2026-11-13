@@ -20,33 +20,29 @@ bool getTraceContextRequirements(
 {
     result = {};
     auto structure = cast<IRRaytracingAccelerationStructureType>(schema.accelerationStructure);
-    // Ordinary portable instancing is [0]; explicit multilevel topology is [-1, levelCount].
-    // Physical AS types are produced later and must never replace the schema's source type.
-    SLANG_RELEASE_ASSERT(
-        structure->getOperandCount() == 1 ||
-        (structure->getOperandCount() == 2 && getIntVal(structure->getOperand(0)) == -1));
-    if (structure->getOperandCount() == 2)
+    // Source portable types retain only their maximum depth. Both AccelerationStructure and
+    // MultiLevelAccelerationStructure<2> use ordinary Metal instancing, whose scalar builtins
+    // also supply a one-element path to the fixed stage ABI. Only deeper traversal needs 3.1.
+    SLANG_RELEASE_ASSERT(structure->getOperandCount() == 1);
+    auto levels = as<IRIntLit>(structure->getOperand(0));
+    if (!levels || levels->getValue() < 1 || levels->getValue() > 32)
     {
-        auto levels = as<IRIntLit>(structure->getOperand(1));
-        if (!levels || levels->getValue() < 1 || levels->getValue() > 32)
+        sink->diagnose(Diagnostics::InvalidMetalRayTracingMaxLevels{
+            .levelCount = levels ? Int(levels->getValue()) : Int(-1),
+            .location = useSite->sourceLoc});
+        return false;
+    }
+    if (levels->getValue() == 1)
+        result.tags = 0;
+    else if (levels->getValue() > 2)
+    {
+        if (!target->getTargetCaps().implies(CapabilityAtom::metallib_3_1))
         {
-            sink->diagnose(Diagnostics::InvalidMetalRayTracingMaxLevels{
-                .levelCount = levels ? Int(levels->getValue()) : Int(-1),
+            sink->diagnose(Diagnostics::MetalRayTracingMultilevelRequiresMetallib31{
                 .location = useSite->sourceLoc});
             return false;
         }
-        if (levels->getValue() == 1)
-            result.tags = 0;
-        else
-        {
-            if (!target->getTargetCaps().implies(CapabilityAtom::metallib_3_1))
-            {
-                sink->diagnose(Diagnostics::MetalRayTracingMultilevelRequiresMetallib31{
-                    .location = useSite->sourceLoc});
-                return false;
-            }
-            result.maxLevels = levels->getValue();
-        }
+        result.maxLevels = levels->getValue();
     }
     switch (getBuiltinRole(schema.motion))
     {
@@ -79,23 +75,12 @@ bool getTraceContextRequirements(
 namespace
 {
 
-// Builds the canonical native resource type, preserving source topology while retaining only
-// tags accepted by Metal acceleration_structure. Tags such as triangle_data, max_levels, and
-// extended_limits belong to the traversal/table ABI and must not leak onto the resource.
-static IRType* getPhysicalType(
-    IRBuilder& builder,
-    IRRaytracingAccelerationStructureType* sourceType,
-    UInt tagMask)
+// Builds the canonical native resource type from the tags accepted by Metal
+// acceleration_structure. Traversal depth, triangle_data, and extended_limits belong to the
+// intersector/table configuration and do not affect the resource type.
+static IRType* getPhysicalType(IRBuilder& builder, UInt tagMask)
 {
-    SLANG_RELEASE_ASSERT(sourceType->getOperandCount() == 1 || sourceType->getOperandCount() == 2);
-    IRInst* topology = sourceType->getOperand(0);
-    if (getIntVal(topology) == -1)
-    {
-        SLANG_RELEASE_ASSERT(sourceType->getOperandCount() == 2);
-        topology = sourceType->getOperand(1);
-    }
     IRInst* operands[] = {
-        topology,
         builder.getIntValue(
             builder.getIntType(),
             IRIntegerValue(
@@ -103,7 +88,7 @@ static IRType* getPhysicalType(
                            UInt(MetalRTTag::InstanceMotion)))),
     };
     return builder.getType(
-        kIROp_RaytracingAccelerationStructureType,
+        kIROp_MetalAccelerationStructureType,
         SLANG_COUNT_OF(operands),
         operands);
 }
@@ -655,32 +640,28 @@ bool physicalizeAccelerationStructures(
     // share the same SSA value or storage. One wrapper per native signature lets propagation
     // diagnose incompatible motion requirements on that shared storage. Untraced portable
     // declarations receive the same two-field layout with NoMotion. Native RayQuery AS types
-    // have no operands and remain unchanged.
+    // use depth -1 and remain unchanged.
     IRBuilder builder(module);
     builder.setInsertInto(module);
     List<IRRaytracingAccelerationStructureType*> sourceTypes;
     for (auto inst : module->getGlobalInsts())
     {
         auto type = as<IRRaytracingAccelerationStructureType>(inst);
-        if (type && (type->getOperandCount() == 1 ||
-                     (type->getOperandCount() == 2 && getIntVal(type->getOperand(0)) == -1)))
+        if (!type)
+            continue;
+        SLANG_RELEASE_ASSERT(type->getOperandCount() == 1);
+        if (getIntVal(type->getOperand(0)) != -1)
             sourceTypes.add(type);
     }
     // The first entries correspond to trace uses; the remaining entries describe the default
     // representation of each portable source type retained by the linked component.
     List<IRType*> nativeTypes;
     for (const auto& use : uses)
-        nativeTypes.add(getPhysicalType(
-            builder,
-            cast<IRRaytracingAccelerationStructureType>(use.value->getDataType()),
-            use.tags));
+        nativeTypes.add(getPhysicalType(builder, use.tags));
     for (auto sourceType : sourceTypes)
         nativeTypes.add(getPhysicalType(
             builder,
-            sourceType,
-            sourceType->getOperandCount() == 2 && getIntVal(sourceType->getOperand(1)) == 1
-                ? 0
-                : UInt(MetalRTTag::Instancing)));
+            getIntVal(sourceType->getOperand(0)) == 1 ? 0 : UInt(MetalRTTag::Instancing)));
 
     Dictionary<IRType*, Index> resourcesByNativeType;
     for (auto nativeType : nativeTypes)
@@ -709,9 +690,9 @@ bool physicalizeAccelerationStructures(
         outResources.add(resource);
     }
 
-    // A native AS type must remain native inside the wrapper. Replacing that type globally
-    // would also redirect its field back to the wrapper and create a recursive resource type.
-    // Propagate wrappers through values and storage instead, checking every shared assignment.
+    // Two scene globals can share a source type but require different motion tags. Propagate
+    // each trace's wrapper through its values and storage before replacing the remaining source
+    // uses with the default NoMotion wrapper.
     MetalAccelerationStructurePhysicalizationContext context(module, sink);
     bool success = true;
     for (Index i = 0; i < uses.getCount(); ++i)

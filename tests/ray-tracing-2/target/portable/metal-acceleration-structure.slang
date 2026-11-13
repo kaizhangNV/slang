@@ -1,8 +1,11 @@
 //TEST:SIMPLE(filecheck=PLAIN): -experimental-feature -entry RayGeneration -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=PLAIN): -experimental-feature -entry RayGeneration -target metal -profile metallib_2_4 -DLEVELS=2 -validate-ir
 //TEST:SIMPLE(filecheck=PRIMITIVE): -experimental-feature -entry RayGeneration -target metal -profile metallib_2_4 -DLEVELS=1 -validate-ir
 //TEST:SIMPLE(filecheck=MULTI): -experimental-feature -entry RayGeneration -target metal -capability metallib_3_1 -DLEVELS=3 -validate-ir
 //TEST:SIMPLE(filecheck=MOTION): -experimental-feature -entry RayGeneration -target metal -profile metallib_2_4 -DMOTION=1 -validate-ir
 //TEST:SIMPLE(filecheck=EXTENDED): -experimental-feature -entry RayGeneration -target metal -profile metallib_2_4 -capability metal_raytracing_extended_limits -validate-ir
+//TEST:SIMPLE(filecheck=INVALID): -experimental-feature -entry RayGeneration -target metal -capability metallib_3_1 -DLEVELS=-1
+//TEST:SIMPLE(filecheck=INVALID): -experimental-feature -entry RayGeneration -target metal -capability metallib_3_1 -DLEVELS=-2
 //TEST:SIMPLE(filecheck=INVALID): -experimental-feature -entry RayGeneration -target metal -capability metallib_3_1 -DLEVELS=0
 //TEST:SIMPLE(filecheck=INVALID): -experimental-feature -entry RayGeneration -target metal -capability metallib_3_1 -DLEVELS=33
 //TEST:SIMPLE(filecheck=VERSION): -experimental-feature -entry RayGeneration -target metal -capability metallib_3_0 -DLEVELS=3

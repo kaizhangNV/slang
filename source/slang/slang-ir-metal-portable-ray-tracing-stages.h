@@ -89,9 +89,10 @@ struct VisibleAdapter
     IRInst* records = nullptr;
 };
 
-/// Selects a stage ABI from its declared kind and acceleration-structure topology. A shader body
-/// cannot change this contract, so caller and selected-stage compilations agree independently.
-StageRequirements getStageContractRequirements(Stage stage, bool multiLevel = false);
+/// Selects a stage ABI from its declared kind. Hit stages receive a path for every topology;
+/// ordinary instancing supplies one element. Shader bodies cannot change this contract, so
+/// caller and selected-stage compilations agree independently.
+StageRequirements getStageContractRequirements(Stage stage);
 
 /// Collects reachable invocation getters, excluding dispatch and candidate-control operations.
 /// Adapters use these operations only to bind source getters to the fixed invocation values.
