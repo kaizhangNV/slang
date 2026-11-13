@@ -189,11 +189,11 @@ public extension<Schema> RayTracer<Schema>
                 payload);
             break;
         default:
-            // These targets support only AccelerationStructure. The cast lets this generic
-            // body call TraceRay's concrete-handle overload; a supported call casts the
-            // handle to its own type.
+            // Native targets represent the portable handle as the core acceleration structure.
+            // The cast connects this generic parameter to TraceRay's concrete signature;
+            // native lowering makes both types identical and removes the cast.
             TraceRay(
-                bit_cast<AccelerationStructure>(accelerationStructure),
+                bit_cast<RaytracingAccelerationStructure>(accelerationStructure),
                 desc.rayFlags,
                 desc.instanceMask,
                 desc.sbtOffset,
@@ -281,10 +281,10 @@ public extension<Schema> RayTracer<Schema>
             break;
         case glsl:
         case spirv:
-            // On these targets the supported handle is AccelerationStructure, so the cast
-            // connects the generic parameter to TraceMotionRay's concrete signature.
+            // Native lowering represents the portable handle as the core acceleration
+            // structure, so this cast disappears before emitting TraceMotionRay.
             TraceMotionRay(
-                bit_cast<AccelerationStructure>(accelerationStructure),
+                bit_cast<RaytracingAccelerationStructure>(accelerationStructure),
                 desc.rayFlags,
                 desc.instanceMask,
                 desc.sbtOffset,

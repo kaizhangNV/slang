@@ -99,10 +99,10 @@ IRVarLayout* cloneVarLayout(IRBuilder& builder, IRVarLayout* source, IRTypeLayou
 }
 
 // Adds the private argument-buffer IDs without changing the source binding footprint. Source
-// reflection already allocated one parameter-block handle; this creates its seven internal fields.
+// reflection already allocated one parameter-block handle; this supplies its resource fields.
 IRTypeLayout* createPhysicalLayout(
     IRBuilder& builder,
-    const MetalRTDescriptorResources& resources,
+    const MetalRTArgumentBufferResources& resources,
     IRTypeLayout* sourceLayout)
 {
     IRTypeLayout::Builder fieldTypeBuilder(&builder);
@@ -111,16 +111,17 @@ IRTypeLayout* createPhysicalLayout(
         LayoutSize(1));
     auto fieldTypeLayout = fieldTypeBuilder.build();
     IRStructTypeLayout::Builder structBuilder(&builder);
-    structBuilder.addResourceUsage(
-        LayoutResourceKind::MetalArgumentBufferElement,
-        LayoutSize(UInt(MetalRTDescriptorResource::Count)));
-    for (UInt i = 0; i < UInt(MetalRTDescriptorResource::Count); ++i)
+    UInt fieldIndex = 0;
+    for (auto field : resources.resourcesStruct->getFields())
     {
         IRVarLayout::Builder fieldBuilder(&builder, fieldTypeLayout);
         fieldBuilder.findOrAddResourceInfo(LayoutResourceKind::MetalArgumentBufferElement)->offset =
-            LayoutOffset(i);
-        structBuilder.addField(resources.fields[i]->getKey(), fieldBuilder.build());
+            LayoutOffset(fieldIndex++);
+        structBuilder.addField(field->getKey(), fieldBuilder.build());
     }
+    structBuilder.addResourceUsage(
+        LayoutResourceKind::MetalArgumentBufferElement,
+        LayoutSize(fieldIndex));
     auto structLayout = structBuilder.build();
     IRVarLayout::Builder containerBuilder(&builder, sourceLayout);
     IRVarLayout::Builder elementBuilder(&builder, structLayout);
@@ -163,12 +164,12 @@ struct LayoutPhysicalizationContext
 {
     IRBuilder builder;
     IRStructType* collectedGlobalParamsType;
-    Dictionary<IRType*, const MetalRTDescriptorResources*> resourcesByPhysicalType;
+    Dictionary<IRType*, const MetalRTArgumentBufferResources*> resourcesByPhysicalType;
     Dictionary<KeyValuePair<IRType*, IRTypeLayout*>, IRTypeLayout*> rewrittenLayouts;
 
     LayoutPhysicalizationContext(
         IRModule* module,
-        const List<MetalRTDescriptorResources>& resources)
+        const List<MetalRTArgumentBufferResources>& resources)
         : builder(module), collectedGlobalParamsType(findCollectedGlobalParamsType(module))
     {
         for (const auto& resource : resources)
@@ -311,18 +312,21 @@ void collectVarLayoutDecorations(IRInst* parent, List<IRLayoutDecoration*>& resu
 
 void physicalizeMetalRTDescriptorResources(
     IRModule* module,
-    const List<MetalRTDescriptorResources>& resources)
+    const List<MetalRTDescriptorResources>& resources,
+    const List<MetalRTArgumentBufferResources>& additionalResources)
 {
+    List<MetalRTArgumentBufferResources> argumentBuffers = additionalResources;
     // Ordinary replacement updates and deduplicates all dependent types, including pointers,
     // tuples, helper signatures, and fields. No separate SSA propagation graph is necessary.
     for (const auto& resource : resources)
     {
         resource.sourceType->replaceUsesWith(resource.physicalParameterBlockType);
         resource.sourceType->removeAndDeallocate();
+        argumentBuffers.add(resource);
     }
     List<IRLayoutDecoration*> decorations;
     collectVarLayoutDecorations(module->getModuleInst(), decorations);
-    LayoutPhysicalizationContext context(module, resources);
+    LayoutPhysicalizationContext context(module, argumentBuffers);
     for (auto decoration : decorations)
     {
         auto type = decoration->getParent()->getDataType();

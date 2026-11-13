@@ -56,7 +56,8 @@ RWStructuredBuffer<uint> output;
 
 // The trace operand is not the resource declaration: it crosses a nested ParameterBlock,
 // a selected value, a noinline helper's parameter and return, and a local aggregate. All
-// representations must acquire the same physical Metal motion type.
+// representations must carry the native Metal structure and its contribution metadata together.
+// Selecting only the native structure would use the other scene's hit-record offsets.
 [noinline]
 TraceContext.AccelerationStructure chooseScene(
     TraceContext.AccelerationStructure first,
@@ -86,12 +87,14 @@ void RayGeneration()
 }
 
 // PLAIN-DAG: acceleration_structure<metal::raytracing::instancing>
+// PLAIN-DAG: instanceContributionMetadata
 // PLAIN-DAG: intersector<metal::raytracing::instancing>
 // PRIMITIVE-DAG: acceleration_structure<>
 // PRIMITIVE-DAG: intersector<>
 // MULTI-DAG: acceleration_structure<metal::raytracing::instancing>
 // MULTI-DAG: intersector<metal::raytracing::instancing, metal::raytracing::max_levels<3>>
 // MOTION-DAG: acceleration_structure<metal::raytracing::instancing, metal::raytracing::primitive_motion>
+// MOTION-DAG: instanceContributionMetadata
 // MOTION-DAG: intersector<metal::raytracing::instancing, metal::raytracing::primitive_motion>
 // EXTENDED-DAG: acceleration_structure<metal::raytracing::instancing>
 // EXTENDED-DAG: intersector<metal::raytracing::instancing, metal::raytracing::extended_limits>

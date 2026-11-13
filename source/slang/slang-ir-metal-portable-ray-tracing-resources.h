@@ -6,13 +6,19 @@
 namespace Slang
 {
 
-/// Owns one schema's physical argument-buffer type. The source descriptor remains the canonical
-/// schema identity until physicalization replaces it; fields are indexed by the shared ABI role.
-struct MetalRTDescriptorResources
+/// Describes a synthesized argument buffer whose fields each occupy one Metal resource ID.
+/// Descriptor tables and an acceleration structure's metadata use the same layout construction.
+struct MetalRTArgumentBufferResources
 {
-    IRTraceProgramDescriptorType* sourceType = nullptr;
     IRUniformParameterGroupType* physicalParameterBlockType = nullptr;
     IRStructType* resourcesStruct = nullptr;
+};
+
+/// Owns one schema's physical argument-buffer type. The source descriptor remains the canonical
+/// schema identity until physicalization replaces it; fields are indexed by the shared ABI role.
+struct MetalRTDescriptorResources : MetalRTArgumentBufferResources
+{
+    IRTraceProgramDescriptorType* sourceType = nullptr;
     IRStructField* fields[UInt(MetalRTDescriptorResource::Count)] = {};
 
     IRStructField* getField(MetalRTDescriptorResource role) const { return fields[UInt(role)]; }
@@ -38,6 +44,7 @@ MetalRTDescriptorResources createMetalRTDescriptorResources(
 /// afterward.
 void physicalizeMetalRTDescriptorResources(
     IRModule* module,
-    const List<MetalRTDescriptorResources>& resources);
+    const List<MetalRTDescriptorResources>& resources,
+    const List<MetalRTArgumentBufferResources>& additionalResources = {});
 
 } // namespace Slang

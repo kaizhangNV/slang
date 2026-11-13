@@ -79,8 +79,7 @@ List<VisibleAdapter> prepareMetalStandaloneStages(
         {
             auto acceleration =
                 cast<IRRaytracingAccelerationStructureType>(input->getAccelerationStructureType());
-            bool multiLevel =
-                acceleration->getOperandCount() && getIntVal(acceleration->getOperand(0)) != 0;
+            bool multiLevel = acceleration->getOperandCount() == 2;
             auto requirements = getStageContractRequirements(stage.stage, multiLevel);
             auto descriptorPointer =
                 builder.getPtrType(builder.getUIntType(), AddressSpace::Uniform);

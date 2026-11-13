@@ -281,6 +281,19 @@ bool isExecutableStageInterface(InterfaceDecl* interfaceDecl)
            modifier->magicNodeType.isSubClassOf<RayTracingStageInterfaceType>();
 }
 
+bool isAccelerationStructureType(Type* type)
+{
+    auto typeDecl = isDeclRefTypeOf<AggTypeDecl>(unwrapModifiedType(type)).getDecl();
+    switch (_getBuiltin(typeDecl))
+    {
+    case KnownBuiltinDeclName::RayTracingAccelerationStructure:
+    case KnownBuiltinDeclName::RayTracingMultiLevelAccelerationStructure:
+        return true;
+    default:
+        return false;
+    }
+}
+
 Stage getStageInputKind(AggTypeDecl* typeDecl)
 {
     switch (_getBuiltin(typeDecl))

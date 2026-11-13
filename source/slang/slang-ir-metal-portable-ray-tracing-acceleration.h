@@ -1,5 +1,6 @@
 #pragma once
 
+#include "slang-ir-metal-portable-ray-tracing-resources.h"
 #include "slang-ir-metal-portable-ray-tracing-target.h"
 #include "slang-ir-portable-ray-tracing-schema.h"
 
@@ -39,12 +40,23 @@ struct AccelerationStructureUse
     IRInst* useSite;
 };
 
+/// Keeps the native acceleration structure and its instance-to-record mapping in one binding.
+/// Every selected value, including an array element or helper result, transports both together.
+struct MetalRTAccelerationStructureResources : MetalRTArgumentBufferResources
+{
+    IRStructField* nativeASField = nullptr;
+    IRStructField* metadataField = nullptr;
+};
+
 /// Rewrites the complete SSA/storage component of each used acceleration structure, including
 /// local storage, selected fields, array containers, function parameters/results, and joins.
+/// Untraced portable declarations use the default motion signature with the same binding layout.
+/// The returned wrappers supply fields for trace lowering and the shared resource-layout pass.
 bool physicalizeAccelerationStructures(
     IRModule* module,
     const List<AccelerationStructureUse>& uses,
-    DiagnosticSink* sink);
+    DiagnosticSink* sink,
+    List<MetalRTAccelerationStructureResources>& outResources);
 
 } // namespace Metal
 } // namespace PortableRT

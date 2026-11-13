@@ -731,7 +731,7 @@ void MetalSourceEmitter::emitMetalRTTraceDispatch(IRMetalRTTraceDispatch* trace)
             SLANG_RELEASE_ASSERT(instanceContributionLookup);
             emitOperand(instanceContributionLookup, getInfo(EmitOp::General));
             m_writer->emit("(");
-            emitOperand(trace->getRecords(), getInfo(EmitOp::General));
+            emitOperand(trace->getInstanceContributionMetadata(), getInfo(EmitOp::General));
             m_writer->emit(", ");
             if (maxLevels > 0)
             {

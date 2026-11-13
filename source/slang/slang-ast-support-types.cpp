@@ -68,6 +68,7 @@ KnownBuiltinDeclName getKnownBuiltinDeclNameFromString(UnownedStringSlice name)
     SLANG_KNOWN_BUILTIN_DECL(RayTracingPrimitiveAndInstanceMotion)
     SLANG_KNOWN_BUILTIN_DECL(RayTracingMultiLevelAccelerationStructure)
     SLANG_KNOWN_BUILTIN_DECL(RayTracingIntersectionStage)
+    SLANG_KNOWN_BUILTIN_DECL(RayTracingAccelerationStructure)
 #undef SLANG_KNOWN_BUILTIN_DECL
     return KnownBuiltinDeclName::COUNT;
 }

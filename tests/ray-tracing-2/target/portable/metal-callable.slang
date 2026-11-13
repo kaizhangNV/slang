@@ -67,14 +67,17 @@ void RayGeneration()
 // METAL-NOT: visible]]
 // METAL-NOT: metalRTCallShader
 
-// CALLABLE: void update{{.*}}(uint thread*
-// CALLABLE: ->addend{{.*}}rt_CallableInput_dispatchRaysIndex_get{{.*}}rt_CallableInput_dispatchRaysDimensions_get
-// CALLABLE: visible]] void Callable_callable(void thread* data
-// CALLABLE-SAME: uint3 dispatchRaysIndex
-// CALLABLE-SAME: uint3 dispatchRaysDimensions
+// CALLABLE: void [[UPDATE:update[_0-9]*]](uint3 [[UPDATE_INDEX:[A-Za-z0-9_]+]], uint3 [[UPDATE_DIMENSIONS:[A-Za-z0-9_]+]], uint thread* [[UPDATE_DATA:[A-Za-z0-9_]+]],
+// CALLABLE: *[[UPDATE_DATA]] = *[[UPDATE_DATA]] + {{.*}}->addend{{.*}}rt_CallableInput_dispatchRaysIndex_get{{[_0-9]*}}([[UPDATE_INDEX]]).x + rt_CallableInput_dispatchRaysDimensions_get{{[_0-9]*}}([[UPDATE_DIMENSIONS]]).x
+// CALLABLE: void [[INVOKE:Callable_invoke[_0-9]*]](uint3 [[INVOKE_INDEX:[A-Za-z0-9_]+]], uint3 [[INVOKE_DIMENSIONS:[A-Za-z0-9_]+]], uint thread* [[INVOKE_DATA:[A-Za-z0-9_]+]],
+// CALLABLE: [[UPDATE]]([[INVOKE_INDEX]], [[INVOKE_DIMENSIONS]], [[INVOKE_DATA]],
+// CALLABLE: visible]] void Callable_callable(void thread* [[ENTRY_DATA:data[_0-9]*]],
+// CALLABLE-SAME: uint3 [[ENTRY_INDEX:dispatchRaysIndex[_0-9]*]],
+// CALLABLE-SAME: uint3 [[ENTRY_DIMENSIONS:dispatchRaysDimensions[_0-9]*]],
 // CALLABLE-SAME: uchar device* recordData
 // CALLABLE-SAME: uint constant* descriptorResources
 // CALLABLE-SAME: uint device* records
-// CALLABLE-SAME: uchar thread* globalResources
+// CALLABLE-SAME: uchar thread* globalResources{{[_0-9]*}})
+// CALLABLE: uint thread* [[DATA_PTR:[A-Za-z0-9_]+]] = (uint thread*)((ulong)([[ENTRY_DATA]]));
 // CALLABLE: Record{{.*}} device*{{.*}}recordData
-// CALLABLE: Callable_invoke{{.*}}dispatchRaysIndex{{.*}}dispatchRaysDimensions
+// CALLABLE: [[INVOKE]]([[ENTRY_INDEX]], [[ENTRY_DIMENSIONS]], [[DATA_PTR]],

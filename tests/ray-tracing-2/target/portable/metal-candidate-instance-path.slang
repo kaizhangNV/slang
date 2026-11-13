@@ -86,6 +86,11 @@ void RayGeneration()
 // MULTI-DAG: user_instance_id
 // MULTI-DAG: object_to_world_transform
 // MULTI-DAG: world_to_object_transform
+// Both committed hits and candidate callbacks walk the selected AS metadata from word zero.
+// The trie must not read a section offset from the program's records buffer.
+// MULTI-DAG: uint nodeOrContribution{{[^=]*}} = 0U;
+// MULTI-DAG: *(instanceContributionMetadata{{.*}} + (nodeOrContribution{{.*}} +
+// MULTI-DAG: portableRTInstanceContribution{{.*}}((&rayData{{.*}})->instanceContributionMetadata
 
 // PROVIDER-DAG: visible]]
 // PROVIDER-DAG: readPath

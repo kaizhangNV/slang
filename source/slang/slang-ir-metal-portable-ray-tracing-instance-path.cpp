@@ -53,8 +53,8 @@ IRFunc* createInstanceContribution(IRModule* module, IRType* instancePathType)
     builder.setInsertInto(module->getModuleInst());
     auto result = builder.createFunc();
     auto uintType = builder.getUIntType();
-    auto recordsType = builder.getPtrType(uintType, AddressSpace::Global);
-    IRType* types[] = {recordsType, instancePathType};
+    auto metadataType = builder.getPtrType(uintType, AddressSpace::Global);
+    IRType* types[] = {metadataType, instancePathType};
     result->setFullType(builder.getFuncType(2, types, uintType));
     builder.addNameHintDecoration(result, toSlice("portableRTInstanceContribution"));
     bool isMultiLevel = instancePathType->getOp() == kIROp_MetalRTInstancePath;
@@ -66,24 +66,23 @@ IRFunc* createInstanceContribution(IRModule* module, IRType* instancePathType)
 
     builder.setInsertInto(result);
     builder.emitBlock();
-    auto records = builder.emitParam(recordsType);
+    auto metadata = builder.emitParam(metadataType);
+    builder.addNameHintDecoration(metadata, toSlice("instanceContributionMetadata"));
     IRInst* instancePath = builder.emitParam(instancePathType);
-    auto rootByteOffset =
-        builder.emitLoad(builder.emitGetOffsetPtr(records, builder.getIntValue(uintType, 0)));
-    auto rootWordOffset =
-        builder.emitShr(uintType, rootByteOffset, builder.getIntValue(uintType, 2));
     if (!isMultiLevel)
     {
         SLANG_RELEASE_ASSERT(instancePathType == uintType);
-        auto index = builder.emitAdd(uintType, rootWordOffset, instancePath);
-        builder.emitReturn(builder.emitLoad(builder.emitGetOffsetPtr(records, index)));
+        builder.emitReturn(builder.emitLoad(builder.emitGetOffsetPtr(metadata, instancePath)));
         return result;
     }
 
     // Consider paths [0, 0] and [1, 0]. Their leaf instance indices match, but their SBT
     // contributions may differ. The host therefore stores a trie for multilevel traversal.
-    // Each intermediate value is a word offset relative to the root; the final value is the
-    // contribution. Following the whole path keeps candidate and committed-hit selection equal.
+    // Each intermediate value is a word offset from the metadata buffer's start; the final
+    // value is the contribution. This pointer belongs to the AS passed to trace, so two ASes
+    // can use the same program records but supply different values for path [0, 0]. Following
+    // the whole path keeps candidate and committed-hit selection equal. An empty path returns
+    // zero without reading metadata, as required for a directly traced primitive AS.
     auto count = builder.emitCallInst(uintType, getCount, 1, &instancePath);
     auto nodeOrContribution = builder.emitVar(uintType);
     builder.addNameHintDecoration(nodeOrContribution, toSlice("nodeOrContribution"));
@@ -94,13 +93,10 @@ IRFunc* createInstanceContribution(IRModule* module, IRType* instancePathType)
     builder.setInsertBefore(body->getFirstOrdinaryInst());
     IRInst* arguments[] = {instancePath, depth};
     auto instanceIndex = builder.emitCallInst(uintType, getElement, 2, arguments);
-    auto index = builder.emitAdd(
-        uintType,
-        builder.emitAdd(uintType, rootWordOffset, builder.emitLoad(nodeOrContribution)),
-        instanceIndex);
+    auto index = builder.emitAdd(uintType, builder.emitLoad(nodeOrContribution), instanceIndex);
     builder.emitStore(
         nodeOrContribution,
-        builder.emitLoad(builder.emitGetOffsetPtr(records, index)));
+        builder.emitLoad(builder.emitGetOffsetPtr(metadata, index)));
     builder.setInsertInto(exit);
     builder.emitReturn(builder.emitLoad(nodeOrContribution));
     return result;

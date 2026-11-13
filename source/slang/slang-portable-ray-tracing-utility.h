@@ -62,6 +62,10 @@ Stage getStageKind(InterfaceDecl* interfaceDecl);
 /// Returns whether the interface represents an executable stage with an `invoke` requirement.
 bool isExecutableStageInterface(InterfaceDecl* interfaceDecl);
 
+/// Identifies the portable acceleration-structure resource families by their checked roles.
+/// The core RaytracingAccelerationStructure is a separate native resource type.
+bool isAccelerationStructureType(Type* type);
+
 /// Returns the stage named by the input struct's KnownBuiltin annotation, or Stage::Unknown.
 Stage getStageInputKind(AggTypeDecl* typeDecl);
 

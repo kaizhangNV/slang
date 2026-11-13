@@ -33,6 +33,7 @@ struct RayDataHeader
 {
     IRStructType* type = nullptr;
     IRStructKey* recordsKey = nullptr;
+    IRStructKey* instanceContributionMetadataKey = nullptr;
     IRStructKey* sbtOffsetKey = nullptr;
     IRStructKey* sbtStrideKey = nullptr;
 };

@@ -16,7 +16,10 @@ SLANG_UNIT_TEST(metalPortableAccelerationStructureComponents)
     auto module = fixture.getModule();
     IRBuilder builder(module);
     builder.setInsertInto(module);
-    auto sourceType = builder.getType(kIROp_RaytracingAccelerationStructureType, 0, nullptr);
+    IRInst* topology = builder.getIntValue(builder.getIntType(), 0);
+    auto sourceType = builder.getType(kIROp_RaytracingAccelerationStructureType, 1, &topology);
+    auto nativeType = builder.getType(kIROp_RaytracingAccelerationStructureType, 0, nullptr);
+    auto nativeScene = builder.createGlobalParam(nativeType);
     auto first = builder.createGlobalParam(sourceType);
     auto second = builder.createGlobalParam(sourceType);
     auto independent = builder.createGlobalParam(sourceType);
@@ -60,12 +63,28 @@ SLANG_UNIT_TEST(metalPortableAccelerationStructureComponents)
     uses.add({loaded, moving, loaded});
     uses.add({independent, UInt(MetalRTTag::Instancing), independent});
     DiagnosticSink sink;
-    SLANG_CHECK_ABORT(PortableRT::Metal::physicalizeAccelerationStructures(module, uses, &sink));
+    List<PortableRT::Metal::MetalRTAccelerationStructureResources> resources;
+    SLANG_CHECK_ABORT(
+        PortableRT::Metal::physicalizeAccelerationStructures(module, uses, &sink, resources));
     SLANG_CHECK(sink.getErrorCount() == 0);
     auto physicalType = loaded->getDataType();
     SLANG_CHECK(physicalType != sourceType);
-    SLANG_CHECK(physicalType->getOperandCount() == 2);
-    SLANG_CHECK(getIntVal(physicalType->getOperand(1)) == moving);
+    SLANG_CHECK(physicalType->getOp() == kIROp_ParameterBlockType);
+    bool foundMovingResources = false;
+    for (const auto& resource : resources)
+    {
+        if (resource.physicalParameterBlockType != physicalType)
+            continue;
+        foundMovingResources = true;
+        auto nativeAS = resource.nativeASField->getFieldType();
+        SLANG_CHECK(nativeAS->getOp() == kIROp_RaytracingAccelerationStructureType);
+        SLANG_CHECK(nativeAS->getOperandCount() == 2);
+        SLANG_CHECK(getIntVal(nativeAS->getOperand(1)) == moving);
+        auto metadata = as<IRPtrTypeBase>(resource.metadataField->getFieldType());
+        SLANG_CHECK_ABORT(metadata);
+        SLANG_CHECK(metadata->getValueType() == builder.getUIntType());
+    }
+    SLANG_CHECK(foundMovingResources);
     SLANG_CHECK(first->getDataType() == physicalType);
     SLANG_CHECK(second->getDataType() == physicalType);
     SLANG_CHECK(firstParameter->getDataType() == physicalType);
@@ -77,14 +96,9 @@ SLANG_UNIT_TEST(metalPortableAccelerationStructureComponents)
     SLANG_CHECK(cast<IRPtrTypeBase>(storage->getDataType())->getValueType() == physicalType);
     SLANG_CHECK(cast<IRFuncType>(helper->getDataType())->getResultType() == physicalType);
     SLANG_CHECK(independent->getDataType() != physicalType);
-    SLANG_CHECK(unrelatedField->getFieldType() == sourceType);
-
-    // Within one physicalization request, the same connected resource cannot acquire two
-    // incompatible motion signatures. It reports a source contract error, not malformed IR.
-    uses.add({first, UInt(MetalRTTag::Instancing), first});
-    DiagnosticSink conflictSink;
-    SLANG_CHECK(!PortableRT::Metal::physicalizeAccelerationStructures(module, uses, &conflictSink));
-    SLANG_CHECK(conflictSink.getErrorCount() == 1);
+    SLANG_CHECK(unrelatedField->getFieldType()->getOp() == kIROp_ParameterBlockType);
+    SLANG_CHECK(unrelatedField->getFieldType() != physicalType);
+    SLANG_CHECK(nativeScene->getDataType() == nativeType);
 }
 
 // An array's element and container types must change together. Keep explicit array stride,
@@ -96,7 +110,8 @@ SLANG_UNIT_TEST(metalPortableAccelerationStructureArrays)
     auto module = fixture.getModule();
     IRBuilder builder(module);
     builder.setInsertInto(module);
-    auto sourceType = builder.getType(kIROp_RaytracingAccelerationStructureType, 0, nullptr);
+    IRInst* topology = builder.getIntValue(builder.getIntType(), 0);
+    auto sourceType = builder.getType(kIROp_RaytracingAccelerationStructureType, 1, &topology);
     auto count = builder.getIntValue(builder.getIntType(), 2);
     auto stride = builder.getIntValue(builder.getIntType(), 16);
     auto arrayType = builder.getArrayType(sourceType, count, stride);
@@ -124,7 +139,9 @@ SLANG_UNIT_TEST(metalPortableAccelerationStructureArrays)
     List<PortableRT::Metal::AccelerationStructureUse> uses;
     uses.add({loaded, moving, loaded});
     DiagnosticSink sink;
-    SLANG_CHECK_ABORT(PortableRT::Metal::physicalizeAccelerationStructures(module, uses, &sink));
+    List<PortableRT::Metal::MetalRTAccelerationStructureResources> resources;
+    SLANG_CHECK_ABORT(
+        PortableRT::Metal::physicalizeAccelerationStructures(module, uses, &sink, resources));
     SLANG_CHECK(sink.getErrorCount() == 0);
     auto physicalType = loaded->getDataType();
     auto physicalArray = cast<IRArrayType>(aggregate->getDataType());
@@ -138,5 +155,78 @@ SLANG_UNIT_TEST(metalPortableAccelerationStructureArrays)
     SLANG_CHECK(repeatedElement->getDataType() == physicalType);
     SLANG_CHECK(cast<IRPtrTypeBase>(storage->getDataType())->getValueType() == physicalArray);
     SLANG_CHECK(cast<IRPtrTypeBase>(address->getDataType())->getValueType() == physicalType);
-    SLANG_CHECK(independent->getDataType() == arrayType);
+    auto independentArray = cast<IRArrayType>(independent->getDataType());
+    SLANG_CHECK(independentArray->getElementType()->getOp() == kIROp_ParameterBlockType);
+    SLANG_CHECK(independentArray->getElementType() != physicalType);
+    SLANG_CHECK(independentArray->getElementCount() == count);
+    SLANG_CHECK(independentArray->getArrayStride() == stride);
+}
+
+// One bound structure cannot serve traces that require two incompatible native motion types.
+SLANG_UNIT_TEST(metalPortableAccelerationStructureMotionConflict)
+{
+    StaticUnitTestEnv env(unitTestContext);
+    IRFixtureBuilder fixture(env.getSessionImpl());
+    auto module = fixture.getModule();
+    IRBuilder builder(module);
+    builder.setInsertInto(module);
+    IRInst* topology = builder.getIntValue(builder.getIntType(), 0);
+    auto sourceType = builder.getType(kIROp_RaytracingAccelerationStructureType, 1, &topology);
+    auto first = builder.createGlobalParam(sourceType);
+    List<PortableRT::Metal::AccelerationStructureUse> uses;
+    uses.add({first, UInt(MetalRTTag::Instancing), first});
+    uses.add({first, UInt(MetalRTTag::Instancing) | UInt(MetalRTTag::PrimitiveMotion), first});
+    DiagnosticSink sink;
+    List<PortableRT::Metal::MetalRTAccelerationStructureResources> resources;
+    SLANG_CHECK(
+        !PortableRT::Metal::physicalizeAccelerationStructures(module, uses, &sink, resources));
+    SLANG_CHECK(sink.getErrorCount() == 1);
+}
+
+// Loading a descriptor handle must recover the whole portable binding. Its stored resource type
+// needs the same motion signature as the trace, including when the handle came from a resource.
+SLANG_UNIT_TEST(metalPortableAccelerationStructureHandles)
+{
+    StaticUnitTestEnv env(unitTestContext);
+    IRFixtureBuilder fixture(env.getSessionImpl());
+    auto module = fixture.getModule();
+    IRBuilder builder(module);
+    builder.setInsertInto(module);
+    IRInst* topology = builder.getIntValue(builder.getIntType(), 0);
+    auto sourceType = builder.getType(kIROp_RaytracingAccelerationStructureType, 1, &topology);
+    IRInst* resourceType = sourceType;
+    auto handleType = builder.getType(kIROp_DescriptorHandleType, 1, &resourceType);
+    auto first = builder.createGlobalParam(sourceType);
+    auto caller = builder.createFunc();
+    caller->setFullType(builder.getFuncType(0, nullptr, builder.getVoidType()));
+    builder.setInsertInto(caller);
+    builder.emitBlock();
+    IRInst* resource = first;
+    auto handle =
+        builder.emitIntrinsicInst(handleType, kIROp_CastResourceToDescriptorHandle, 1, &resource);
+    auto storage = builder.emitVar(handleType);
+    builder.emitStore(storage, handle);
+    IRInst* loadedHandle = builder.emitLoad(storage);
+    auto loadedResource = builder.emitIntrinsicInst(
+        sourceType,
+        kIROp_CastDescriptorHandleToResource,
+        1,
+        &loadedHandle);
+    builder.emitReturn();
+
+    auto moving = UInt(MetalRTTag::Instancing) | UInt(MetalRTTag::PrimitiveMotion);
+    List<PortableRT::Metal::AccelerationStructureUse> uses;
+    uses.add({loadedResource, moving, loadedResource});
+    DiagnosticSink sink;
+    List<PortableRT::Metal::MetalRTAccelerationStructureResources> resources;
+    SLANG_CHECK_ABORT(
+        PortableRT::Metal::physicalizeAccelerationStructures(module, uses, &sink, resources));
+    SLANG_CHECK(sink.getErrorCount() == 0);
+    auto physicalType = loadedResource->getDataType();
+    SLANG_CHECK(physicalType->getOp() == kIROp_ParameterBlockType);
+    SLANG_CHECK(first->getDataType() == physicalType);
+    auto physicalHandle = cast<IRDescriptorHandleType>(loadedHandle->getDataType());
+    SLANG_CHECK(physicalHandle->getResourceType() == physicalType);
+    SLANG_CHECK(handle->getDataType() == physicalHandle);
+    SLANG_CHECK(cast<IRPtrTypeBase>(storage->getDataType())->getValueType() == physicalHandle);
 }

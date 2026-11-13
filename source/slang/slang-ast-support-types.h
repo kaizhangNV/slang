@@ -281,6 +281,7 @@ FIDDLE() namespace Slang
         RayTracingPrimitiveAndInstanceMotion,
         RayTracingMultiLevelAccelerationStructure,
         RayTracingIntersectionStage = 53,
+        RayTracingAccelerationStructure,
         COUNT
     };
 

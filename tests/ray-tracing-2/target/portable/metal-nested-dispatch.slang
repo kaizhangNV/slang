@@ -143,16 +143,24 @@ void RayGeneration()
 // METAL-NOT: traceHelper
 // METAL-NOT: callHelper
 
-// HIT: void traceHelper{{.*}}(uint thread*{{.*}}, uint3{{.*}}, uint3
-// HIT: [_slang_miss_function_index]({{.*}}invocationValue{{.*}}invocationValue
-// HIT: visible]] void ClosestHit_closesthit(
-// HIT: ClosestHit_invoke{{.*}}dispatchRaysIndex{{.*}}dispatchRaysDimensions
+// Match the actual arguments across every call boundary. A nested dispatch must reuse the
+// visible entry's fixed launch parameters, not append another pair that its VFT caller omits.
+// HIT: void traceHelper{{[_0-9]*}}(uint thread*{{[^,]*}}, uint3 [[HIT_HELPER_INDEX:[A-Za-z_][A-Za-z0-9_]*]], uint3 [[HIT_HELPER_DIMENSIONS:[A-Za-z_][A-Za-z0-9_]*]]
+// HIT: [_slang_miss_function_index]({{.*}}, [[HIT_HELPER_INDEX]], [[HIT_HELPER_DIMENSIONS]],
+// HIT: void ClosestHit_invoke{{[_0-9]*}}(uint3 [[HIT_INVOKE_INDEX:[A-Za-z_][A-Za-z0-9_]*]], uint3 [[HIT_INVOKE_DIMENSIONS:[A-Za-z_][A-Za-z0-9_]*]], uint thread*
+// HIT: traceHelper{{[_0-9]*}}({{.*}}, [[HIT_INVOKE_INDEX]], [[HIT_INVOKE_DIMENSIONS]],
+// HIT: visible]] void ClosestHit_closesthit({{.*}}, uint3 [[HIT_ENTRY_INDEX:dispatchRaysIndex[_0-9]*]], uint3 [[HIT_ENTRY_DIMENSIONS:dispatchRaysDimensions[_0-9]*]],
+// HIT-SAME: uint device* records{{[_0-9]*}}, uchar thread* globalResources{{[_0-9]*}})
+// HIT: ClosestHit_invoke{{[_0-9]*}}([[HIT_ENTRY_INDEX]], [[HIT_ENTRY_DIMENSIONS]],
 // HIT-NOT: metalRTGetDispatchRays
 
-// MISS: void callHelper{{.*}}(uint thread*{{.*}}, uint3{{.*}}, uint3
-// MISS: [_slang_callable_function_index]({{.*}}invocationValue{{.*}}invocationValue
-// MISS: visible]] void Miss_miss(
-// MISS: Miss_invoke{{.*}}dispatchRaysIndex{{.*}}dispatchRaysDimensions
+// MISS: void callHelper{{[_0-9]*}}(uint thread*{{[^,]*}}, uint3 [[MISS_HELPER_INDEX:[A-Za-z_][A-Za-z0-9_]*]], uint3 [[MISS_HELPER_DIMENSIONS:[A-Za-z_][A-Za-z0-9_]*]]
+// MISS: [_slang_callable_function_index]({{.*}}, [[MISS_HELPER_INDEX]], [[MISS_HELPER_DIMENSIONS]],
+// MISS: void Miss_invoke{{[_0-9]*}}(uint3 [[MISS_INVOKE_INDEX:[A-Za-z_][A-Za-z0-9_]*]], uint3 [[MISS_INVOKE_DIMENSIONS:[A-Za-z_][A-Za-z0-9_]*]], uint thread*
+// MISS: callHelper{{[_0-9]*}}({{.*}}, [[MISS_INVOKE_INDEX]], [[MISS_INVOKE_DIMENSIONS]],
+// MISS: visible]] void Miss_miss({{.*}}, uint3 [[MISS_ENTRY_INDEX:dispatchRaysIndex[_0-9]*]], uint3 [[MISS_ENTRY_DIMENSIONS:dispatchRaysDimensions[_0-9]*]],
+// MISS-SAME: uint device* records{{[_0-9]*}}, uchar thread* globalResources{{[_0-9]*}})
+// MISS: Miss_invoke{{[_0-9]*}}([[MISS_ENTRY_INDEX]], [[MISS_ENTRY_DIMENSIONS]],
 // MISS-NOT: metalRTGetDispatchRays
 
 // CALLABLE: rt_CallableInput_dispatchRaysIndex_get{{.*}}rt_CallableInput_dispatchRaysDimensions_get

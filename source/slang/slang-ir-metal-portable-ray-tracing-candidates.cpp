@@ -1016,7 +1016,8 @@ IRInst* getRecordAddress(
     if (instance)
     {
         SLANG_RELEASE_ASSERT(contribution);
-        IRInst* arguments[] = {records, instance};
+        auto metadata = loadField(builder, header, headerType.instanceContributionMetadataKey);
+        IRInst* arguments[] = {metadata, instance};
         index = builder.emitAdd(
             uintType,
             index,

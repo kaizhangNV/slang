@@ -20,12 +20,14 @@ bool getTraceContextRequirements(
 {
     result = {};
     auto structure = cast<IRRaytracingAccelerationStructureType>(schema.accelerationStructure);
-    // Source forms have no operands (portable instancing) or one checked topology argument.
+    // Ordinary portable instancing is [0]; explicit multilevel topology is [-1, levelCount].
     // Physical AS types are produced later and must never replace the schema's source type.
-    SLANG_RELEASE_ASSERT(structure->getOperandCount() <= 1);
-    if (structure->getOperandCount())
+    SLANG_RELEASE_ASSERT(
+        structure->getOperandCount() == 1 ||
+        (structure->getOperandCount() == 2 && getIntVal(structure->getOperand(0)) == -1));
+    if (structure->getOperandCount() == 2)
     {
-        auto levels = as<IRIntLit>(structure->getOperand(0));
+        auto levels = as<IRIntLit>(structure->getOperand(1));
         if (!levels || levels->getValue() < 1 || levels->getValue() > 32)
         {
             sink->diagnose(Diagnostics::InvalidMetalRayTracingMaxLevels{
@@ -85,10 +87,13 @@ static IRType* getPhysicalType(
     IRRaytracingAccelerationStructureType* sourceType,
     UInt tagMask)
 {
-    SLANG_RELEASE_ASSERT(sourceType->getOperandCount() <= 2);
-    IRInst* topology = sourceType->getOperandCount() == 0
-                           ? builder.getIntValue(builder.getIntType(), 0)
-                           : sourceType->getOperand(0);
+    SLANG_RELEASE_ASSERT(sourceType->getOperandCount() == 1 || sourceType->getOperandCount() == 2);
+    IRInst* topology = sourceType->getOperand(0);
+    if (getIntVal(topology) == -1)
+    {
+        SLANG_RELEASE_ASSERT(sourceType->getOperandCount() == 2);
+        topology = sourceType->getOperand(1);
+    }
     IRInst* operands[] = {
         topology,
         builder.getIntValue(
@@ -131,7 +136,7 @@ static IRStructField* findStorageField(IRBuilder& builder, IRInst* aggregate, IR
 // Physicalizes every representation of one Metal acceleration-structure value.
 //
 // The source type carries topology, while the trace context carries motion requirements. Metal
-// combines both facts in the native acceleration-structure type, so the physical type cannot be
+// combines both facts in the argument buffer's native AS field, so its type cannot be
 // assigned only to the final trace operand. Consider this example:
 //
 //     struct SceneParameters { rt::AccelerationStructure scene; }
@@ -158,12 +163,10 @@ struct MetalAccelerationStructurePhysicalizationContext
     Dictionary<IRInst*, IRInst*> conflictOwners;
     HashSet<IRInst*> diagnosedConflicts;
 
-    // Derives the native Metal type required by one trace and applies it to the trace operand's
-    // complete producer/storage component.
-    bool physicalize(IRInst* value, UInt tagMask, IRInst* useSite)
+    // Applies the wrapper required by one trace to its complete producer/storage component.
+    bool physicalize(IRInst* value, IRType* physicalType, IRInst* useSite)
     {
-        auto sourceType = cast<IRRaytracingAccelerationStructureType>(value->getDataType());
-        return assignValue(value, getPhysicalType(builder, sourceType, tagMask), useSite);
+        return assignValue(value, physicalType, useSite);
     }
 
 private:
@@ -214,8 +217,8 @@ private:
         if (as<IRPtrTypeBase>(physicalType))
             return assignPointer(value, cast<IRPtrTypeBase>(physicalType), useSite);
         SLANG_RELEASE_ASSERT(
-            as<IRRaytracingAccelerationStructureType>(physicalType) ||
-            as<IRArrayTypeBase>(physicalType));
+            as<IRUniformParameterGroupType>(physicalType) ||
+            as<IRDescriptorHandleType>(physicalType) || as<IRArrayTypeBase>(physicalType));
         return assignValue(value, physicalType, useSite);
     }
 
@@ -353,6 +356,19 @@ private:
                 if (!assignTypedValue(select, physicalType, useSite))
                     return false;
             }
+            else if (auto conversion = as<IRCastDescriptorHandleToResource>(user))
+            {
+                auto handleType = cast<IRDescriptorHandleType>(physicalType);
+                if (!assignValue(conversion, handleType->getResourceType(), useSite))
+                    return false;
+            }
+            else if (auto conversion = as<IRCastResourceToDescriptorHandle>(user))
+            {
+                IRInst* operands[] = {physicalType};
+                auto handleType = builder.getType(kIROp_DescriptorHandleType, 1, operands);
+                if (!assignValue(conversion, handleType, useSite))
+                    return false;
+            }
             else if (auto element = as<IRGetElement>(user))
             {
                 auto array = cast<IRArrayTypeBase>(physicalType);
@@ -361,7 +377,7 @@ private:
             }
             else if (as<IRMakeArray>(user) || as<IRMakeArrayFromElement>(user))
             {
-                // One array has one native element type even when different runtime indices
+                // One array has one physical element type even when different runtime indices
                 // select its members. Join the container instead of retagging one extraction.
                 auto array = getPhysicalArrayType(builder, user->getDataType(), physicalType);
                 if (!assignValue(user, array, useSite))
@@ -393,7 +409,7 @@ private:
         return true;
     }
 
-    // Assigns the native type to a concrete field and every SSA access that selects that field.
+    // Assigns the wrapper type to a concrete field and every SSA access that selects that field.
     bool assignField(IRStructField* field, IRType* physicalType, IRInst* useSite)
     {
         if (auto assignedType = assignedTypes.tryGetValue(field))
@@ -404,8 +420,8 @@ private:
 
         // A struct key can be shared by specialized nominal structs. Resolve every access through
         // its aggregate and update only accesses that select this exact field. Acceleration-
-        // structure topology and motion change Metal's native C++ type but not its resource kind
-        // or binding footprint, so the existing struct-field layout remains authoritative.
+        // structure topology and motion change the wrapper's native AS type but not its source
+        // binding footprint. The shared argument-buffer layout pass fills in its resource fields.
         auto fieldKey = field->getKey();
         for (auto use = fieldKey->firstUse; use; use = use->nextUse)
         {
@@ -451,7 +467,7 @@ private:
         return true;
     }
 
-    // Assigns a pointer's native pointee type and joins all values loaded from or stored into it.
+    // Assigns a pointer's physical pointee type and joins all values loaded from or stored into it.
     bool assignPointer(IRInst* pointer, IRPtrTypeBase* physicalType, IRInst* useSite)
     {
         bool isNew = false;
@@ -541,7 +557,7 @@ private:
         return true;
     }
 
-    // Assigns a native value type, follows its producer to storage, and updates all consumers.
+    // Assigns a physical value type, follows its producer to storage, and updates all consumers.
     bool assignValue(IRInst* value, IRType* physicalType, IRInst* useSite)
     {
         bool isNew = false;
@@ -571,6 +587,19 @@ private:
         else if (auto parameter = as<IRParam>(value))
         {
             if (!assignParameterInputs(parameter, physicalType, useSite))
+                return false;
+        }
+        else if (auto conversion = as<IRCastDescriptorHandleToResource>(value))
+        {
+            IRInst* operands[] = {physicalType};
+            auto handleType = builder.getType(kIROp_DescriptorHandleType, 1, operands);
+            if (!assignValue(conversion->getHandle(), handleType, useSite))
+                return false;
+        }
+        else if (auto conversion = as<IRCastResourceToDescriptorHandle>(value))
+        {
+            auto handleType = cast<IRDescriptorHandleType>(physicalType);
+            if (!assignValue(conversion->getResource(), handleType->getResourceType(), useSite))
                 return false;
         }
         else if (auto select = as<IRSelect>(value))
@@ -617,13 +646,93 @@ private:
 bool physicalizeAccelerationStructures(
     IRModule* module,
     const List<AccelerationStructureUse>& uses,
-    DiagnosticSink* sink)
+    DiagnosticSink* sink,
+    List<MetalRTAccelerationStructureResources>& outResources)
 {
+    // Consider selecting either scenes[0] or scenes[1] before tracing. Each scene owns a native
+    // AS and its instance-to-record mapping, so selection must transport a pointer to both.
+    // Read every trace's required native signature before changing any values: two traces may
+    // share the same SSA value or storage. One wrapper per native signature lets propagation
+    // diagnose incompatible motion requirements on that shared storage. Untraced portable
+    // declarations receive the same two-field layout with NoMotion. Native RayQuery AS types
+    // have no operands and remain unchanged.
+    IRBuilder builder(module);
+    builder.setInsertInto(module);
+    List<IRRaytracingAccelerationStructureType*> sourceTypes;
+    for (auto inst : module->getGlobalInsts())
+    {
+        auto type = as<IRRaytracingAccelerationStructureType>(inst);
+        if (type && (type->getOperandCount() == 1 ||
+                     (type->getOperandCount() == 2 && getIntVal(type->getOperand(0)) == -1)))
+            sourceTypes.add(type);
+    }
+    // The first entries correspond to trace uses; the remaining entries describe the default
+    // representation of each portable source type retained by the linked component.
+    List<IRType*> nativeTypes;
+    for (const auto& use : uses)
+        nativeTypes.add(getPhysicalType(
+            builder,
+            cast<IRRaytracingAccelerationStructureType>(use.value->getDataType()),
+            use.tags));
+    for (auto sourceType : sourceTypes)
+        nativeTypes.add(getPhysicalType(
+            builder,
+            sourceType,
+            sourceType->getOperandCount() == 2 && getIntVal(sourceType->getOperand(1)) == 1
+                ? 0
+                : UInt(MetalRTTag::Instancing)));
+
+    Dictionary<IRType*, Index> resourcesByNativeType;
+    for (auto nativeType : nativeTypes)
+    {
+        if (resourcesByNativeType.containsKey(nativeType))
+            continue;
+        resourcesByNativeType.add(nativeType, outResources.getCount());
+        MetalRTAccelerationStructureResources resource;
+        resource.resourcesStruct = builder.createStructType();
+        builder.addNameHintDecoration(
+            resource.resourcesStruct,
+            toSlice("PortableRTAccelerationStructureResources"));
+        IRInst* operands[] = {resource.resourcesStruct};
+        resource.physicalParameterBlockType = cast<IRUniformParameterGroupType>(
+            builder.getType(kIROp_ParameterBlockType, 1, operands));
+        auto nativeKey = builder.createStructKey();
+        builder.addNameHintDecoration(nativeKey, toSlice("accelerationStructure"));
+        resource.nativeASField =
+            builder.createStructField(resource.resourcesStruct, nativeKey, nativeType);
+        auto metadataKey = builder.createStructKey();
+        builder.addNameHintDecoration(metadataKey, toSlice("instanceContributionMetadata"));
+        resource.metadataField = builder.createStructField(
+            resource.resourcesStruct,
+            metadataKey,
+            builder.getPtrType(builder.getUIntType(), AddressSpace::Global));
+        outResources.add(resource);
+    }
+
+    // A native AS type must remain native inside the wrapper. Replacing that type globally
+    // would also redirect its field back to the wrapper and create a recursive resource type.
+    // Propagate wrappers through values and storage instead, checking every shared assignment.
     MetalAccelerationStructurePhysicalizationContext context(module, sink);
     bool success = true;
-    for (const auto& use : uses)
-        success &= context.physicalize(use.value, use.tags, use.useSite);
-    return success;
+    for (Index i = 0; i < uses.getCount(); ++i)
+    {
+        auto index = resourcesByNativeType.getValue(nativeTypes[i]);
+        success &= context.physicalize(
+            uses[i].value,
+            outResources[index].physicalParameterBlockType,
+            uses[i].useSite);
+    }
+    if (!success)
+        return false;
+
+    // Only portable source types are erased globally. This covers retained provider resources
+    // that never reach a trace, without changing the native types inside argument buffers.
+    for (Index i = 0; i < sourceTypes.getCount(); ++i)
+    {
+        auto index = resourcesByNativeType.getValue(nativeTypes[uses.getCount() + i]);
+        sourceTypes[i]->replaceUsesWith(outResources[index].physicalParameterBlockType);
+    }
+    return true;
 }
 
 } // namespace Metal

@@ -70,14 +70,12 @@ enum class MetalRTDescriptorResource : UInt
 };
 
 /// Defines the header words containing byte offsets into the host-built records buffer.
-/// Ordinary instancing uses a flat contribution array; multilevel traversal uses the same
-/// section as an instance-path trie. Neither representation reuses user instance IDs.
+/// Instance contributions belong to the acceleration structure, not this program's records.
 enum class MetalRTRecordSection : UInt
 {
-    InstanceHitGroupContribution = 0,
-    Hit = 1,
-    Miss = 2,
-    Callable = 3,
+    Hit = 0,
+    Miss = 1,
+    Callable = 2,
 };
 
 /// Every record begins with its function index and reserved words, followed by the application

@@ -699,6 +699,12 @@ void calcRequiredLoweringPassSet(
     case kIROp_TraceProgramDescriptorType:
         result.traceProgramDescriptor = true;
         break;
+    case kIROp_RaytracingAccelerationStructureType:
+        // Portable AS declarations need target representation even when this entry does not
+        // trace. The native RayQuery resource has no operands and keeps its existing binding.
+        if (inst->getOperandCount() != 0)
+            result.portableRayTracing = true;
+        break;
     case kIROp_MatrixType:
         // An `Unknown` layout needs the pass. So does `Unknown` passed as a generic argument,
         // which this scan cannot recognize, so a generic (non-literal) layout requests it too.

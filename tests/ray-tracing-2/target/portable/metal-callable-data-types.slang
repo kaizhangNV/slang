@@ -126,8 +126,9 @@ void RayGeneration()
 // METAL-NOT: metalRTCallShader
 
 // UINT: rt_CallableInput_dispatchRaysIndex_get
-// UINT: visible]] void UintCallable_callable(void thread* data
-// UINT: UintCallable_invoke{{.*}}((uint thread*){{.*}}data{{.*}}, dispatchRaysIndex
+// UINT: visible]] void UintCallable_callable(void thread* [[DATA:[A-Za-z0-9_]+]], uint3 [[INDEX:[A-Za-z0-9_]+]],
+// UINT-SAME: uchar thread* globalResources{{[_0-9]*}})
+// UINT: UintCallable_invoke{{[_0-9]*}}([[INDEX]], (uint thread*)((ulong)([[DATA]])));
 // FLOAT: *{{.*}} = *{{.*}} * 2.0f;
 // FLOAT: visible]] void FloatCallable_callable(void thread* data
 // FLOAT: FloatCallable_invoke{{.*}}((float thread*){{.*}}data

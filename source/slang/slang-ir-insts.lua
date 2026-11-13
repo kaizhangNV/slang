@@ -537,11 +537,13 @@ local insts = {
 							},
 						},
 					},
-					-- Source forms have no operands for ordinary instancing, or one topology
-					-- operand for MultiLevelAccelerationStructure<N>. Metal physicalization
-					-- uses two operands: topology (zero for ordinary instancing) and the
-					-- native instancing/motion tag mask. This changes the native type, not
-					-- its resource kind or binding footprint.
+					-- The core native resource has no operands. Portable source types use [0]
+					-- for AccelerationStructure and [-1, N] for MultiLevelAccelerationStructure<N>.
+					-- The family marker keeps even invalid MultiLevel<0> distinct from the ordinary
+					-- type, so target lowering can diagnose its depth. Native RT targets erase [0].
+					-- Metal replaces portable types with argument buffers and represents their
+					-- native AS field using [topology, tagMask], where both values are nonnegative.
+					-- Topology is zero for ordinary instancing; tagMask selects instancing/motion.
 					{ RaytracingAccelerationStructure = { struct_name = "RaytracingAccelerationStructureType" } },
 					{
 						MetalIntersectionFunctionTable = {
@@ -1770,9 +1772,10 @@ local insts = {
 				{ "closestHitHasGlobalContext" },
 				{ "globalContext" },
 				-- Candidate dispatch and committed closest-hit dispatch call this same helper so
-				-- both interpret a multi-level instance path through the records-buffer trie
+				-- both interpret a multi-level instance path through the AS metadata trie
 				-- identically. It is meaningful only when the tag mask contains instancing.
 				{ "instanceHitGroupContributionLookup" },
+                { "instanceContributionMetadata" },
                 { "payload" },
                 { "attributesLookup" },
                 { "customHitKindAddress" },

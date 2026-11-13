@@ -498,6 +498,7 @@ VisibleAdapter createVisibleAdapter(
     builder.emitBlock();
     Dictionary<ParameterKind, IRInst*> parameters;
     Dictionary<IROp, IRInst*> values;
+    HashSet<KeyValuePair<IROp, IRType*>> seen;
     for (auto parameter : getVisibleParameters(builder, tableRequirements, descriptorPointerType))
     {
         auto value = builder.emitParam(parameter.type);
@@ -507,6 +508,17 @@ VisibleAdapter createVisibleAdapter(
         parameters.add(parameter.kind, value);
         if (parameter.operation != kIROp_Invalid)
             values.add(parameter.operation, value);
+        // Consider a miss shader that calls tracer.callShader through a helper. Lowering that
+        // dispatch creates launch queries after this adapter is built. Bind the fixed uint3
+        // parameters now, so those later queries use this invocation's values without adding
+        // parameters to the VFT signature. Other accesses can require the source result type,
+        // such as an indexed instance query whose parameter is an array pointer.
+        if (stage.isPresent && (parameter.operation == kIROp_MetalRTGetDispatchRaysIndex ||
+                                parameter.operation == kIROp_MetalRTGetDispatchRaysDimensions))
+        {
+            seen.add({parameter.operation, parameter.type});
+            result.bindings.add({parameter.operation, parameter.type, value});
+        }
     }
     if (!stage.isPresent)
     {
@@ -522,7 +534,6 @@ VisibleAdapter createVisibleAdapter(
     HashSet<IRFunc*> visited;
     List<IRInst*> operations;
     collectOperations(stage.invoke, visited, operations);
-    HashSet<KeyValuePair<IROp, IRType*>> seen;
     for (auto operation : operations)
     {
         auto op = operation->getOp();
@@ -613,6 +624,7 @@ VisibleAdapter createCallableAdapter(
     builder.emitBlock();
     Dictionary<ParameterKind, IRInst*> parameters;
     Dictionary<IROp, IRInst*> values;
+    HashSet<KeyValuePair<IROp, IRType*>> seen;
     for (auto parameter : getCallableParameters(builder, tableRequirements, descriptorPointerType))
     {
         auto value = builder.emitParam(parameter.type);
@@ -622,6 +634,14 @@ VisibleAdapter createCallableAdapter(
         parameters.add(parameter.kind, value);
         if (parameter.operation != kIROp_Invalid)
             values.add(parameter.operation, value);
+        // Nested dispatch can create launch queries after this adapter's body is inspected.
+        // Their fixed uint3 result types already match these invocation parameters.
+        if (parameter.operation == kIROp_MetalRTGetDispatchRaysIndex ||
+            parameter.operation == kIROp_MetalRTGetDispatchRaysDimensions)
+        {
+            seen.add({parameter.operation, parameter.type});
+            result.bindings.add({parameter.operation, parameter.type, value});
+        }
     }
     result.descriptorResources = parameters.getValue(ParameterKind::Descriptor);
     result.records = parameters.getValue(ParameterKind::Records);
@@ -633,7 +653,6 @@ VisibleAdapter createCallableAdapter(
     HashSet<IRFunc*> visited;
     List<IRInst*> operations;
     collectOperations(stage.invoke, visited, operations);
-    HashSet<KeyValuePair<IROp, IRType*>> seen;
     for (auto operation : operations)
     {
         auto op = operation->getOp();

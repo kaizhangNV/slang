@@ -43,32 +43,31 @@ using namespace PortableRT::Metal;
 ///
 ///     Records device buffer
 ///     +----------------------------------------------------------------+
-///     | Buffer header (16 bytes): four 4-byte section offsets          |
+///     | Buffer header (12 bytes): three 4-byte section offsets          |
 ///     +----------------------------------------------------------------+
-///     | Instance contribution section (starts at header[0])            |
+///     | Hit Record section (starts at header[0])                       |
 ///     +----------------------------------------------------------------+
-///     | Hit Record section (starts at header[1])                       |
+///     | Miss Record section (starts at header[1])                      |
 ///     +----------------------------------------------------------------+
-///     | Miss Record section (starts at header[2])                      |
-///     +----------------------------------------------------------------+
-///     | Callable Record section (starts at header[3])                  |
+///     | Callable Record section (starts at header[2])                  |
 ///     +----------------------------------------------------------------+
 ///
 /// Here header[i] is a byte offset from the records buffer's start. The host may leave gaps
 /// between sections. The hit, miss, and callable sections each contain consecutive records.
 ///
-/// For ordinary instancing, index the instance contribution section by the hit's instance
-/// index. Each 4-byte uint supplies that instance's base hit-record index:
+/// The acceleration structure is a separate argument buffer:
 ///
-///     Instance contribution section (ordinary instancing)
-///     [0] - [instance 0 contribution: 4 bytes]
-///     [1] - [instance 1 contribution: 4 bytes]
-///     ...
-///     [N] - [instance N contribution: 4 bytes]
+///     AS argument buffer
+///     +---------------------------------------+
+///     | native acceleration structure         |
+///     | instanceContributionMetadata ---------+--> AS metadata buffer
+///     +---------------------------------------+
 ///
-/// Multilevel instancing instead uses a trie of 4-byte words: intermediate values are word
-/// offsets relative to this section's start, and the final values are contributions. The
-/// section's size depends on the host's instance graph. It has no shader-record headers.
+/// For ordinary instancing the metadata is one uint per instance descriptor, in descriptor
+/// order. For multilevel instancing it is a trie: intermediate uints are word offsets from
+/// this metadata buffer's start, and leaf uints are complete-path contributions. The metadata
+/// has no program-record header. Selecting another AS also selects its metadata, so two ASes
+/// can share the same program descriptor and still use different hit-record contributions.
 ///
 /// Hit, miss, and callable sections all use this record layout:
 ///
@@ -101,6 +100,7 @@ using namespace PortableRT::Metal;
 ///     +--------------------------------+      +--------------------------------+
 ///     | header (first):                |      | header (first):                |
 ///     |   records -> buffer above      |      |   records -> buffer above      |
+///     |   AS metadata pointer          |      |   AS metadata pointer          |
 ///     |   sbtOffset, sbtStride         |      |   sbtOffset, sbtStride         |
 ///     +--------------------------------+      +--------------------------------+
 ///     | PayloadA                       |      | PayloadB                       |
@@ -109,11 +109,11 @@ using namespace PortableRT::Metal;
 ///     +--------------------------------+      +--------------------------------+
 ///
 /// lowerTrace creates one of these per-ray values, copies the caller's Payload into it, and
-/// fills its header from the trace's descriptor and arguments. The records pointer identifies
+/// fills its header from the trace's descriptor, AS and arguments. The records pointer identifies
 /// this trace's records buffer; sbtOffset and sbtStride select hit records within that buffer:
 ///
 ///     hitSlot = instanceContribution + geometryIndex * sbtStride + sbtOffset
-///     record = byteBase(records) + records[1] + hitSlot * hitStride
+///     record = byteBase(records) + records[0] + hitSlot * hitStride
 ///
 /// sbtStride is the record-index step between geometries; hitStride is bytes per record. Per-ray
 /// header fields are separate from both the buffer's section directory and each record's
@@ -174,6 +174,11 @@ RayDataHeader createHeader(IRModule* module)
         result.type,
         builder.getPtrType(builder.getUIntType(), AddressSpace::Global),
         "records");
+    result.instanceContributionMetadataKey = addField(
+        builder,
+        result.type,
+        builder.getPtrType(builder.getUIntType(), AddressSpace::Global),
+        "instanceContributionMetadata");
     result.sbtOffsetKey = addField(builder, result.type, builder.getUIntType(), "sbtOffset");
     result.sbtStrideKey = addField(builder, result.type, builder.getUIntType(), "sbtStride");
     return result;
@@ -330,14 +335,14 @@ RefPtr<TraceProgramDescriptor> createTraceProgramDescriptor(
         return nullptr;
     programDescriptor.tags = contextRequirements.tags;
     programDescriptor.maxLevels = contextRequirements.maxLevels;
-    // Every later Payload storage type starts with this header: the records-buffer pointer
-    // and the TraceRay call's SBT offset/stride, which traversal callbacks need to find a record.
+    // Every Payload carrier starts with the records pointer, AS metadata pointer, and trace
+    // SBT offset/stride. Candidate callbacks need these values to select the same hit record.
     programDescriptor.header = createHeader(module);
     auto accelerationStructure =
         cast<IRRaytracingAccelerationStructureType>(programDescriptor.schema.accelerationStructure);
     // An explicit topology uses instance-path arguments, including an explicit one-level
     // topology. This describes the source input contract, not whether maxLevels is greater than 1.
-    bool hasInstancePath = accelerationStructure->getOperandCount() != 0;
+    bool hasInstancePath = accelerationStructure->getOperandCount() == 2;
     // Fix the values passed to each visible shader, such as Record, ray origin and launch index.
     // Stage and topology determine these arguments; inspecting shader bodies would make the
     // calling convention depend on which implementations happen to be compiled together.
@@ -544,7 +549,11 @@ IRFunc* createClosestHitPresenceLookup(
 /// Expands the trace boundary, leaving traversal and the post-trace choice explicit for emission.
 /// The payload is copied into ray_data before traversal and back afterward; stages all reference
 /// that invocation's carrier rather than independent copies of the logical input object.
-void lowerTrace(IRModule* module, IRMetalTraceRay* trace, TraceProgramDescriptor& programDescriptor)
+void lowerTrace(
+    IRModule* module,
+    IRMetalTraceRay* trace,
+    TraceProgramDescriptor& programDescriptor,
+    const MetalRTAccelerationStructureResources& accelerationStructureResources)
 {
     auto payloadType = cast<IRPtrTypeBase>(trace->getPayload()->getDataType())->getValueType();
     auto& carrier = getCarrier(module, programDescriptor, payloadType);
@@ -560,6 +569,17 @@ void lowerTrace(IRModule* module, IRMetalTraceRay* trace, TraceProgramDescriptor
             programDescriptor.resources.getField(role));
     };
     auto records = load(MetalRTDescriptorResource::Records);
+    // The native AS and its metadata are loaded from the same selected argument buffer.
+    // For example, choosing between two AS values must also choose between their contribution
+    // arrays, even when both traces share one program descriptor and its shader records.
+    auto accelerationStructure = loadResource(
+        builder,
+        trace->getAccelerationStructure(),
+        accelerationStructureResources.nativeASField);
+    auto instanceContributionMetadata = loadResource(
+        builder,
+        trace->getAccelerationStructure(),
+        accelerationStructureResources.metadataField);
     auto rayData = builder.emitVar(carrier.type);
     builder.addNameHintDecoration(rayData, toSlice("rayData"));
     IRInst* payload = nullptr;
@@ -570,6 +590,9 @@ void lowerTrace(IRModule* module, IRMetalTraceRay* trace, TraceProgramDescriptor
     }
     auto header = builder.emitFieldAddress(rayData, carrier.headerKey);
     builder.emitStore(builder.emitFieldAddress(header, carrier.header->recordsKey), records);
+    builder.emitStore(
+        builder.emitFieldAddress(header, carrier.header->instanceContributionMetadataKey),
+        instanceContributionMetadata);
     builder.emitStore(
         builder.emitFieldAddress(header, carrier.header->sbtOffsetKey),
         trace->getSbtOffset());
@@ -624,7 +647,7 @@ void lowerTrace(IRModule* module, IRMetalTraceRay* trace, TraceProgramDescriptor
         trace->getSbtOffset(),
         trace->getSbtStride(),
         trace->getMissIndex(),
-        trace->getAccelerationStructure(),
+        accelerationStructure,
         load(MetalRTDescriptorResource::IntersectionFunctionTable),
         load(MetalRTDescriptorResource::MissVisibleFunctionTable),
         load(MetalRTDescriptorResource::ClosestHitVisibleFunctionTable),
@@ -640,6 +663,7 @@ void lowerTrace(IRModule* module, IRMetalTraceRay* trace, TraceProgramDescriptor
         programDescriptor.instanceContribution
             ? static_cast<IRInst*>(programDescriptor.instanceContribution)
             : integer(0),
+        instanceContributionMetadata,
         payload ? builder.emitBitCast(erasedPointer, payload)
                 : builder.getNullPtrValue(erasedPointer),
         attributesLookup,
@@ -829,7 +853,16 @@ void lowerMetalPortableRayTracing(
     DiagnosticSink* sink,
     bool& requiresResultTypeLowering)
 {
-    // 1. Make each selected ray-generation entry a compute entry.
+    // 1. Build wrappers for the selected stages while their source input types still describe
+    // the portable contract. The AS argument-buffer conversion below replaces those types.
+    // Do this before collecting dispatches because candidate wrappers can clone shader bodies.
+    auto adapters = prepareMetalStandaloneStages(
+        module,
+        targetProgram,
+        entryPoints,
+        requiresResultTypeLowering,
+        sink);
+
     // Metal launches ray generation as a compute kernel, even when it does not trace any rays.
     List<IRMetalTraceRay*> traces;
     List<IRMetalRTCallShader*> calls;
@@ -899,8 +932,20 @@ void lowerMetalPortableRayTracing(
         accelerationStructures.add(
             {trace->getAccelerationStructure(), programDescriptors.getValue(type)->tags, trace});
     }
-    if (!physicalizeAccelerationStructures(module, accelerationStructures, sink))
+    List<MetalRTAccelerationStructureResources> accelerationStructureResources;
+    if (!physicalizeAccelerationStructures(
+            module,
+            accelerationStructures,
+            sink,
+            accelerationStructureResources))
         return;
+    Dictionary<IRType*, const MetalRTAccelerationStructureResources*> resourcesByAccelerationType;
+    List<MetalRTArgumentBufferResources> accelerationStructureLayouts;
+    for (const auto& resource : accelerationStructureResources)
+    {
+        resourcesByAccelerationType.add(resource.physicalParameterBlockType, &resource);
+        accelerationStructureLayouts.add(resource);
+    }
     for (auto& pair : programDescriptors)
         createDescriptorResources(module, *pair.second, instanceContributions);
 
@@ -911,7 +956,9 @@ void lowerMetalPortableRayTracing(
     for (auto trace : traces)
     {
         auto type = cast<IRTraceProgramDescriptorType>(trace->getDescriptor()->getDataType());
-        lowerTrace(module, trace, *programDescriptors.tryGetValue(type)->Ptr());
+        auto resource =
+            resourcesByAccelerationType.getValue(trace->getAccelerationStructure()->getDataType());
+        lowerTrace(module, trace, *programDescriptors.tryGetValue(type)->Ptr(), *resource);
     }
     for (auto call : calls)
     {
@@ -919,16 +966,9 @@ void lowerMetalPortableRayTracing(
         lowerCallable(module, call, *programDescriptors.tryGetValue(type)->Ptr());
     }
 
-    // 4. Generate wrappers for the shader entries explicitly selected by the application.
-    // For schemas used by TraceRay, generate any needed traversal callbacks that invoke any-hit and
+    // 4. For schemas used by TraceRay, generate traversal callbacks that invoke any-hit and
     // intersection shaders through function tables. Listing a shader in a schema does not
     // select its invoke body for compilation.
-    auto adapters = prepareMetalStandaloneStages(
-        module,
-        targetProgram,
-        entryPoints,
-        requiresResultTypeLowering,
-        sink);
     List<MetalRTDescriptorResources> resources;
     for (auto& pair : programDescriptors)
     {
@@ -947,7 +987,7 @@ void lowerMetalPortableRayTracing(
     // supplies the shared global-resource pointers.
     lowerVisibleStageInputs(module, adapters);
     lowerLaunchQueries(module);
-    physicalizeMetalRTDescriptorResources(module, resources);
+    physicalizeMetalRTDescriptorResources(module, resources, accelerationStructureLayouts);
 }
 
 } // namespace Slang

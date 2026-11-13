@@ -26,9 +26,9 @@ ParameterBlock<Parameters> parameters;
 rt::TraceProgramDescriptor<Schema> program;
 RWStructuredBuffer<uint> output;
 
-// An element access gets its native type from the homogeneous array element type. The
-// compiler cannot retag just the final extraction: the parameter field, local array, and
-// helper ABI must all preserve the required primitive_motion resource type.
+// Each array element is one argument-buffer pointer containing the native structure and its
+// contribution metadata. Array indexing, the local copy, and the helper return must keep that
+// pair together, including the native structure's primitive_motion requirement.
 [noinline]
 rt::AccelerationStructure selectScene(rt::AccelerationStructure scenes[2], uint index)
 {
@@ -53,5 +53,7 @@ void RayGeneration()
 }
 
 // METAL-DAG: acceleration_structure<metal::raytracing::instancing, metal::raytracing::primitive_motion>
-// METAL-DAG: selectScene
+// METAL-DAG: instanceContributionMetadata
+// METAL: [[SCENE:localScenes_.*]]->accelerationStructure
+// METAL: [[SCENE]]->instanceContributionMetadata
 // METAL-NOT: acceleration_structure<metal::raytracing::instancing>

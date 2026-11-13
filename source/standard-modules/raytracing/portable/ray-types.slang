@@ -173,8 +173,8 @@ public struct RayTraversalDesc
 
 /// Identifies an acceleration-structure topology understood by structural tracing.
 ///
-/// The interface is sealed because lowering maps each supported topology to a fixed native
-/// acceleration-structure representation.
+/// The interface is sealed because lowering needs to know the topology when constructing the
+/// target's traversal and resource types.
 ///
 /// @par Constraints
 /// Only the standard library can add conforming types. A trace context's `AccelerationStructure`
@@ -182,28 +182,34 @@ public struct RayTraversalDesc
 [sealed]
 public interface IAccelerationStructure {}
 
-/// Makes the existing native acceleration-structure handle usable with the structural API.
+/// Represents two-level TLAS-to-BLAS traversal, or Metal IAS-to-primitive-AS traversal.
 ///
-/// It represents portable two-level TLAS-to-BLAS traversal (or Metal IAS-to-primitive-AS
-/// traversal).
-///
-/// The core module already declares this intrinsic resource type in `hlsl.meta.slang`. Extending
-/// it preserves the type accepted by existing bindings and native trace operations; declaring a
-/// new struct here would introduce a distinct type. The extension also keeps the core module
-/// independent of this experimental module's interface.
-///
-/// @par Specialization
-/// Extends the core `RaytracingAccelerationStructure` type with `IAccelerationStructure`
-/// conformance. There are no generic constraints; this conformance identifies that concrete
-/// handle as the portable two-level topology.
-public extension RaytracingAccelerationStructure : IAccelerationStructure {}
-
-/// Names the portable two-level acceleration-structure handle.
+/// On native ray-tracing targets this has the same representation as the core
+/// `RaytracingAccelerationStructure`. On Metal the host binds an argument buffer containing
+/// the native acceleration structure and its instance-contribution data. Keeping them together
+/// lets one trace program select different acceleration structures with different instance data.
+/// The core type retains its native Metal representation for APIs such as `RayQuery`.
 ///
 /// @par Constraints
-/// This alias is exactly `RaytracingAccelerationStructure`, which conforms to the sealed
-/// `IAccelerationStructure` interface. It does not denote the multilevel handle family.
-public typealias AccelerationStructure = RaytracingAccelerationStructure;
+/// Conforms to the sealed `IAccelerationStructure` contract. `Handle` can be stored in ordinary
+/// buffer data and resolves to this resource through the usual descriptor-handle operations.
+__intrinsic_type(RaytracingAccelerationStructure, 0)
+[KnownBuiltin("RayTracingAccelerationStructure")]
+public struct AccelerationStructure
+    : IAccelerationStructure, __IDynamicResourceCastable<__DynamicResourceKind.General>
+{
+    public static const DescriptorKind kind = DescriptorKind.AccelerationStructure;
+    public static const DescriptorAccess descriptorAccess = DescriptorAccess.Read;
+    public typealias Handle = DescriptorHandle<AccelerationStructure>;
+
+    // Match kConversionCost_ImplicitDereference in the core resource Handle constructors.
+    __implicit_conversion(10)
+    [ForceInline]
+    public __init(Handle handle)
+    {
+        return getDescriptorFromHandle(handle);
+    }
+}
 
 /// Refines `IAccelerationStructure` for handles with a maximum traversal depth.
 ///
@@ -231,7 +237,8 @@ internal interface IMultiLevelAccelerationStructure : IAccelerationStructure
 /// `maxLevelCount` includes the primitive acceleration structure and every instance level on the
 /// path to it. A value of one represents direct primitive-AS traversal; larger values enable
 /// Metal's multi-level traversal. A hit path therefore contains at most `maxLevelCount - 1`
-/// instances.
+/// instances. Like `AccelerationStructure`, this binds a Metal argument buffer containing the
+/// native acceleration structure and its instance-contribution data for the whole path.
 ///
 /// @tparam maxLevelCount Maximum depth, including the final primitive acceleration structure.
 /// This integer parameter is a type-level constant, not the runtime number of instances hit.
@@ -241,7 +248,7 @@ internal interface IMultiLevelAccelerationStructure : IAccelerationStructure
 /// which inherits `IAccelerationStructure`. The parameter is declared as `int` with no
 /// language-level range constraint; the caller must select a depth supported by Metal.
 [require(metal)]
-__intrinsic_type(RaytracingAccelerationStructure)
+__intrinsic_type(RaytracingAccelerationStructure, -1)
 [KnownBuiltin("RayTracingMultiLevelAccelerationStructure")]
 public struct MultiLevelAccelerationStructure<let maxLevelCount : int>
     : IMultiLevelAccelerationStructure

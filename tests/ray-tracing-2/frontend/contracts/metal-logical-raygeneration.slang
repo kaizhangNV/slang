@@ -23,7 +23,7 @@ struct Schema : rt::ITraceProgramSchema
     typealias CallableShaders = rt::EmptyCallableShaderList;
 }
 
-RaytracingAccelerationStructure scene;
+rt::AccelerationStructure scene;
 rt::TraceProgramDescriptor<Schema> program;
 RWStructuredBuffer<uint> output;
 

@@ -14,6 +14,33 @@ namespace Slang
 namespace
 {
 
+/// Gives portable acceleration structures their native representation on native RT targets.
+/// Consider rt::AccelerationStructure scene passed to TraceRay through the standard module's
+/// bit_cast<RaytracingAccelerationStructure>. The source types must stay distinct for Metal's
+/// argument-buffer layout, but here they denote the same native resource. Replacing the portable
+/// type with the canonical core type also lets ordinary simplification remove that bit cast.
+void lowerNativeAccelerationStructureTypes(IRModule* module)
+{
+    List<IRType*> portableTypes;
+    for (auto inst : module->getGlobalInsts())
+    {
+        if (inst->getOp() != kIROp_RaytracingAccelerationStructureType || !inst->getOperandCount())
+            continue;
+        // Multi-level traversal is Metal-only and cannot reach this native-target pass.
+        SLANG_RELEASE_ASSERT(inst->getOperandCount() == 1 && getIntVal(inst->getOperand(0)) == 0);
+        portableTypes.add(cast<IRType>(inst));
+    }
+    if (!portableTypes.getCount())
+        return;
+    IRBuilder builder(module);
+    auto nativeType = builder.getType(kIROp_RaytracingAccelerationStructureType);
+    for (auto type : portableTypes)
+    {
+        type->replaceUsesWith(nativeType);
+        type->removeAndDeallocate();
+    }
+}
+
 KnownBuiltinDeclName getPrimitiveKind(IRPortableRTStageInputDecoration* info)
 {
     auto decoration = info->getPrimitiveType()->findDecoration<IRKnownBuiltinDecoration>();
@@ -522,6 +549,8 @@ void lowerPortableRayTracingEntryPoints(
     }
     if (!isD3DTarget(target) && !isKhronosTarget(target) && !isCUDATarget(target))
         return;
+
+    lowerNativeAccelerationStructureTypes(module);
 
     List<NativeEntryPoint> nativeEntryPoints;
     // Create a wrapper entry point for each selected PortableRT stage.
