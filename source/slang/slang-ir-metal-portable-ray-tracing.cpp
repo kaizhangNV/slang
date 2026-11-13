@@ -35,7 +35,7 @@ using namespace PortableRT::Metal;
 ///     | intersectionFunctions (IFT)  |
 ///     | missFunctions (VFT)          |
 ///     | closestHitFunctions (VFT)    |       Records device buffer
-///     | callableFunctions (VFT)      |       uint directory: byte offsets
+///     | callableFunctions (VFT)      |       uint directory (16 bytes)
 ///     | records ---------------------+------>+----------------------------------+
 ///     | anyHitFunctions (VFT)        |       | [0] instance contributions       |
 ///     | intersectionShaders (VFT)    |       | [1] hit records                  |
@@ -46,6 +46,12 @@ using namespace PortableRT::Metal;
 ///                                            | (the host may leave gaps)        |
 ///                                            +----------------------------------+
 ///
+/// The directory has four uint byte offsets (4 bytes each), relative to the buffer's start.
+/// Each offset locates a whole section. Section [0] stores 4-byte uint words: one contribution
+/// per instance for ordinary instancing, or a trie of child offsets and contributions for
+/// multilevel instancing. Its total size depends on the host's instance graph; it has no
+/// shader-record headers.
+///
 /// Each hit, miss, or callable record has this layout. Many runtime records may select the
 /// same functionIndex while supplying different application Record bytes.
 ///
@@ -54,6 +60,17 @@ using namespace PortableRT::Metal;
 ///     +------------------------+---------------------+--------------------+---------+
 ///     byte 0                   4                     16
 ///     <-- section's byte stride: hitStride, missStride, callableStride -->
+///
+/// For a given schema, every record in a section has the same byte size, but the three
+/// sections can use different sizes. Each stride includes the header and rounds up to 16:
+///
+///     hitStride      = alignUp(16 + largest hit-group Record size, 16)
+///     missStride     = alignUp(16 + largest miss Record size, 16)
+///     callableStride = alignUp(16 + largest callable Record size, 16)
+///
+/// Record sizes use the packed C layout computed by getRecordStride; void contributes zero
+/// bytes, and the minimum stride is 16. For example, miss Record types of 4 and 20 bytes make
+/// every miss slot 48 bytes: 16 + 4 + 28 padding, or 16 + 20 + 12 padding.
 ///
 /// `header` describes the common prefix of the generated per-ray types. `carriers` maps each
 /// Payload IR type to its generated RayData type and field references. For this example:
