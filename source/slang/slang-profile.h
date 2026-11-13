@@ -65,6 +65,8 @@ void printDiagnosticArg(StringBuilder& sb, Stage val);
 
 ProfileFamily getProfileFamily(ProfileVersion version);
 
+// A compilation profile combines a shader stage, its native or portable contract, and a version.
+// The stage contract is part of `raw` so equality, IR decorations, and serialization preserve it.
 struct Profile
 {
     typedef uint32_t RawVal;
@@ -93,8 +95,13 @@ struct Profile
     bool operator==(Profile const& other) const { return raw == other.raw; }
     bool operator!=(Profile const& other) const { return raw != other.raw; }
 
-    Stage getStage() const { return Stage(uint32_t(raw) & 0xFFFF); }
+    Stage getStage() const { return Stage(uint32_t(raw) & (0xFFFF & ~kPortableRayTracingStage)); }
+    /// Sets a stage with its ordinary capability, replacing any portable stage contract.
     void setStage(Stage stage) { raw = (raw & ~0xFFFF) | uint32_t(stage); }
+
+    /// Sets one of the five portable ray-tracing stages, preserving the version and extra caps.
+    void setPortableRayTracingStage(Stage stage);
+    bool isPortableRayTracingStage() const { return (raw & kPortableRayTracingStage) != 0; }
 
     ProfileVersion getVersion() const { return ProfileVersion((uint32_t(raw) >> 16) & 0xFFFF); }
     void setVersion(ProfileVersion version)
@@ -113,6 +120,12 @@ struct Profile
     List<CapabilitySet> additionalCapabilities;
 
     RawVal raw = Unknown;
+
+private:
+    // Stage values occupy the low 16 bits. Reserve their high bit for the portable contract;
+    // existing native profile IDs and the high-16-bit version encoding remain unchanged.
+    static constexpr RawVal kPortableRayTracingStage = 0x8000;
+    static_assert(SLANG_STAGE_COUNT < kPortableRayTracingStage);
 };
 
 struct StageInfo

@@ -14,13 +14,17 @@ class Decl;
 class Type;
 class ASTBuilder;
 class MagicTypeModifier;
+class TraceProgramDescriptorType;
 struct SemanticsVisitor;
 class EntryPoint;
+struct IRBuilder;
+struct IRInst;
+struct IRType;
 
 namespace PortableRT
 {
 
-// These checks inspect already-checked declarations, types, and expressions. The checks taking
+// These helpers inspect already-checked declarations, types, and expressions. The checks taking
 // a visitor use its existing diagnoseOnce state to avoid reporting the same error twice.
 
 /// Checks the additional stage-implementation restrictions after ordinary conformance checking.
@@ -58,8 +62,78 @@ Stage getStageKind(InterfaceDecl* interfaceDecl);
 /// Returns whether the interface represents an executable stage with an `invoke` requirement.
 bool isExecutableStageInterface(InterfaceDecl* interfaceDecl);
 
+/// Identifies the portable acceleration-structure resource families by their checked roles.
+/// The core RaytracingAccelerationStructure is a separate native resource type.
+bool isAccelerationStructureType(Type* type);
+
+/// Lowers a portable acceleration-structure type, checking an explicit maximum depth while its
+/// source declaration still distinguishes MultiLevel<-1> from the legacy native AS(-1) type.
+/// A symbolic depth receives an ordinary static assertion in the lowered type's hoisted scope.
+IRType* lowerAccelerationStructureType(
+    IRBuilder* builder,
+    Type* type,
+    IRInst* levelCount,
+    DiagnosticSink* sink);
+
 /// Returns the stage named by the input struct's KnownBuiltin annotation, or Stage::Unknown.
 Stage getStageInputKind(AggTypeDecl* typeDecl);
+
+/// Returns the checked Context argument of a recognized stage-input type, or null otherwise.
+Type* getStageInputContextType(Type* inputType);
+
+/// Looks up a compiler-consumed associated-type role through canonical checked inheritance.
+/// The result may remain dependent on a generic or extern context until ordinary linking.
+Type* getAssociatedType(
+    Linkage* linkage,
+    ASTBuilder* astBuilder,
+    Type* owner,
+    KnownBuiltinDeclName role);
+
+/// Returns the concrete type pack of a checked shader list, or null for an unresolved list.
+/// A non-null pack with no elements represents an actual empty list.
+ConcreteTypePack* getConcreteEntryTypes(Type* entryListType);
+
+/// Adds PortableRTStageInputDecoration to the IR struct type for a recognized stage input.
+/// Its six operands are the stage kind, acceleration-structure type, payload type (callable
+/// data for CallableInput), record type, primitive type, and attributes type. Non-hit inputs use
+/// void for the last two operands. Other aggregate declarations are unchanged.
+/// The callback lowers checked semantic types synchronously in the caller's existing generic
+/// environment. The builder uses that environment's insertion location.
+void addStageInputDecoration(
+    IRBuilder* builder,
+    Linkage* linkage,
+    ASTBuilder* astBuilder,
+    AggTypeDecl* decl,
+    IRType* irType,
+    IRType* (*lowerType)(Type*, void*),
+    void* userData);
+
+/// Adds PortableRTShaderListDecoration to a recognized shader-list type, preserving its ordered
+/// entry-type pack followed by record, payload, primitive, attributes, closest-hit, any-hit, and
+/// intersection type packs. Each computed pack uses ordinary each/expand and associated-type
+/// lowering in the list's generic environment.
+/// Miss and callable lists retain record types; the other computed packs are empty for them.
+/// Other aggregate declarations are unchanged. No lookup requests an invoke implementation.
+void addShaderListDecoration(
+    IRBuilder* builder,
+    Linkage* linkage,
+    ASTBuilder* astBuilder,
+    AggTypeDecl* decl,
+    IRType* irType,
+    IRType* (*lowerType)(Type*, void*),
+    void* userData);
+
+/// Appends the descriptor schema's acceleration-structure, motion, and three list types to
+/// operands, which already contains the lowered schema and its conformance witness. The callback
+/// lowers each checked associated type in the descriptor's generic environment. Construct the IR
+/// descriptor after this call so its ordinary operands retain all seven values from the start.
+void appendTraceProgramDescriptorOperands(
+    Linkage* linkage,
+    ASTBuilder* astBuilder,
+    TraceProgramDescriptorType* descriptorType,
+    List<IRInst*>& operands,
+    IRType* (*lowerType)(Type*, void*),
+    void* userData);
 
 /// Returns this executable interface's `invoke` requirement, or null for other interfaces.
 FunctionDeclBase* getStageInvokeRequirement(InterfaceDecl* interfaceDecl);

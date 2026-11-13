@@ -238,15 +238,8 @@ public:
         m_inferredCapabilityRequirements = caps;
     }
 
-    /// Marks an entry selected through a checked structural ray-tracing conformance.
-    void markAsStructuralRayTracingEntryPoint()
-    {
-        m_isStructuralRayTracingEntryPoint = true;
-        // Defer native parameter layout for the logical input until an adapter is generated.
-        m_shaderParams.clear();
-    }
-
-    bool isStructuralRayTracingEntryPoint() const { return m_isStructuralRayTracingEntryPoint; }
+    /// Whether this entry was selected through a checked portable stage conformance.
+    bool isStructuralRayTracingEntryPoint() const { return m_profile.isPortableRayTracingStage(); }
 
     /// Get the module that contains the entry point.
     Module* getModule();
@@ -351,10 +344,6 @@ private:
     // The declaration of the entry-point function itself.
     //
     DeclRef<FuncDecl> m_funcDeclRef;
-
-    // Source validation distinguishes structural selection from a native function that happens
-    // to take an RT input. The checked function signature carries all structural type information.
-    bool m_isStructuralRayTracingEntryPoint = false;
 
     /// The mangled name of the entry point function
     String m_mangledName;

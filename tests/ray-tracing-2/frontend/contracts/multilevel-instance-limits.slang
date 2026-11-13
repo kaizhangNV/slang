@@ -40,7 +40,7 @@ uint readGenericLimit<C : rt::IHitContext, let depth : int>()
     return rt::ClosestHitInput<C>.maxInstanceCount;
 }
 
-[require(metal, closesthit)]
+[require(metal, portable_closesthit)]
 export uint closestHitLimit()
 {
     static_assert(TraceContext.AccelerationStructure.levelCount == TEST_DEPTH, "AS level count");
@@ -50,7 +50,7 @@ export uint closestHitLimit()
     return readGenericLimit<HitContext, TEST_DEPTH>();
 }
 
-[require(metal, anyhit)]
+[require(metal, portable_anyhit)]
 export uint anyHitLimit()
 {
     static_assert(
@@ -59,7 +59,7 @@ export uint anyHitLimit()
     return rt::AnyHitInput<HitContext>.maxInstanceCount;
 }
 
-[require(metal, intersection)]
+[require(metal, portable_intersection)]
 export uint intersectionLimit()
 {
     static_assert(

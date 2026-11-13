@@ -43,14 +43,15 @@ typealias Descriptor = rt::TraceProgramDescriptor<Schema>;
 Descriptor descriptor;
 rt::TraceProgramDescriptor<OtherSchema> otherDescriptor;
 
-// Checked generic substitution must preserve each schema and its conformance witness in IR.
+// Checked generic substitution must preserve each schema and its conformance witness as the
+// first two IR operands. schema-contract.slang checks the five schema-type operands as well.
 // The two specializations stay distinct even though neither handle has source-visible fields.
 // CHECK: [nameHint("descriptor")]
 // CHECK-NEXT: [export({{.*}})]
-// CHECK-NEXT: let %descriptor : TraceProgramDescriptor(%Schema, %{{[0-9]+}}) = global_param
+// CHECK-NEXT: let %descriptor : TraceProgramDescriptor(%Schema, %{{[0-9]+}}, {{.*}}) = global_param
 // CHECK: [nameHint("otherDescriptor")]
 // CHECK-NEXT: [export({{.*}})]
-// CHECK-NEXT: let %otherDescriptor : TraceProgramDescriptor(%OtherSchema, %{{[0-9]+}}) = global_param
+// CHECK-NEXT: let %otherDescriptor : TraceProgramDescriptor(%OtherSchema, %{{[0-9]+}}, {{.*}}) = global_param
 
 struct Bindings
 {

@@ -99,8 +99,12 @@
 #include "slang-ir-lower-tuple-types.h"
 #include "slang-ir-metadata.h"
 #include "slang-ir-metal-legalize.h"
+#include "slang-ir-metal-portable-ray-tracing-context.h"
+#include "slang-ir-metal-portable-ray-tracing.h"
 #include "slang-ir-missing-return.h"
 #include "slang-ir-optix-entry-point-uniforms.h"
+#include "slang-ir-portable-ray-tracing-resources.h"
+#include "slang-ir-portable-ray-tracing.h"
 #include "slang-ir-pytorch-cpp-binding.h"
 #include "slang-ir-ray-tracing-legalize.h"
 #include "slang-ir-redundancy-removal.h"
@@ -678,6 +682,31 @@ void calcRequiredLoweringPassSet(
     case kIROp_LateRequireCapability:
         result.lateRequireCapability = true;
         break;
+    case kIROp_EntryPointDecoration:
+        // Metal ray-generation entries need compute-stage lowering even without TraceRay or
+        // CallShader instructions in their bodies.
+        if (isMetalTarget(codeGenContext->getTargetReq()) &&
+            cast<IREntryPointDecoration>(inst)->getProfile().getStage() == Stage::RayGeneration)
+        {
+            result.portableRayTracing = true;
+        }
+        break;
+    case kIROp_PortableRTStageInputDecoration:
+    case kIROp_MetalTraceRay:
+    case kIROp_MetalRTCallShader:
+        result.portableRayTracing = true;
+        break;
+    case kIROp_TraceProgramDescriptorType:
+        result.traceProgramDescriptor = true;
+        break;
+    case kIROp_RaytracingAccelerationStructureType:
+        // Portable AS declarations need target representation even when this entry does not
+        // trace. The native RayQuery resource uses -1 and keeps its existing binding.
+        SLANG_RELEASE_ASSERT(inst->getOperandCount() == 1);
+        if (auto levelCount = as<IRIntLit>(inst->getOperand(0));
+            !levelCount || levelCount->getValue() != -1)
+            result.portableRayTracing = true;
+        break;
     case kIROp_MatrixType:
         // An `Unknown` layout needs the pass. So does `Unknown` passed as a generic argument,
         // which this scan cannot recognize, so a generic (non-literal) layout requests it too.
@@ -1068,7 +1097,7 @@ Result linkAndOptimizeIR(
     //
     outLinkedIR = linkIR(codeGenContext);
     auto irModule = outLinkedIR.module;
-    auto irEntryPoints = outLinkedIR.entryPoints;
+    auto& irEntryPoints = outLinkedIR.entryPoints;
 
     // If our linking step resulted in errors, abort. We can't assume that
     // our IR is complete.
@@ -1385,6 +1414,8 @@ Result linkAndOptimizeIR(
     }
 
     SLANG_PASS(collectGlobalUniformParameters, outLinkedIR.globalScopeVarLayout, target);
+    if (requiredLoweringPassSet.portableRayTracing && isMetalTarget(targetRequest))
+        SLANG_PASS(preserveMetalRTGlobalResources, outLinkedIR.globalScopeVarLayout);
     validateIRModuleIfEnabled(codeGenContext, irModule);
 
     SLANG_PASS(checkEntryPointDecorations, target, sink);
@@ -1595,6 +1626,21 @@ Result linkAndOptimizeIR(
         SLANG_PASS(specializeHigherOrderParameters, codeGenContext);
     }
 
+    // A portable stage's checked static method is still an ordinary callable helper. Build
+    // its target entry adapter only after specialization has resolved its input context, and
+    // before DCE or native ABI legalization can discard or reinterpret that logical input.
+    if (requiredLoweringPassSet.portableRayTracing)
+        SLANG_PASS(
+            lowerPortableRayTracingEntryPoints,
+            targetProgram,
+            irEntryPoints,
+            sink,
+            requiredLoweringPassSet.resultType);
+    if (sink->getErrorCount() != 0)
+        return SLANG_FAIL;
+
+    validateIRModuleIfEnabled(codeGenContext, irModule);
+
     // finalizeAutoDiffPass walks the whole module and builds an AutoDiffSharedContext. It
     // only has work to do when the module contains autodiff constructs, which
     // calcRequiredLoweringPassSet records in requiredLoweringPassSet.autodiff (covering
@@ -1619,6 +1665,16 @@ Result linkAndOptimizeIR(
     if (requiredLoweringPassSet.matrixSwizzleStore)
         SLANG_PASS(lowerMatrixSwizzleStores);
     SLANG_PASS(eliminateDeadCode, deadCodeEliminationOptions);
+
+    // A retained library helper may still have logical invocation getters with no selected
+    // Metal stage to supply their values. Diagnose after DCE removes unused helpers, but before
+    // type legalization removes the empty logical input that these getters still reference.
+    if (isMetalTarget(targetRequest))
+    {
+        SLANG_PASS(diagnoseUnboundMetalPortableRayTracing, sink);
+        if (sink->getErrorCount() != 0)
+            return SLANG_FAIL;
+    }
 
     SLANG_PASS(finalizeSpecialization);
 
@@ -1845,6 +1901,9 @@ Result linkAndOptimizeIR(
     SLANG_PASS(generateAnyValueMarshallingFunctions, targetProgram);
     if (sink->getErrorCount() != 0)
         return SLANG_FAIL;
+
+    if (requiredLoweringPassSet.traceProgramDescriptor && !isMetalTarget(targetRequest))
+        SLANG_PASS(eraseNativeRayTracingDescriptors);
 
     // Don't need to run any further target-dependent passes if we are generating code
     // for host vm.
@@ -2522,7 +2581,7 @@ Result linkAndOptimizeIR(
     case CodeGenTarget::SPIRVAssembly:
         if (targetProgram->getOptionSet().getBoolOption(
                 CompilerOptionName::EnableExperimentalPasses))
-            SLANG_PASS(introduceExplicitGlobalContext, target);
+            SLANG_PASS(introduceExplicitGlobalContext, target, sink);
         SLANG_PASS(transformParamsToConstRef, codeGenContext->getSink());
         break;
     case CodeGenTarget::Metal:
@@ -2538,7 +2597,9 @@ Result linkAndOptimizeIR(
     case CodeGenTarget::ShaderLLVMIR:
     case CodeGenTarget::ShaderObjectCode:
     case CodeGenTarget::ShaderHostCallable:
-        SLANG_PASS(introduceExplicitGlobalContext, target);
+        SLANG_PASS(introduceExplicitGlobalContext, target, sink);
+        if (target == CodeGenTarget::Metal && requiredLoweringPassSet.portableRayTracing)
+            SLANG_PASS(finalizeMetalPortableRayTracingGlobalContext, sink);
         if (target == CodeGenTarget::CPPSource || target == CodeGenTarget::CPPHeader)
         {
             SLANG_PASS(convertEntryPointPtrParamsToRawPtrs);

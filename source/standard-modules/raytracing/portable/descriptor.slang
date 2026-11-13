@@ -64,7 +64,6 @@ namespace rt
 /// any-hit logic. Both paths supply record `i`'s application data through `input.record`.
 /// Several records can share `f`. Miss and callable records likewise select their table entries
 /// through a function index stored in the record header.
-/// @todo Implement the shared Metal tables and record layout in the target-adapter slice.
 /// @tparam Schema The trace context and finite shader lists describing the bound program.
 ///
 /// @par Constraints

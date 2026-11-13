@@ -40,6 +40,7 @@
 #include "slang-ir-validate.h"
 #include "slang-ir.h"
 #include "slang-mangle.h"
+#include "slang-portable-ray-tracing-utility.h"
 #include "slang-rich-diagnostics.h"
 #include "slang-type-layout.h"
 #include "slang-visitor.h"
@@ -2920,6 +2921,11 @@ struct ValLoweringVisitor : ValVisitor<ValLoweringVisitor, LoweredValInfo, Lower
         SLANG_ASSERT(intrinsicTypeModifier);
         IROp op = IROp(intrinsicTypeModifier->irOp);
         List<IRInst*> operands;
+        // Fixed operands distinguish representations that share an opcode. For example,
+        // the core acceleration structure declares -1 and portable AccelerationStructure declares
+        // 2. MultiLevel<N> instead supplies its level count through the generic argument below.
+        for (auto operand : intrinsicTypeModifier->irOperands)
+            operands.add(getBuilder()->getIntValue(getBuilder()->getIntType(), operand));
         // If there are any substitutions attached to the declRef,
         // add them as operands of the IR type.
         SubstitutionSet(type->getDeclRef())
@@ -2930,6 +2936,29 @@ struct ValLoweringVisitor : ValVisitor<ValLoweringVisitor, LoweredValInfo, Lower
                     SLANG_ASSERT(argVal);
                     operands.add(argVal);
                 });
+        if (PortableRT::isAccelerationStructureType(type))
+        {
+            SLANG_RELEASE_ASSERT(operands.getCount() == 1);
+            return PortableRT::lowerAccelerationStructureType(
+                getBuilder(),
+                type,
+                operands[0],
+                context->getSink());
+        }
+        if (auto descriptorType = as<TraceProgramDescriptorType>(type))
+        {
+            // Lower the schema types needed for backend synthesis before creating the descriptor.
+            // Ordinary operands keep their lookups alive and place them before this hoistable type,
+            // so specialization can substitute them when it copies the descriptor.
+            PortableRT::appendTraceProgramDescriptorOperands(
+                context->getLinkage(),
+                context->astBuilder,
+                descriptorType,
+                operands,
+                [](Type* associatedType, void* userData)
+                { return lowerType(static_cast<IRGenContext*>(userData), associatedType); },
+                context);
+        }
         return getBuilder()->getType(
             op,
             static_cast<UInt>(operands.getCount()),
@@ -12734,6 +12763,31 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
 
         addTargetRequirementDecorations(irAggType, decl);
 
+        // Build decoration operands beside the nominal type, inside the same generic
+        // environment. The callback uses ordinary lowering for checked types.
+        IRBuilder decorationBuilder = *subBuilder;
+        decorationBuilder.setInsertBefore(irAggType);
+        IRGenContext decorationContext = *subContext;
+        decorationContext.irBuilder = &decorationBuilder;
+        auto lowerDecorationType = [](Type* type, void* userData)
+        { return lowerType(static_cast<IRGenContext*>(userData), type); };
+        PortableRT::addStageInputDecoration(
+            &decorationBuilder,
+            decorationContext.getLinkage(),
+            decorationContext.astBuilder,
+            decl,
+            irAggType,
+            lowerDecorationType,
+            &decorationContext);
+        PortableRT::addShaderListDecoration(
+            &decorationBuilder,
+            decorationContext.getLinkage(),
+            decorationContext.astBuilder,
+            decl,
+            irAggType,
+            lowerDecorationType,
+            &decorationContext);
+
         return LoweredValInfo::simple(finalFinishedVal);
     }
 
@@ -16389,7 +16443,26 @@ IREntryPointLayout* lowerEntryPointLayout(
     IRLayoutGenContext* context,
     EntryPointLayout* entryPointLayout)
 {
-    auto irParamsLayout = lowerVarLayout(context, entryPointLayout->parametersLayout);
+    IRVarLayout* irParamsLayout = nullptr;
+    if (entryPointLayout->portableRTRecordLayout)
+    {
+        // A portable stage's reflected record is an anonymous compiler-provided parameter.
+        // It is not a source field or a tuple element, so generate its entry-local key here,
+        // where that identity is owned. Adapter synthesis consumes this exact resource layout
+        // before replacing the logical signature with native payload/attribute parameters.
+        IRStructTypeLayout::Builder parameters(context->irBuilder);
+        parameters.addField(
+            context->irBuilder->createStructKey(),
+            lowerVarLayout(context, entryPointLayout->portableRTRecordLayout));
+        auto typeLayout = _lowerTypeLayoutCommon(
+            &parameters,
+            entryPointLayout->parametersLayout->getTypeLayout());
+        irParamsLayout = lowerVarLayout(context, entryPointLayout->parametersLayout, typeLayout);
+    }
+    else
+    {
+        irParamsLayout = lowerVarLayout(context, entryPointLayout->parametersLayout);
+    }
     auto irResultLayout = lowerEntryPointResultLayout(context, entryPointLayout->resultLayout);
 
     return context->irBuilder->getEntryPointLayout(irParamsLayout, irResultLayout);

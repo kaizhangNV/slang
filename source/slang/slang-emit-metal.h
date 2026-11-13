@@ -54,6 +54,9 @@ protected:
     }
 
     void emitMemoryOrderOperand(IRInst* inst);
+    void emitMetalRTTraceDispatch(IRMetalRTTraceDispatch* trace);
+    void emitMetalRTCallDispatch(IRMetalRTCallDispatch* call);
+    virtual void emitOperandImpl(IRInst* inst, EmitOpInfo const& outerPrec) SLANG_OVERRIDE;
     virtual void emitTempModifiers(IRInst* temp) SLANG_OVERRIDE;
     virtual void emitParameterGroupImpl(IRGlobalParam* varDecl, IRUniformParameterGroupType* type)
         SLANG_OVERRIDE;
@@ -100,7 +103,6 @@ protected:
 
     virtual void handleRequiredCapabilitiesImpl(IRInst* inst) SLANG_OVERRIDE;
 
-    virtual void emitGlobalInstImpl(IRInst* inst) SLANG_OVERRIDE;
     virtual bool doesTargetSupportPtrTypes() SLANG_OVERRIDE { return true; }
 
     void emitFuncParamLayoutImpl(IRInst* param);

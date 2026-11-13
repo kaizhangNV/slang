@@ -10,11 +10,99 @@ namespace rt
 // Native targets expose much of that state through existing core-module intrinsics. The helpers
 // remain force-inlined so capability and stage checks apply at the shader's property access.
 //
-// Metal stage-input lowering must obtain these values from generated intersection or
-// post-traversal dispatch parameters. Each pending Metal implementation therefore fails with a
-// target-specific static assertion until that synthesis is added in a following PR. These
-// assertions allow module import and frontend checking; they reject reachable target code
-// generation. Returns after a failed assertion only satisfy return checking and cannot execute.
+// Metal obtains the same values from generated intersection or post-traversal dispatch adapters.
+// These internal operations describe reachable requirements without prescribing adapter parameters.
+// A source helper can remain an ordinary, non-inlined function: lowering passes the required values
+// from its adapter through its callers. Candidate control operations are separate because they
+// affect the whole source stage, rather than merely returning from the helper that uses them.
+
+/// Reads the originating ray's lower interval bound from the Metal invocation.
+[require(metal)]
+__intrinsic_op(metalRTGetMinDistance)
+internal float __metalRTGetMinDistance();
+
+/// Reads the Metal candidate or committed distance, or the miss-stage upper interval bound.
+[require(metal)]
+__intrinsic_op(metalRTGetCurrentDistance)
+internal float __metalRTGetCurrentDistance();
+
+/// Reads the candidate or committed hit classification from the Metal invocation.
+[require(metal)]
+__intrinsic_op(metalRTGetHitKind)
+internal uint __metalRTGetHitKind();
+
+/// Reads the flags of the trace call which created the Metal invocation.
+[require(metal)]
+__intrinsic_op(metalRTGetRayFlags)
+internal uint __metalRTGetRayFlags();
+
+/// Reads the geometry-local primitive index from the Metal invocation.
+[require(metal)]
+__intrinsic_op(metalRTGetPrimitiveIndex)
+internal uint __metalRTGetPrimitiveIndex();
+
+/// Reads the primitive acceleration structure's geometry index from the Metal invocation.
+[require(metal)]
+__intrinsic_op(metalRTGetGeometryIndex)
+internal uint __metalRTGetGeometryIndex();
+
+/// Reads the originating ray's world-space origin from the Metal invocation.
+[require(metal)]
+__intrinsic_op(metalRTGetWorldSpaceOrigin)
+internal float3 __metalRTGetWorldSpaceOrigin();
+
+/// Reads the originating ray's world-space direction from the Metal invocation.
+[require(metal)]
+__intrinsic_op(metalRTGetWorldSpaceDirection)
+internal float3 __metalRTGetWorldSpaceDirection();
+
+/// Reads the originating launch coordinates carried by the Metal invocation.
+[require(metal)]
+__intrinsic_op(metalRTGetDispatchRaysIndex)
+internal uint3 __metalRTGetDispatchRaysIndex();
+
+/// Reads the originating launch dimensions carried by the Metal invocation.
+[require(metal)]
+__intrinsic_op(metalRTGetDispatchRaysDimensions)
+internal uint3 __metalRTGetDispatchRaysDimensions();
+
+/// Reads the motion-sampling time carried by the Metal invocation.
+[require(metal)]
+__intrinsic_op(metalRTGetRayTime)
+internal float __metalRTGetRayTime();
+
+/// Reads the Metal invocation's object-space ray with its current interval.
+[require(metal)]
+__intrinsic_op(metalRTGetObjectSpaceRay)
+internal RayDesc __metalRTGetObjectSpaceRay();
+
+/// Reads the complete object-to-world transform, or identity without instancing.
+[require(metal)]
+__intrinsic_op(metalRTGetObjectToWorld)
+internal float4x3 __metalRTGetObjectToWorld();
+
+/// Reads the complete world-to-object transform, or identity without instancing.
+[require(metal)]
+__intrinsic_op(metalRTGetWorldToObject)
+internal float4x3 __metalRTGetWorldToObject();
+
+/// Rejects the current candidate and exits the source any-hit invocation, including its helpers.
+[require(metal, portable_anyhit)]
+__intrinsic_op(metalRTIgnoreHit)
+internal void __metalRTIgnoreHit();
+
+/// Accepts the candidate, exits the source any-hit invocation, and ends the traversal search.
+[require(metal, portable_anyhit)]
+__intrinsic_op(metalRTAcceptHitAndEndSearch)
+internal void __metalRTAcceptHitAndEndSearch();
+
+/// Reports one procedural candidate to the selected hit group's Metal any-hit filtering logic.
+///
+/// The attributes retain their concrete type until the hit-group adapter supplies the candidate
+/// protocol. A successful report returns true; it does not itself end the intersection invocation.
+[require(metal, portable_intersection)]
+__intrinsic_op(metalRTReportHit)
+internal bool __metalRTReportHit<Attributes>(float distance, uint hitKind, Attributes attributes);
 
 /// Returns the minimum valid distance for the current ray.
 ///
@@ -30,11 +118,7 @@ internal float getStageInputMinDistance()
     case cuda:
         return RayTMin();
     case metal:
-        // TODO: A following PR must synthesize the ray minimum distance from Metal stage state.
-        static_assert(
-            false,
-            "Metal structural ray-tracing minDistance requires compiler synthesis");
-        return 0.0;
+        return __metalRTGetMinDistance();
     }
 }
 
@@ -52,10 +136,7 @@ internal float getStageInputCurrentDistance()
     case cuda:
         return RayTCurrent();
     case metal:
-        // TODO: A following PR must synthesize the current hit distance or traversal upper bound
-        // from Metal stage state.
-        static_assert(false, "Metal structural ray-tracing distance requires compiler synthesis");
-        return 0.0;
+        return __metalRTGetCurrentDistance();
     }
 }
 
@@ -73,10 +154,7 @@ internal uint getStageInputHitKind()
     case cuda:
         return HitKind();
     case metal:
-        // TODO: A following PR must synthesize the candidate or committed hit classification from
-        // Metal stage state.
-        static_assert(false, "Metal structural ray-tracing hitKind requires compiler synthesis");
-        return 0;
+        return __metalRTGetHitKind();
     }
 }
 
@@ -94,9 +172,7 @@ internal uint getStageInputRayFlags()
     case cuda:
         return RayFlags();
     case metal:
-        // TODO: A following PR must synthesize the trace call's ray flags from Metal stage state.
-        static_assert(false, "Metal structural ray-tracing rayFlags requires compiler synthesis");
-        return 0;
+        return __metalRTGetRayFlags();
     }
 }
 
@@ -114,12 +190,7 @@ internal uint getStageInputPrimitiveIndex()
     case cuda:
         return PrimitiveIndex();
     case metal:
-        // TODO: A following PR must synthesize the candidate or committed primitive index from
-        // Metal stage state.
-        static_assert(
-            false,
-            "Metal structural ray-tracing primitiveIndex requires compiler synthesis");
-        return 0;
+        return __metalRTGetPrimitiveIndex();
     }
 }
 
@@ -134,18 +205,10 @@ internal uint getStageInputGeometryIndex()
     case hlsl:
     case glsl:
     case spirv:
+    case cuda:
         return GeometryIndex();
     case metal:
-        // TODO: A following PR must synthesize the candidate or committed geometry index from Metal
-        // stage state.
-        static_assert(
-            false,
-            "Metal structural ray-tracing geometryIndex requires compiler synthesis");
-        return 0;
-    case cuda:
-        // TODO: A following PR must implement the geometry-index mapping for OptiX.
-        static_assert(false, "CUDA structural ray-tracing geometryIndex is not implemented");
-        return 0;
+        return __metalRTGetGeometryIndex();
     }
 }
 
@@ -163,11 +226,7 @@ internal float3 getStageInputWorldSpaceOrigin()
     case cuda:
         return WorldRayOrigin();
     case metal:
-        // TODO: A following PR must synthesize the world-space ray origin from Metal stage state.
-        static_assert(
-            false,
-            "Metal structural ray-tracing worldSpaceOrigin requires compiler synthesis");
-        return 0.0;
+        return __metalRTGetWorldSpaceOrigin();
     }
 }
 
@@ -185,12 +244,7 @@ internal float3 getStageInputWorldSpaceDirection()
     case cuda:
         return WorldRayDirection();
     case metal:
-        // TODO: A following PR must synthesize the world-space ray direction from Metal stage
-        // state.
-        static_assert(
-            false,
-            "Metal structural ray-tracing worldSpaceDirection requires compiler synthesis");
-        return 0.0;
+        return __metalRTGetWorldSpaceDirection();
     }
 }
 
@@ -208,12 +262,7 @@ internal uint3 getStageInputDispatchRaysIndex()
     case cuda:
         return DispatchRaysIndex();
     case metal:
-        // TODO: A following PR must synthesize the originating dispatch index from Metal stage
-        // state.
-        static_assert(
-            false,
-            "Metal structural ray-tracing dispatchRaysIndex requires compiler synthesis");
-        return 0;
+        return __metalRTGetDispatchRaysIndex();
     }
 }
 
@@ -231,12 +280,7 @@ internal uint3 getStageInputDispatchRaysDimensions()
     case cuda:
         return DispatchRaysDimensions();
     case metal:
-        // TODO: A following PR must synthesize the originating dispatch dimensions from Metal stage
-        // state.
-        static_assert(
-            false,
-            "Metal structural ray-tracing dispatchRaysDimensions requires compiler synthesis");
-        return 0;
+        return __metalRTGetDispatchRaysDimensions();
     }
 }
 
@@ -252,9 +296,7 @@ internal float getStageInputRayTime()
     case spirv:
         return RayCurrentTime();
     case metal:
-        // TODO: A following PR must synthesize the motion-enabled ray time from Metal stage state.
-        static_assert(false, "Metal structural ray-tracing time requires compiler synthesis");
-        return 0.0;
+        return __metalRTGetRayTime();
     case cuda:
         // TODO: A following PR must expose the current OptiX ray time through the core module.
         static_assert(false, "CUDA structural ray-tracing time is not implemented");
@@ -276,12 +318,7 @@ internal uint getStageInputInstanceIndex()
     case cuda:
         return InstanceIndex();
     case metal:
-        // TODO: A following PR must synthesize the candidate or committed instance index from Metal
-        // stage state.
-        static_assert(
-            false,
-            "Metal structural ray-tracing instanceIndex requires compiler synthesis");
-        return 0;
+        return getStageInputInstanceIndexAtLevel(0);
     }
 }
 
@@ -299,10 +336,7 @@ internal uint getStageInputInstanceID()
     case cuda:
         return InstanceID();
     case metal:
-        // TODO: A following PR must synthesize the application-provided instance identifier from
-        // Metal stage state.
-        static_assert(false, "Metal structural ray-tracing instanceID requires compiler synthesis");
-        return 0;
+        return getStageInputInstanceIDAtLevel(0);
     }
 }
 
@@ -310,14 +344,8 @@ internal uint getStageInputInstanceID()
 ///
 /// @return The actual multilevel instance-path length; zero for direct primitive-AS traversal.
 [require(metal)]
-[ForceInline]
-internal uint getStageInputInstanceCount()
-{
-    // TODO: A following PR must synthesize the candidate array length or committed instance_count.
-    // Direct primitive-AS traversal has no instance path and must synthesize a count of zero.
-    static_assert(false, "Metal structural ray-tracing instanceCount requires compiler synthesis");
-    return 0;
-}
+__intrinsic_op(metalRTGetInstanceCount)
+internal uint getStageInputInstanceCount();
 
 /// Returns the instance index at a valid level of the current multilevel primitive path.
 ///
@@ -325,17 +353,8 @@ internal uint getStageInputInstanceCount()
 /// the actual instance count.
 /// @return The instance index within the containing acceleration structure at `level`.
 [require(metal)]
-[ForceInline]
-internal uint getStageInputInstanceIndexAtLevel(uint level)
-{
-    // TODO: A following PR must read the candidate [[instance_id]] path or committed instance_id
-    // array at this level. Preserve the caller's level; selecting only the innermost entry loses
-    // the enclosing instances that distinguish paths such as [3, 7] and [4, 7].
-    static_assert(
-        false,
-        "Metal structural ray-tracing getInstanceIndex requires compiler synthesis");
-    return 0;
-}
+__intrinsic_op(metalRTGetInstanceIndex)
+internal uint getStageInputInstanceIndexAtLevel(uint level);
 
 /// Returns the application-defined ID at a valid level of the current multilevel primitive path.
 ///
@@ -343,14 +362,8 @@ internal uint getStageInputInstanceIndexAtLevel(uint level)
 /// the actual instance count.
 /// @return The application-defined instance ID at `level`.
 [require(metal)]
-[ForceInline]
-internal uint getStageInputInstanceIDAtLevel(uint level)
-{
-    // TODO: A following PR must read the candidate [[user_instance_id]] path or committed
-    // user_instance_id array at this level.
-    static_assert(false, "Metal structural ray-tracing getInstanceID requires compiler synthesis");
-    return 0;
-}
+__intrinsic_op(metalRTGetInstanceID)
+internal uint getStageInputInstanceIDAtLevel(uint level);
 
 /// Returns the current candidate ray transformed into object space.
 ///
@@ -372,12 +385,7 @@ internal RayDesc getStageInputCandidateObjectSpaceRay()
         result.Direction = ObjectRayDirection();
         result.TMax = RayTCurrent();
     case metal:
-        // TODO: A following PR must synthesize the candidate ray in object space from Metal stage
-        // state.
-        static_assert(
-            false,
-            "Metal structural ray-tracing objectSpaceRay requires compiler synthesis");
-        break;
+        result = __metalRTGetObjectSpaceRay();
     }
     return result;
 }
@@ -408,12 +416,7 @@ internal RayDesc getStageInputClosestHitObjectSpaceRay()
         result.Direction = mul(worldToObject, float4(WorldRayDirection(), 0.0));
         result.TMax = RayTCurrent();
     case metal:
-        // TODO: A following PR must synthesize the committed-hit ray in object space from Metal
-        // stage state.
-        static_assert(
-            false,
-            "Metal structural ray-tracing objectSpaceRay requires compiler synthesis");
-        break;
+        result = __metalRTGetObjectSpaceRay();
     }
     return result;
 }
@@ -432,12 +435,7 @@ internal float4x3 getStageInputObjectToWorld()
     case cuda:
         return ObjectToWorld4x3();
     case metal:
-        // TODO: A following PR must synthesize the complete object-to-world transform from Metal
-        // stage state, or an identity matrix for direct primitive-AS traversal without instancing.
-        static_assert(
-            false,
-            "Metal structural ray-tracing objectToWorld requires compiler synthesis");
-        return 0.0;
+        return __metalRTGetObjectToWorld();
     }
 }
 
@@ -455,12 +453,7 @@ internal float4x3 getStageInputWorldToObject()
     case cuda:
         return WorldToObject4x3();
     case metal:
-        // TODO: A following PR must synthesize the complete world-to-object transform from Metal
-        // stage state, or an identity matrix for direct primitive-AS traversal without instancing.
-        static_assert(
-            false,
-            "Metal structural ray-tracing worldToObject requires compiler synthesis");
-        return 0.0;
+        return __metalRTGetWorldToObject();
     }
 }
 
@@ -527,8 +520,8 @@ public extension<Input : ICommonHitInput> Input
     /// Reads the index of the current geometry within its primitive acceleration structure.
     ///
     /// @par Constraints
-    /// Read-only, zero-based geometry index. Metal synthesis and the OptiX geometry-index mapping
-    /// remain pending and currently reject code generation.
+    /// Read-only, zero-based geometry index. On OptiX this follows the core `GeometryIndex()`
+    /// contract: the SBT GAS index equals the geometry index when each build input has one SBT record.
     public property uint geometryIndex
     {
         get { return getStageInputGeometryIndex(); }
@@ -611,7 +604,7 @@ public extension<Input : ICommonHitInput> Input
 /// parameter. Copying the view does not duplicate its payload or record storage.
 /// Applications cannot construct a fresh input, declare an uninitialized input local, use an input
 /// as a global shader parameter or field, or return one from a function.
-[require(closesthit)]
+[require(portable_closesthit)]
 [KnownBuiltin("RayTracingClosestHitInput")]
 public struct ClosestHitInput<Context> : ICommonHitInput
     where Context : IHitContext
@@ -621,7 +614,7 @@ public struct ClosestHitInput<Context> : ICommonHitInput
     {}
 
     /// Gives mutable access to the payload supplied by the originating `RayTracer.trace` call.
-    /// @todo The compiler must synthesize this accessor from the stage's payload parameter.
+    /// The compiler maps this accessor to the invocation's native payload reference.
     ///
     /// @par Constraints
     /// The referenced type is exactly `Context.Payload`, inherited through `IPayloadContext`.
@@ -630,12 +623,13 @@ public struct ClosestHitInput<Context> : ICommonHitInput
     /// valid payload types.
     public property Context.Payload payload
     {
+        __intrinsic_op(portableRTGetPayload)
         [nonmutating]
         ref;
     }
 
     /// Reads the host-provided data in the selected shader-binding-table record.
-    /// @todo The compiler must synthesize this accessor from the target's record-data binding.
+    /// The compiler maps this accessor to the selected invocation's record-data binding.
     ///
     /// @par Constraints
     /// Read-only value of exactly `Context.Record`. The getter returns application data by value;
@@ -643,6 +637,7 @@ public struct ClosestHitInput<Context> : ICommonHitInput
     /// target layout; `void` selects a context with no application record data.
     public property Context.Record record
     {
+        __intrinsic_op(portableRTGetRecord)
         get;
     }
 
@@ -652,7 +647,7 @@ public struct ClosestHitInput<Context> : ICommonHitInput
     /// `BoundingBoxPrimitive<MyAttributes>` context exposes the `MyAttributes` value reported by
     /// its intersection shader. A curve context exposes `CurveData`. Generic callers need ordinary
     /// type constraints before accessing members of the associated attribute type.
-    /// @todo Adapter synthesis must return the built-in view or read the procedural hit attributes.
+    /// Adapter synthesis returns the built-in view or reads the procedural hit attributes.
     ///
     /// @par Constraints
     /// Read-only value of exactly `Context.Primitive.Attributes`. `TrianglePrimitive` selects
@@ -661,6 +656,7 @@ public struct ClosestHitInput<Context> : ICommonHitInput
     /// constraints.
     public property Context.Primitive.Attributes attributes
     {
+        __intrinsic_op(portableRTGetHitAttributes)
         get;
     }
 
@@ -804,7 +800,6 @@ public extension<Context> ClosestHitInput<Context>
     /// @pre `level < instanceCount`; indexing the configured maximum is insufficient for a shorter
     /// hit.
     /// @return The selected instance's index within that level's containing acceleration structure.
-    /// @todo Synthesize the selected level from Metal candidate or committed instance-path state.
     public uint getInstanceIndex(uint level)
     {
         return getStageInputInstanceIndexAtLevel(level);
@@ -819,7 +814,6 @@ public extension<Context> ClosestHitInput<Context>
     /// @pre `level < instanceCount`; indexing the configured maximum is insufficient for a shorter
     /// hit.
     /// @return The selected instance's application-defined ID.
-    /// @todo Synthesize the selected level from Metal candidate or committed instance-path state.
     public uint getInstanceID(uint level)
     {
         return getStageInputInstanceIDAtLevel(level);
@@ -829,7 +823,7 @@ public extension<Context> ClosestHitInput<Context>
 /// Provides the candidate payload, record, hit data, and ray state available to an any-hit stage.
 ///
 /// Control methods on this zero-storage view use native any-hit operations where available.
-/// @todo Metal adapter synthesis must implement them in the generated candidate dispatch.
+/// On Metal, the generated candidate dispatcher implements the same control decisions.
 ///
 /// @tparam Context The stage context; must conform to `IHitContext`.
 /// @par Constraints
@@ -838,7 +832,7 @@ public extension<Context> ClosestHitInput<Context>
 /// parameter. Copying the view does not duplicate its payload or record storage.
 /// Applications cannot construct a fresh input, declare an uninitialized input local, use an input
 /// as a global shader parameter or field, or return one from a function.
-[require(anyhit)]
+[require(portable_anyhit)]
 [KnownBuiltin("RayTracingAnyHitInput")]
 public struct AnyHitInput<Context> : ICommonHitInput
     where Context : IHitContext
@@ -848,7 +842,7 @@ public struct AnyHitInput<Context> : ICommonHitInput
     {}
 
     /// Gives mutable access to the payload supplied by the originating `RayTracer.trace` call.
-    /// @todo The compiler must synthesize this accessor from the stage's payload parameter.
+    /// The compiler maps this accessor to the invocation's native payload reference.
     ///
     /// @par Constraints
     /// The referenced type is exactly `Context.Payload`, inherited through `IPayloadContext`.
@@ -857,12 +851,13 @@ public struct AnyHitInput<Context> : ICommonHitInput
     /// valid payload types.
     public property Context.Payload payload
     {
+        __intrinsic_op(portableRTGetPayload)
         [nonmutating]
         ref;
     }
 
     /// Reads the host-provided data in the selected shader-binding-table record.
-    /// @todo The compiler must synthesize this accessor from the target's record-data binding.
+    /// The compiler maps this accessor to the selected invocation's record-data binding.
     ///
     /// @par Constraints
     /// Read-only value of exactly `Context.Record`. The getter returns application data by value;
@@ -870,6 +865,7 @@ public struct AnyHitInput<Context> : ICommonHitInput
     /// target layout; `void` selects a context with no application record data.
     public property Context.Record record
     {
+        __intrinsic_op(portableRTGetRecord)
         get;
     }
 
@@ -877,7 +873,7 @@ public struct AnyHitInput<Context> : ICommonHitInput
     ///
     /// Built-in primitives expose their `TriangleData` or `CurveData` view; procedural primitives
     /// expose the application-defined value supplied by the intersection shader's `reportHit` call.
-    /// @todo Adapter synthesis must return the built-in view or read the procedural hit attributes.
+    /// Adapter synthesis returns the built-in view or reads the procedural hit attributes.
     ///
     /// @par Constraints
     /// Read-only value of exactly `Context.Primitive.Attributes`. `TrianglePrimitive` selects
@@ -886,6 +882,7 @@ public struct AnyHitInput<Context> : ICommonHitInput
     /// constraints.
     public property Context.Primitive.Attributes attributes
     {
+        __intrinsic_op(portableRTGetHitAttributes)
         get;
     }
 
@@ -912,7 +909,6 @@ public struct AnyHitInput<Context> : ICommonHitInput
     /// Rejects the current any-hit candidate and allows traversal to search for another hit.
     ///
     /// @pre Called through an `AnyHitInput<Context>` in an any-hit stage.
-    /// @todo Synthesize the equivalent Metal candidate-rejection operation.
     public void ignoreHit()
     {
         __target_switch
@@ -923,10 +919,7 @@ public struct AnyHitInput<Context> : ICommonHitInput
         case cuda:
             IgnoreHit();
         case metal:
-            // TODO: A following PR must synthesize Metal candidate rejection.
-            static_assert(
-                false,
-                "Metal structural ray-tracing ignoreHit requires compiler synthesis");
+            __metalRTIgnoreHit();
             break;
         }
     }
@@ -934,7 +927,6 @@ public struct AnyHitInput<Context> : ICommonHitInput
     /// Accepts the current any-hit candidate and terminates the traversal search.
     ///
     /// @pre Called through an `AnyHitInput<Context>` in an any-hit stage.
-    /// @todo Synthesize the equivalent Metal candidate-acceptance and termination operations.
     public void acceptHitAndEndSearch()
     {
         __target_switch
@@ -945,11 +937,7 @@ public struct AnyHitInput<Context> : ICommonHitInput
         case cuda:
             AcceptHitAndEndSearch();
         case metal:
-            // TODO: A following PR must synthesize Metal candidate acceptance and traversal
-            // termination.
-            static_assert(
-                false,
-                "Metal structural ray-tracing acceptHitAndEndSearch requires compiler synthesis");
+            __metalRTAcceptHitAndEndSearch();
             break;
         }
     }
@@ -1074,7 +1062,6 @@ public extension<Context> AnyHitInput<Context>
     /// @pre `level < instanceCount`; indexing the configured maximum is insufficient for a shorter
     /// hit.
     /// @return The selected instance's index within that level's containing acceleration structure.
-    /// @todo Synthesize the selected level from Metal candidate or committed instance-path state.
     public uint getInstanceIndex(uint level)
     {
         return getStageInputInstanceIndexAtLevel(level);
@@ -1089,7 +1076,6 @@ public extension<Context> AnyHitInput<Context>
     /// @pre `level < instanceCount`; indexing the configured maximum is insufficient for a shorter
     /// hit.
     /// @return The selected instance's application-defined ID.
-    /// @todo Synthesize the selected level from Metal candidate or committed instance-path state.
     public uint getInstanceID(uint level)
     {
         return getStageInputInstanceIDAtLevel(level);
@@ -1101,8 +1087,8 @@ public extension<Context> AnyHitInput<Context>
 /// Payload access is additionally available on Metal and CUDA/OptiX.
 /// `reportHit` submits each candidate and its `Context.Primitive.Attributes` value. On D3D,
 /// Vulkan, and OptiX it maps to the native report-intersection operation.
-/// @todo Metal adapter synthesis must preserve the same candidate-filtering behavior in the
-/// generated intersection function.
+/// On Metal, the generated intersection function filters candidates through the group's any-hit
+/// logic and retains the accepted candidate's attributes for closest-hit dispatch.
 ///
 /// @tparam Context The stage context; must conform to `IHitContext`.
 /// @par Constraints
@@ -1113,7 +1099,7 @@ public extension<Context> AnyHitInput<Context>
 /// as a global shader parameter or field, or return one from a function.
 /// An `IIntersectionShader` implementation additionally requires
 /// `Context.Primitive : ICustomIntersectionPrimitive`.
-[require(intersection)]
+[require(portable_intersection)]
 [KnownBuiltin("RayTracingIntersectionInput")]
 public struct IntersectionInput<Context> : ICommonHitInput
     where Context : IHitContext
@@ -1123,22 +1109,23 @@ public struct IntersectionInput<Context> : ICommonHitInput
     {}
 
     /// Gives mutable access to the payload supplied by the originating `RayTracer.trace` call.
-    /// @todo Synthesize access to Metal's `ray_data` payload or OptiX payload state.
+    /// The compiler maps this view to Metal's `ray_data` payload or OptiX payload state.
     ///
     /// @par Constraints
     /// Available in intersection shaders on CUDA/OptiX and Metal.
     /// The `[nonmutating] ref` accessor leaves the view unchanged and exposes `Context.Payload`
     /// for mutation through an `in` parameter or immutable local copy.
-    [require(intersection, cuda)]
-    [require(intersection, metal)]
+    [require(portable_intersection, cuda)]
+    [require(portable_intersection, metal)]
     public property Context.Payload payload
     {
+        __intrinsic_op(portableRTGetPayload)
         [nonmutating]
         ref;
     }
 
     /// Reads the host-provided data in the selected shader-binding-table record.
-    /// @todo The compiler must synthesize this accessor from the target's record-data binding.
+    /// The compiler maps this accessor to the selected invocation's record-data binding.
     ///
     /// @par Constraints
     /// Read-only value of exactly `Context.Record`. The getter returns application data by value;
@@ -1146,6 +1133,7 @@ public struct IntersectionInput<Context> : ICommonHitInput
     /// target layout; `void` selects a context with no application record data.
     public property Context.Record record
     {
+        __intrinsic_op(portableRTGetRecord)
         get;
     }
 
@@ -1168,7 +1156,6 @@ public struct IntersectionInput<Context> : ICommonHitInput
     /// @return Whether traversal accepts the candidate after any-hit processing.
     /// @pre The invoking intersection shader uses `Context.Primitive :
     /// ICustomIntersectionPrimitive`.
-    /// @todo Synthesize Metal procedural reporting and any-hit dispatch.
     public bool reportHit(float distance, Context.Primitive.Attributes attributes)
     {
         __target_switch
@@ -1179,12 +1166,7 @@ public struct IntersectionInput<Context> : ICommonHitInput
         case cuda:
             return ReportHit(distance, 0, attributes);
         case metal:
-            // TODO: A following PR must synthesize Metal procedural candidate reporting and any-hit
-            // dispatch.
-            static_assert(
-                false,
-                "Metal structural ray-tracing reportHit requires compiler synthesis");
-            return false;
+            return __metalRTReportHit(distance, 0, attributes);
         }
     }
 
@@ -1199,7 +1181,6 @@ public struct IntersectionInput<Context> : ICommonHitInput
     /// @return Whether traversal accepts the candidate after any-hit processing.
     /// @pre The invoking intersection shader uses `Context.Primitive :
     /// ICustomIntersectionPrimitive`.
-    /// @todo Synthesize Metal procedural reporting and any-hit dispatch.
     public bool reportHit(
         float distance,
         uint hitKind,
@@ -1213,12 +1194,7 @@ public struct IntersectionInput<Context> : ICommonHitInput
         case cuda:
             return ReportHit(distance, hitKind, attributes);
         case metal:
-            // TODO: A following PR must synthesize Metal procedural candidate reporting and any-hit
-            // dispatch.
-            static_assert(
-                false,
-                "Metal structural ray-tracing reportHit requires compiler synthesis");
-            return false;
+            return __metalRTReportHit(distance, hitKind, attributes);
         }
     }
 }
@@ -1332,7 +1308,6 @@ public extension<Context> IntersectionInput<Context>
     /// @pre `level < instanceCount`; indexing the configured maximum is insufficient for a shorter
     /// hit.
     /// @return The selected instance's index within that level's containing acceleration structure.
-    /// @todo Synthesize the selected level from Metal candidate or committed instance-path state.
     public uint getInstanceIndex(uint level)
     {
         return getStageInputInstanceIndexAtLevel(level);
@@ -1347,7 +1322,6 @@ public extension<Context> IntersectionInput<Context>
     /// @pre `level < instanceCount`; indexing the configured maximum is insufficient for a shorter
     /// hit.
     /// @return The selected instance's application-defined ID.
-    /// @todo Synthesize the selected level from Metal candidate or committed instance-path state.
     public uint getInstanceID(uint level)
     {
         return getStageInputInstanceIDAtLevel(level);
@@ -1366,7 +1340,7 @@ public extension<Context> IntersectionInput<Context>
 /// parameter. Copying the view does not duplicate its payload or record storage.
 /// Applications cannot construct a fresh input, declare an uninitialized input local, use an input
 /// as a global shader parameter or field, or return one from a function.
-[require(miss)]
+[require(portable_miss)]
 [KnownBuiltin("RayTracingMissInput")]
 public struct MissInput<Context>
     where Context : IPayloadContext
@@ -1376,7 +1350,7 @@ public struct MissInput<Context>
     {}
 
     /// Gives mutable access to the payload supplied by the originating `RayTracer.trace` call.
-    /// @todo The compiler must synthesize this accessor from the stage's payload parameter.
+    /// The compiler maps this accessor to the invocation's native payload reference.
     ///
     /// @par Constraints
     /// The referenced type is exactly `Context.Payload`, inherited through `IPayloadContext`.
@@ -1385,12 +1359,13 @@ public struct MissInput<Context>
     /// valid payload types.
     public property Context.Payload payload
     {
+        __intrinsic_op(portableRTGetPayload)
         [nonmutating]
         ref;
     }
 
     /// Reads the host-provided data in the selected shader-binding-table record.
-    /// @todo The compiler must synthesize this accessor from the target's record-data binding.
+    /// The compiler maps this accessor to the selected invocation's record-data binding.
     ///
     /// @par Constraints
     /// Read-only value of exactly `Context.Record`. The getter returns application data by value;
@@ -1398,6 +1373,7 @@ public struct MissInput<Context>
     /// target layout; `void` selects a context with no application record data.
     public property Context.Record record
     {
+        __intrinsic_op(portableRTGetRecord)
         get;
     }
 
@@ -1504,7 +1480,7 @@ public extension<Context> MissInput<Context>
 /// parameter. Copying the view does not duplicate its callable-data or record storage.
 /// Applications cannot construct a fresh input, declare an uninitialized input local, use an input
 /// as a global shader parameter or field, or return one from a function.
-[require(callable)]
+[require(portable_callable)]
 [KnownBuiltin("RayTracingCallableInput")]
 public struct CallableInput<Context>
     where Context : ICallableContext
@@ -1514,7 +1490,7 @@ public struct CallableInput<Context>
     {}
 
     /// Gives mutable access to the data supplied by the originating `RayTracer.callShader` call.
-    /// @todo The compiler must synthesize this accessor from the callable-data parameter.
+    /// The compiler maps this accessor to the invocation's native callable-data reference.
     ///
     /// @par Constraints
     /// The referenced type is exactly `Context.CallableData`, required by `ICallableContext`.
@@ -1522,12 +1498,13 @@ public struct CallableInput<Context>
     /// originating callable data through an `in` parameter or immutable local copy.
     public property Context.CallableData data
     {
+        __intrinsic_op(portableRTGetCallableData)
         [nonmutating]
         ref;
     }
 
     /// Reads the host-provided data in the selected shader-binding-table record.
-    /// @todo The compiler must synthesize this accessor from the target's record-data binding.
+    /// The compiler maps this accessor to the selected invocation's record-data binding.
     ///
     /// @par Constraints
     /// Read-only value of exactly `Context.Record`. The getter returns application data by value;
@@ -1535,6 +1512,7 @@ public struct CallableInput<Context>
     /// target layout; `void` selects a context with no application record data.
     public property Context.Record record
     {
+        __intrinsic_op(portableRTGetRecord)
         get;
     }
 

@@ -11012,9 +11012,10 @@ static NodeBase* parseIntrinsicTypeModifier(Parser* parser, void* /*userData*/)
     modifier->irOp = parseIROp(parser, modifier->opToken);
     while (AdvanceIf(parser, TokenType::Comma))
     {
+        bool isNegative = AdvanceIf(parser, TokenType::OpSub);
         auto operand =
-            uint32_t(stringToInt(parser->ReadToken(TokenType::IntegerLiteral).getContent()));
-        modifier->irOperands.add(operand);
+            int64_t(stringToInt(parser->ReadToken(TokenType::IntegerLiteral).getContent()));
+        modifier->irOperands.add(isNegative ? -operand : operand);
     }
     parser->ReadToken(TokenType::RParent);
 

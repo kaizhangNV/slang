@@ -59,13 +59,13 @@ Stages
 > Amplification shader stage & mesh shader capabilities
 
 `anyhit`
-> Any-hit stage, including its logical role in portable ray tracing on Metal.
+> Any-hit shader stage & ray-tracing capabilities.
 
 `callable`
-> Callable stage, including its logical role in portable ray tracing on Metal.
+> Callable shader stage & ray-tracing capabilities.
 
 `closesthit`
-> Closest-hit stage, including its logical role in portable ray tracing on Metal.
+> Closest-hit shader stage & ray-tracing capabilities.
 
 `compute`
 > Compute shader stage
@@ -86,13 +86,13 @@ Stages
 > Hull shader stage
 
 `intersection`
-> Intersection stage, including its logical role in portable ray tracing on Metal.
+> Intersection shader stage & ray-tracing capabilities.
 
 `mesh`
 > Mesh shader stage & mesh shader capabilities
 
 `miss`
-> Miss stage, including its logical role in portable ray tracing on Metal.
+> Miss shader stage & ray-tracing capabilities.
 
 `node`
 > Work-graph node stage (requires SM 6.8 or later)
@@ -1331,8 +1331,26 @@ Compound Capabilities
 `pack_vector`
 > Capabilities required to use pack/unpack intrinsics on packed vector data
 
-`portable_raytracing_call_shader`
+`portable_anyhit`
+> Logical any-hit role used by the portable ray-tracing API.
+
+`portable_anyhit_closesthit`
+> Logical hit roles that can read built-in triangle attributes, including Metal dispatch.
+
+`portable_call_shader`
 > Stages that may invoke a callable shader through the portable ray-tracing API.
+
+`portable_callable`
+> Logical callable role used by the portable ray-tracing API.
+
+`portable_closesthit`
+> Closest-hit stage supported by the portable ray-tracing API on native targets and Metal.
+
+`portable_intersection`
+> Logical intersection role used by the portable ray-tracing API.
+
+`portable_miss`
+> Logical miss role used by the portable ray-tracing API.
 
 `portable_raytracing_instance_motion`
 > Instance motion available to the portable ray-tracing API. Metal encodes the requirement on
@@ -1752,6 +1770,10 @@ Other
 
 `all`
 > User should not use this capability
+
+`metal_raytracing_extended_limits`
+> Opts into the extended Metal ray-tracing traversal limits.
+> This is selected explicitly rather than implied by a Metal language version.
 
 `optix_coopvec`
 > Represents capabilities required for optix cooperative vector support.

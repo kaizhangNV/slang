@@ -908,21 +908,10 @@ SlangResult CodeGenContext::emitWithDownstreamForEntryPoints(ComPtr<IArtifact>& 
         }
 
         {
-            // We need to look at the stage of the entry point(s) we are
-            // being asked to compile, since this will determine the
-            // "pipeline" that the result should be compiled for (e.g.,
-            // compute vs. ray tracing).
-            //
-            // TODO: This logic is kind of messy in that it assumes
-            // a program to be compiled will only contain kernels for
-            // a single pipeline type, but that invariant isn't expressed
-            // at all in the front-end today. It also has no error
-            // checking for the case where there are conflicts.
-            //
-            // HACK: Right now none of the above concerns matter
-            // because we always perform code generation on a single
-            // entry point at a time.
-            //
+            // Select the downstream pipeline from the requested entry stages. A module
+            // containing both miss and compute entries still needs OptiX support, so stop
+            // once a ray-tracing stage is found instead of letting a later compute entry
+            // overwrite it. NVRTC enables OptiX headers and relocatable device code from this.
             Index entryPointCount = getEntryPointCount();
             for (Index ee = 0; ee < entryPointCount; ++ee)
             {
@@ -953,6 +942,8 @@ SlangResult CodeGenContext::emitWithDownstreamForEntryPoints(ComPtr<IArtifact>& 
                     options.pipelineType = DownstreamCompileOptions::PipelineType::RayTracing;
                     break;
                 }
+                if (options.pipelineType == DownstreamCompileOptions::PipelineType::RayTracing)
+                    break;
             }
         }
 

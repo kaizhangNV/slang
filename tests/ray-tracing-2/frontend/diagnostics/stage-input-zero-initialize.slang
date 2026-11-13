@@ -15,7 +15,7 @@ struct Context : rt::IPayloadContext
     typealias Record = uint;
 }
 
-[require(miss)]
+[require(portable_miss)]
 void useView(in rt::MissInput<Context> input)
 {
     // Compiler-inserted initialization must also respect the private constructor.

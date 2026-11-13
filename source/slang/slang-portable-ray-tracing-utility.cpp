@@ -1,10 +1,12 @@
-#include "slang-check-portable-ray-tracing.h"
+#include "slang-portable-ray-tracing-utility.h"
 
 #include "core/slang-string-util.h"
 #include "slang-check-impl.h"
+#include "slang-ir-insts.h"
 #include "slang-lookup.h"
 #include "slang-mangle.h"
 #include "slang-module.h"
+#include "slang-rich-diagnostics.h"
 #include "slang-session.h"
 #include "slang-syntax.h"
 
@@ -13,9 +15,11 @@ namespace Slang
 namespace PortableRT
 {
 
-// This file owns the portable ray-tracing rules and their declaration identities.
+// This file owns the portable ray-tracing rules, their declaration identities, and the IR
+// operands and decorations that preserve checked program, shader-list, and stage-input types for
+// later target lowering.
 // Ordinary interfaces, associated-type constraints, overload resolution, and capability inference
-// remain in the normal checker. Their call sites delegate here only for the additional rules:
+// remain in the normal checker. Their call sites delegate here for the additional rules:
 // stage types and inputs, stage selection, schema entry uniqueness, and native entry signatures.
 // Each rule below states its example and the representation or API contract it preserves.
 //
@@ -278,6 +282,70 @@ bool isExecutableStageInterface(InterfaceDecl* interfaceDecl)
            modifier->magicNodeType.isSubClassOf<RayTracingStageInterfaceType>();
 }
 
+bool isAccelerationStructureType(Type* type)
+{
+    auto typeDecl = isDeclRefTypeOf<AggTypeDecl>(unwrapModifiedType(type)).getDecl();
+    switch (_getBuiltin(typeDecl))
+    {
+    case KnownBuiltinDeclName::RayTracingAccelerationStructure:
+    case KnownBuiltinDeclName::RayTracingMultiLevelAccelerationStructure:
+        return true;
+    default:
+        return false;
+    }
+}
+
+IRType* lowerAccelerationStructureType(
+    IRBuilder* builder,
+    Type* type,
+    IRInst* levelCount,
+    DiagnosticSink* sink)
+{
+    auto typeDecl = isDeclRefTypeOf<AggTypeDecl>(type).getDecl();
+    auto role = _getBuiltin(typeDecl);
+    SLANG_RELEASE_ASSERT(
+        role == KnownBuiltinDeclName::RayTracingAccelerationStructure ||
+        role == KnownBuiltinDeclName::RayTracingMultiLevelAccelerationStructure);
+    bool explicitDepth = role == KnownBuiltinDeclName::RayTracingMultiLevelAccelerationStructure;
+    auto literal = as<IRIntLit>(levelCount);
+    if (explicitDepth && literal && (literal->getValue() < 1 || literal->getValue() > 32))
+    {
+        // Diagnose before type construction: MultiLevel<-1> would otherwise become the same IR
+        // type as the legacy API. The error stops successful compilation; lowering can continue
+        // using its ordinary recovery path after reporting the invalid source argument.
+        auto sourceLoc = builder->getSourceLocInfo();
+        sink->diagnose(Diagnostics::InvalidMetalRayTracingMaxLevels{
+            .levelCount = Int(literal->getValue()),
+            .location = sourceLoc ? sourceLoc->sourceLoc : typeDecl->loc});
+    }
+    auto result = builder->getType(kIROp_RaytracingAccelerationStructureType, 1, &levelCount);
+    if (explicitDepth && !literal)
+    {
+        // Consider a generic struct field of type MultiLevel<N>. N is still symbolic here,
+        // so specialization must check its range. Put the assertion beside the canonical type,
+        // not at the current source use: that use might be inside a struct or a dead branch,
+        // while later uses reuse the same cached type. This also preserves link-time constants.
+        IRBuilder checkBuilder(builder->getModule());
+        checkBuilder.setSourceLocInfo(builder->getSourceLocInfo());
+        checkBuilder.setInsertAfter(result);
+        auto boolType = checkBuilder.getBoolType();
+        auto one = checkBuilder.getIntValue(levelCount->getDataType(), 1);
+        auto maximum = checkBuilder.getIntValue(levelCount->getDataType(), 32);
+        auto lowerBound = checkBuilder.emitConstexprLeq(boolType, one, levelCount);
+        auto upperBound = checkBuilder.emitConstexprLeq(boolType, levelCount, maximum);
+        IRInst* operands[] = {
+            checkBuilder.emitConstexprAnd(boolType, lowerBound, upperBound),
+            checkBuilder.getStringValue(
+                toSlice("MultiLevelAccelerationStructure requires a level count in [1, 32]"))};
+        checkBuilder.emitIntrinsicInst(
+            checkBuilder.getVoidType(),
+            kIROp_StaticAssert,
+            SLANG_COUNT_OF(operands),
+            operands);
+    }
+    return result;
+}
+
 Stage getStageInputKind(AggTypeDecl* typeDecl)
 {
     switch (_getBuiltin(typeDecl))
@@ -309,11 +377,62 @@ FunctionDeclBase* getStageInvokeRequirement(InterfaceDecl* interfaceDecl)
     return nullptr;
 }
 
-// Returns the checked entry types used by the duplicate-entry diagnostic. The list's conformance
-// witnesses are handled by ordinary conformance checking and are not needed to compare types.
-static ConcreteTypePack* _getEntryTypes(ASTBuilder* astBuilder, Type* entryListType)
+Type* getStageInputContextType(Type* inputType)
 {
-    if (auto declRefType = as<DeclRefType>(entryListType))
+    auto declRef = isDeclRefTypeOf<AggTypeDecl>(unwrapModifiedType(inputType));
+    if (!declRef || getStageInputKind(declRef.getDecl()) == Stage::Unknown)
+        return nullptr;
+    auto generic = as<GenericDecl>(declRef.getDecl()->parentDecl);
+    SLANG_RELEASE_ASSERT(generic);
+    auto application = SubstitutionSet(declRef).findGenericAppDeclRef(generic);
+    SLANG_RELEASE_ASSERT(application);
+    Type* result = nullptr;
+    for (auto argument : application->getArgs())
+    {
+        if (auto type = as<Type>(argument->resolve()))
+        {
+            SLANG_RELEASE_ASSERT(!result);
+            result = type;
+        }
+    }
+    SLANG_RELEASE_ASSERT(result);
+    return result;
+}
+
+// Consider ClosestHitInput<C>: Payload is declared by IPayloadContext, not IHitContext.
+// The inheritance facet already contains the exact witness to that declaring interface.
+// Preserve its canonical lookup, rather than rebuilding a substitution or assuming an order
+// for interface requirements. Binding reflection and AST-to-IR lowering use the same result.
+Type* getAssociatedType(
+    Linkage* linkage,
+    ASTBuilder* astBuilder,
+    Type* owner,
+    KnownBuiltinDeclName role)
+{
+    auto sharedSemantics = linkage->getSemanticsForReflection();
+    SemanticsVisitor visitor{SemanticsContext(sharedSemantics)};
+    for (auto facet : visitor.getShared()->getInheritanceInfo(owner).facets)
+    {
+        auto interfaceDecl = facet->origin.declRef.as<InterfaceDecl>();
+        if (!interfaceDecl)
+            continue;
+        for (auto requirement :
+             interfaceDecl.getDecl()->getDirectMemberDeclsOfType<AssocTypeDecl>())
+        {
+            if (_getBuiltin(requirement) == role)
+                return DeclRefType::create(
+                    astBuilder,
+                    astBuilder->getLookupDeclRef(facet->subtypeWitness, requirement));
+        }
+    }
+    SLANG_UNEXPECTED("portable ray-tracing contract is missing its associated-type role");
+}
+
+// Returns the checked list's type pack for duplicate-entry checking, without reparsing
+// the generic argument list.
+ConcreteTypePack* getConcreteEntryTypes(Type* entryListType)
+{
+    if (auto declRefType = as<DeclRefType>(entryListType->resolve()))
     {
         if (auto genericApp = SubstitutionSet(declRefType->getDeclRef()).findGenericAppDeclRef())
         {
@@ -326,6 +445,354 @@ static ConcreteTypePack* _getEntryTypes(ASTBuilder* astBuilder, Type* entryListT
             }
         }
     }
+    return nullptr;
+}
+
+// Decorates the input's IRStructType with the types needed to synthesize native parameters.
+// Consider the builtin declaration:
+//
+//     struct MissInput<Context> where Context : IPayloadContext { /* Accessors omitted. */ }
+//
+// Its empty IRStructType receives the operands (Miss, Context.TraceContext.AccelerationStructure,
+// Context.Payload, Context.Record, void, void). These ordinary associated-type lookups expose
+// their dependencies to linking. Specializing MissInput<MyContext> resolves them to concrete
+// types before target synthesis, including when MyContext is supplied by another linked module.
+// Hit inputs also retain Context.Primitive and Context.Primitive.Attributes, while CallableInput
+// retains Context.CallableData in the payload slot. No later witness-table inspection is needed.
+void addStageInputDecoration(
+    IRBuilder* builder,
+    Linkage* linkage,
+    ASTBuilder* astBuilder,
+    AggTypeDecl* decl,
+    IRType* irType,
+    IRType* (*lowerType)(Type*, void*),
+    void* userData)
+{
+    auto stage = getStageInputKind(decl);
+    if (stage == Stage::Unknown)
+        return;
+
+    auto generic = as<GenericDecl>(decl->parentDecl);
+    SLANG_RELEASE_ASSERT(generic);
+    // Each builtin input declares one context parameter. Its checked constraints supply the
+    // canonical associated-type lookups, including inherited Record and TraceContext members.
+    GenericTypeParamDecl* contextParameter = nullptr;
+    for (auto parameter : generic->getDirectMemberDeclsOfType<GenericTypeParamDecl>())
+    {
+        SLANG_RELEASE_ASSERT(!contextParameter);
+        contextParameter = parameter;
+    }
+    SLANG_RELEASE_ASSERT(contextParameter);
+    auto contextType =
+        DeclRefType::create(astBuilder, astBuilder->getDirectDeclRef(contextParameter));
+    auto traceContextType = getAssociatedType(
+        linkage,
+        astBuilder,
+        contextType,
+        KnownBuiltinDeclName::RayTracingContextTraceContext);
+    auto accelerationStructureType = getAssociatedType(
+        linkage,
+        astBuilder,
+        traceContextType,
+        KnownBuiltinDeclName::RayTracingTraceAccelerationStructure);
+    auto payloadRole = stage == Stage::Callable
+                           ? KnownBuiltinDeclName::RayTracingContextCallableData
+                           : KnownBuiltinDeclName::RayTracingContextPayload;
+    auto payloadType = getAssociatedType(linkage, astBuilder, contextType, payloadRole);
+    auto recordType = getAssociatedType(
+        linkage,
+        astBuilder,
+        contextType,
+        KnownBuiltinDeclName::RayTracingContextRecord);
+    IRType* primitiveType = builder->getVoidType();
+    IRType* attributesType = builder->getVoidType();
+    if (stage == Stage::ClosestHit || stage == Stage::AnyHit || stage == Stage::Intersection)
+    {
+        auto primitive = getAssociatedType(
+            linkage,
+            astBuilder,
+            contextType,
+            KnownBuiltinDeclName::RayTracingContextPrimitive);
+        primitiveType = lowerType(primitive, userData);
+        attributesType = lowerType(
+            getAssociatedType(
+                linkage,
+                astBuilder,
+                primitive,
+                KnownBuiltinDeclName::RayTracingPrimitiveAttributes),
+            userData);
+    }
+    IRInst* operands[] = {
+        builder->getIntValue(builder->getIntType(), IRIntegerValue(stage)),
+        lowerType(accelerationStructureType, userData),
+        lowerType(payloadType, userData),
+        lowerType(recordType, userData),
+        primitiveType,
+        attributesType,
+    };
+    builder->addDecoration(
+        irType,
+        kIROp_PortableRTStageInputDecoration,
+        operands,
+        SLANG_COUNT_OF(operands));
+}
+
+// Adds a decoration to the shader-list IRStructType with the types needed for backend synthesis.
+// Consider this example, where FirstGroup and SecondGroup conform to IHitGroup:
+//
+//     typealias HitGroups = rt::HitGroupList<FirstGroup, SecondGroup>;
+//
+// Before the concrete groups are known, the decoration on HitGroupList conceptually looks like:
+//
+//     PortableRTShaderListDecoration
+//     {
+//         typepack          = Group
+//         recordTypes       = expand (each Group).Context.Record
+//         payloadTypes      = expand (each Group).Context.Payload
+//         primitiveTypes    = expand (each Group).Context.Primitive
+//         attributesTypes   = expand (each Group).Context.Primitive.Attributes
+//         closestHitTypes   = expand (each Group).ClosestHit
+//         anyHitTypes       = expand (each Group).AnyHit
+//         intersectionTypes = expand (each Group).Intersection
+//     }
+//
+// Group is the list's generic type pack. The expression `expand (each Group).Context.Record`
+// means a symbolic witness lookup for each type in that pack. It lowers to an IRExpand whose
+// body follows Context and then Record with ordinary witness lookup instructions. These use the
+// list's existing generic conformance witnesses.
+// After specialization, these expressions become concrete type packs in the original order.
+// For example, if the two groups use FirstRecord and SecondRecord, recordTypes becomes
+// [FirstRecord, SecondRecord]. The backend can then read that list directly.
+//
+// We need the decoration because the list has no fields, and IHitGroupList exposes only count.
+// Storing the groups' conformance tables would still require the backend to follow other tables,
+// such as the Context conformance and its base-interface conformances, to find Record. Keeping
+// a table alive does not keep all its entries: the linker copies entries requested by IR uses.
+// Preserving everything instead would require recursively copying those tables and their entries,
+// including unused shader methods such as invoke and the code they depend on. These explicit
+// lookups tell the normal linker which entries are needed, even before the groups are concrete.
+// Specialization resolves the lookups, so backend synthesis needs no witness-table traversal.
+//
+// Miss and callable lists store their entry pack and expanded record types; the remaining packs
+// are empty. The three hit-stage packs let the backend recognize No* placeholders; none of these
+// lookups requests an invoke implementation.
+void addShaderListDecoration(
+    IRBuilder* builder,
+    Linkage* linkage,
+    ASTBuilder* astBuilder,
+    AggTypeDecl* decl,
+    IRType* irType,
+    IRType* (*lowerType)(Type*, void*),
+    void* userData)
+{
+    auto role = _getBuiltin(decl);
+    if (role != KnownBuiltinDeclName::RayTracingHitGroupList &&
+        role != KnownBuiltinDeclName::RayTracingMissShaderList &&
+        role != KnownBuiltinDeclName::RayTracingCallableShaderList)
+        return;
+
+    auto generic = as<GenericDecl>(decl->parentDecl);
+    SLANG_RELEASE_ASSERT(generic);
+    GenericTypePackParamDecl* typePackParameter = nullptr;
+    for (auto parameter : generic->getDirectMemberDeclsOfType<GenericTypePackParamDecl>())
+    {
+        SLANG_RELEASE_ASSERT(!typePackParameter);
+        typePackParameter = parameter;
+    }
+    SLANG_RELEASE_ASSERT(typePackParameter);
+    Type* typePack =
+        DeclRefType::create(astBuilder, astBuilder->getDirectDeclRef(typePackParameter));
+    auto eachEntry = astBuilder->getEachType(typePack);
+    const bool isHitGroupList = role == KnownBuiltinDeclName::RayTracingHitGroupList;
+    auto contextType = getAssociatedType(
+        linkage,
+        astBuilder,
+        eachEntry,
+        isHitGroupList ? KnownBuiltinDeclName::RayTracingHitGroupContext
+                       : KnownBuiltinDeclName::RayTracingStageContext);
+    auto recordType = getAssociatedType(
+        linkage,
+        astBuilder,
+        contextType,
+        KnownBuiltinDeclName::RayTracingContextRecord);
+
+    // Each expansion uses the same checked type-pack parameter. Ordinary lookup lowering supplies
+    // the conformance witnesses; the decoration stores the resulting types.
+    Val* captures[] = {typePack};
+    auto lowerExpansion = [&](Type* pattern)
+    { return lowerType(astBuilder->getExpandType(pattern, makeArrayView(captures)), userData); };
+    auto emptyPack = builder->getTypePack(0, nullptr);
+    IRInst* payloadTypes = emptyPack;
+    IRInst* primitiveTypes = emptyPack;
+    IRInst* attributesTypes = emptyPack;
+    IRInst* closestHitTypes = emptyPack;
+    IRInst* anyHitTypes = emptyPack;
+    IRInst* intersectionTypes = emptyPack;
+    if (isHitGroupList)
+    {
+        auto payloadType = getAssociatedType(
+            linkage,
+            astBuilder,
+            contextType,
+            KnownBuiltinDeclName::RayTracingContextPayload);
+        auto primitiveType = getAssociatedType(
+            linkage,
+            astBuilder,
+            contextType,
+            KnownBuiltinDeclName::RayTracingContextPrimitive);
+        auto attributesType = getAssociatedType(
+            linkage,
+            astBuilder,
+            primitiveType,
+            KnownBuiltinDeclName::RayTracingPrimitiveAttributes);
+        payloadTypes = lowerExpansion(payloadType);
+        primitiveTypes = lowerExpansion(primitiveType);
+        attributesTypes = lowerExpansion(attributesType);
+        closestHitTypes = lowerExpansion(getAssociatedType(
+            linkage,
+            astBuilder,
+            eachEntry,
+            KnownBuiltinDeclName::RayTracingHitGroupClosestHit));
+        anyHitTypes = lowerExpansion(getAssociatedType(
+            linkage,
+            astBuilder,
+            eachEntry,
+            KnownBuiltinDeclName::RayTracingHitGroupAnyHit));
+        intersectionTypes = lowerExpansion(getAssociatedType(
+            linkage,
+            astBuilder,
+            eachEntry,
+            KnownBuiltinDeclName::RayTracingHitGroupIntersection));
+    }
+    IRInst* operands[] = {
+        lowerType(typePack, userData),
+        lowerExpansion(recordType),
+        payloadTypes,
+        primitiveTypes,
+        attributesTypes,
+        closestHitTypes,
+        anyHitTypes,
+        intersectionTypes,
+    };
+    builder->addDecoration(
+        irType,
+        kIROp_PortableRTShaderListDecoration,
+        operands,
+        SLANG_COUNT_OF(operands));
+}
+
+// Appends the five schema types needed by the backend to a descriptor's IR operands.
+// Consider this declaration, where Schema conforms to ITraceProgramSchema:
+//
+//     rt::TraceProgramDescriptor<Schema> descriptor;
+//
+// The caller has already lowered Schema and its conformance witness. This function appends the
+// remaining operands, so the caller can construct this complete IR type:
+//
+//     TraceProgramDescriptor
+//     {
+//         schema                    = Schema
+//         schemaWitness             = Conformance(Schema : ITraceProgramSchema)
+//         accelerationStructureType = Schema.TraceContext.AccelerationStructure
+//         motionType                = Schema.TraceContext.Motion
+//         hitGroupsType             = Schema.HitGroups
+//         missShadersType           = Schema.MissShaders
+//         callableShadersType       = Schema.CallableShaders
+//     }
+//
+// The five appended expressions are symbolic associated-type lookups. getAssociatedType resolves
+// each checked AST type; lowerType lowers it in the caller's generic environment, using userData
+// as its lowering context. There is no IRExpand here: each expression selects one schema type.
+//
+// Schema may still be generic or supplied by another module. Once linking and specialization
+// resolve these lookups, the operands refer to concrete types. For example, if Schema.HitGroups
+// is HitGroupList<FirstGroup, SecondGroup>, hitGroupsType refers to that specialized list struct.
+// Its own shader-list decoration supplies the member-type packs described above. The acceleration
+// structure and motion types tell Metal how to configure traversal; the three list types tell it
+// which groups, miss shaders, and callable shaders belong to the program.
+//
+// We need these explicit lookups because the descriptor's existing Schema and conformance
+// operands identify its type, but do not request the associated-type entries needed by synthesis.
+// Storing the conformance alone would leave the backend to follow tables whose entries the linker
+// may not have copied. The lookup instructions request the required entries before specialization,
+// avoiding the need to recursively copy complete tables and unused method implementations.
+// Ordinary operands keep those lookups alive and order them before the descriptor, so normal
+// specialization remaps them when it copies the descriptor. They add no runtime fields.
+void appendTraceProgramDescriptorOperands(
+    Linkage* linkage,
+    ASTBuilder* astBuilder,
+    TraceProgramDescriptorType* descriptorType,
+    List<IRInst*>& operands,
+    IRType* (*lowerType)(Type*, void*),
+    void* userData)
+{
+    SLANG_RELEASE_ASSERT(operands.getCount() == 2);
+    auto declRef = descriptorType->getDeclRef();
+    auto generic = as<GenericDecl>(declRef.getDecl()->parentDecl);
+    SLANG_RELEASE_ASSERT(generic);
+    auto application = SubstitutionSet(declRef).findGenericAppDeclRef(generic);
+    SLANG_RELEASE_ASSERT(application);
+    Type* schemaType = nullptr;
+    for (auto argument : application->getArgs())
+    {
+        if (auto type = as<Type>(argument->resolve()))
+        {
+            SLANG_RELEASE_ASSERT(!schemaType);
+            schemaType = type;
+        }
+    }
+    SLANG_RELEASE_ASSERT(schemaType);
+    auto traceContextType = getAssociatedType(
+        linkage,
+        astBuilder,
+        schemaType,
+        KnownBuiltinDeclName::RayTracingProgramTraceContext);
+    IRInst* schemaOperands[] = {
+        lowerType(
+            getAssociatedType(
+                linkage,
+                astBuilder,
+                traceContextType,
+                KnownBuiltinDeclName::RayTracingTraceAccelerationStructure),
+            userData),
+        lowerType(
+            getAssociatedType(
+                linkage,
+                astBuilder,
+                traceContextType,
+                KnownBuiltinDeclName::RayTracingTraceMotion),
+            userData),
+        lowerType(
+            getAssociatedType(
+                linkage,
+                astBuilder,
+                schemaType,
+                KnownBuiltinDeclName::RayTracingProgramHitGroups),
+            userData),
+        lowerType(
+            getAssociatedType(
+                linkage,
+                astBuilder,
+                schemaType,
+                KnownBuiltinDeclName::RayTracingProgramMissShaders),
+            userData),
+        lowerType(
+            getAssociatedType(
+                linkage,
+                astBuilder,
+                schemaType,
+                KnownBuiltinDeclName::RayTracingProgramCallableShaders),
+            userData),
+    };
+    operands.addRange(schemaOperands, SLANG_COUNT_OF(schemaOperands));
+}
+
+// Returns the checked entry types used by the duplicate-entry diagnostic. The list's conformance
+// witnesses are handled by ordinary conformance checking and are not needed to compare types.
+static ConcreteTypePack* _getEntryTypes(ASTBuilder* astBuilder, Type* entryListType)
+{
+    if (auto typePack = getConcreteEntryTypes(entryListType))
+        return typePack;
     // The list itself may still be a type parameter. Consider this example:
     //
     //     struct Schema<Misses : rt::IMissShaderList> : rt::ITraceProgramSchema
@@ -505,7 +972,6 @@ DeclRef<FuncDecl> findEntryPointByName(
     else if (implementedStageCount == 1)
     {
         selectedStage = onlyImplementedStage;
-        ioProfile = Profile(selectedStage);
     }
     else
     {
@@ -529,6 +995,10 @@ DeclRef<FuncDecl> findEntryPointByName(
         return DeclRef<FuncDecl>();
     }
 
+    // Selecting an IMissShader implementation gives this entry a portable_miss profile.
+    // Its public stage is still Miss, but capability checks must use the portable contract
+    // instead of the native miss contract, which excludes Metal. Keep any requested version.
+    ioProfile.setPortableRayTracingStage(selectedStage);
     *outStageType = stageType;
     return invokeMethod;
 }
@@ -538,7 +1008,7 @@ DeclRef<FuncDecl> findEntryPointByName(
 // derive the same target symbol from the stage type and select the same checked invoke method.
 void initializeEntryPoint(EntryPoint* entryPoint, Name* entryPointName, Type* stageType)
 {
-    entryPoint->markAsStructuralRayTracingEntryPoint();
+    SLANG_ASSERT(entryPoint->isStructuralRayTracingEntryPoint());
     entryPoint->setNameOverride(entryPointName);
     auto sourceTypeName = getSourceTypeName(entryPoint->getLinkage()->getASTBuilder(), stageType);
     entryPoint->setEntryPointNameOverride(

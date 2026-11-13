@@ -7,6 +7,7 @@
 #include "slang-compiler.h"
 #include "slang-deprecated.h"
 #include "slang-lookup.h"
+#include "slang-portable-ray-tracing-utility.h"
 #include "slang-syntax.h"
 #include "slang-type-layout.h"
 #include "slang.h"
@@ -487,6 +488,10 @@ SLANG_API SlangTypeKind spReflectionType_GetKind(SlangReflectionType* inType)
     {
         return SLANG_TYPE_KIND_DYNAMIC_RESOURCE;
     }
+    else if (PortableRT::isAccelerationStructureType(type))
+    {
+        return SLANG_TYPE_KIND_RESOURCE;
+    }
     // TODO: need a better way to handle this stuff...
 #define CASE(TYPE)                       \
     else if (as<TYPE>(type)) do          \
@@ -874,6 +879,10 @@ SLANG_API SlangResourceShape spReflectionType_GetResourceShape(SlangReflectionTy
         return subpassInputType->isMultisample() ? SLANG_TEXTURE_SUBPASS_MULTISAMPLE
                                                  : SLANG_TEXTURE_SUBPASS;
     }
+    else if (PortableRT::isAccelerationStructureType(type))
+    {
+        return SLANG_ACCELERATION_STRUCTURE;
+    }
 
     // TODO: need a better way to handle this stuff...
 #define CASE(TYPE, SHAPE, ACCESS) \
@@ -925,6 +934,10 @@ SLANG_API SlangResourceAccess spReflectionType_GetResourceAccess(SlangReflection
     }
 
     if (as<SubpassInputType>(type))
+    {
+        return SLANG_RESOURCE_ACCESS_READ;
+    }
+    else if (PortableRT::isAccelerationStructureType(type))
     {
         return SLANG_RESOURCE_ACCESS_READ;
     }
@@ -1899,7 +1912,9 @@ SlangBindingType _calcResourceBindingType(Type* type)
             return SLANG_BINDING_TYPE_MUTABLE_RAW_BUFFER;
         }
     }
-    else if (as<RaytracingAccelerationStructureType>(type))
+    else if (
+        as<RaytracingAccelerationStructureType>(type) ||
+        PortableRT::isAccelerationStructureType(type))
     {
         return SLANG_BINDING_TYPE_RAY_TRACING_ACCELERATION_STRUCTURE;
     }

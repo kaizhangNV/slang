@@ -1,6 +1,6 @@
 // Native entry-point signatures reject structural inputs independently of capability checking.
 //DIAGNOSTIC_TEST:SIMPLE(diag=NATIVE): -experimental-feature -ignore-capabilities -no-codegen
-// A helper's explicit anyhit requirement must conflict with its ClosestHitInput parameter.
+// A helper's explicit portable_anyhit requirement must conflict with its ClosestHitInput parameter.
 // Re-enable this helper-only run after https://github.com/shader-slang/slang/issues/13579.
 //DISABLE_DIAGNOSTIC_TEST:SIMPLE(filecheck=HELPER): -experimental-feature -DTEST_HELPER=1 -no-codegen
 //HELPER: error[E361
@@ -27,7 +27,7 @@ struct TestHitContext : rt::IHitContext
 }
 
 #ifdef TEST_HELPER
-[require(anyhit)]
+[require(portable_anyhit)]
 void invalidAnyHitHelper(rt::ClosestHitInput<TestHitContext> input)
 {
     IgnoreHit();

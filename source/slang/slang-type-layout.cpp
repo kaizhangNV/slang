@@ -5,6 +5,7 @@
 #include "slang-check-impl.h"
 #include "slang-ir-insts.h"
 #include "slang-mangle.h"
+#include "slang-portable-ray-tracing-utility.h"
 #include "slang-syntax.h"
 
 
@@ -173,7 +174,9 @@ static ShaderParameterKind _getShaderParameterKindForResourceType(Type* type)
     {
         return ShaderParameterKind::InputRenderTarget;
     }
-    else if (as<RaytracingAccelerationStructureType>(type))
+    else if (
+        as<RaytracingAccelerationStructureType>(type) ||
+        PortableRT::isAccelerationStructureType(type))
     {
         return ShaderParameterKind::AccelerationStructure;
     }
@@ -5529,6 +5532,19 @@ static TypeLayoutResult _createTypeLayout(TypeLayoutContext& context, Type* type
             consumeStructuredBufferType->getElementType());
         return TypeLayoutResult(typeLayout, info);
     }
+    else if (PortableRT::isAccelerationStructureType(type))
+    {
+        // A portable Metal AS binds one argument buffer containing the native AS and its
+        // instance-contribution data. Reserve that binding before code generation creates the
+        // fields. Native targets use their ordinary AS descriptor. The separate core AS type
+        // keeps its existing layout, including when a Metal RayQuery uses it.
+        auto kind = isMetalTarget(context.targetReq) ? ShaderParameterKind::ParameterBlock
+                                                     : ShaderParameterKind::AccelerationStructure;
+        return createSimpleTypeLayout(
+            rules->GetObjectLayout(kind, context.objectLayoutOptions),
+            type,
+            rules);
+    }
     else if (
         as<TextureType>(type) || as<SamplerStateType>(type) ||
         as<HLSLByteAddressBufferType>(type) || as<HLSLRWByteAddressBufferType>(type) ||
@@ -5542,6 +5558,24 @@ static TypeLayoutResult _createTypeLayout(TypeLayoutContext& context, Type* type
             rules->GetObjectLayout(kind, context.objectLayoutOptions),
             type,
             rules);
+    }
+    else if (as<TraceProgramDescriptorType>(type))
+    {
+        // Consider a host binding containing TraceProgramDescriptor<SceneSchema>. Reflection
+        // can be requested before linking or code generation, so the empty source declaration
+        // cannot determine its resource usage. Metal supplies one argument buffer containing
+        // the generated function tables and records. Native SBT targets supply those resources
+        // through their pipeline instead, and the descriptor consumes no shader binding.
+        if (isMetalTarget(context.targetReq))
+        {
+            return createSimpleTypeLayout(
+                rules->GetObjectLayout(
+                    ShaderParameterKind::ParameterBlock,
+                    context.objectLayoutOptions),
+                type,
+                rules);
+        }
+        return createSimpleTypeLayout(SimpleLayoutInfo(), type, rules);
     }
     else if (auto basicType = as<BasicExpressionType>(type))
     {
