@@ -24,9 +24,73 @@ using namespace PortableRT::Metal;
 /// Includes the resolved schema, derived settings, and generated IR types and helpers.
 /// All uses of that descriptor type share resource types, traversal settings, and record strides.
 /// Each Payload type gets its own ray-data storage; all of them start with the same header.
+///
+/// Consider a schema with two procedural hit groups using PayloadA/AttributesA and
+/// PayloadB/AttributesB. The diagrams show the generated runtime objects, not this C++ struct's
+/// memory layout. `resources` stores the IR type and field references for the argument buffer.
+/// IFT means intersection-function table; VFT means visible-function table.
+///
+///     Descriptor argument buffer
+///     +------------------------------+
+///     | intersectionFunctions (IFT)  |
+///     | missFunctions (VFT)          |
+///     | closestHitFunctions (VFT)    |       Records device buffer
+///     | callableFunctions (VFT)      |       uint directory: byte offsets
+///     | records ---------------------+------>+----------------------------------+
+///     | anyHitFunctions (VFT)        |       | [0] instance contributions       |
+///     | intersectionShaders (VFT)    |       | [1] hit records                  |
+///     +------------------------------+       | [2] miss records                 |
+///                                            | [3] callable records             |
+///                                            +----------------------------------+
+///                                            | Sections at those offsets        |
+///                                            | (the host may leave gaps)        |
+///                                            +----------------------------------+
+///
+/// Each hit, miss, or callable record has this layout. Many runtime records may select the
+/// same functionIndex while supplying different application Record bytes.
+///
+///     +------------------------+---------------------+--------------------+---------+
+///     | uint functionIndex     | reserved (12 bytes) | application Record | padding |
+///     +------------------------+---------------------+--------------------+---------+
+///     byte 0                   4                     16
+///     <-- section's byte stride: hitStride, missStride, callableStride -->
+///
+/// `header` describes the common prefix of the generated per-ray types. `carriers` maps each
+/// Payload IR type to its generated RayData type and field references. For this example:
+///
+///     carriers[PayloadA] -> RayData_A          carriers[PayloadB] -> RayData_B
+///     +--------------------------------+      +--------------------------------+
+///     | header (first):                |      | header (first):                |
+///     |   records -> buffer above      |      |   records -> buffer above      |
+///     |   sbtOffset, sbtStride          |      |   sbtOffset, sbtStride          |
+///     +--------------------------------+      +--------------------------------+
+///     | PayloadA                       |      | PayloadB                       |
+///     | ray / launch state             |      | ray / launch state             |
+///     | AttributesA, custom hit kind   |      | AttributesB, custom hit kind   |
+///     +--------------------------------+      +--------------------------------+
+///
+/// lowerTrace creates one of these per-ray values, copies the caller's Payload into it, and
+/// fills its header from the trace's descriptor and arguments. The records pointer identifies
+/// this trace's records buffer; sbtOffset and sbtStride select hit records within that buffer:
+///
+///     hitSlot = instanceContribution + geometryIndex * sbtStride + sbtOffset
+///     record = byteBase(records) + records[1] + hitSlot * hitStride
+///
+/// sbtStride is the record-index step between geometries; hitStride is bytes per record. Per-ray
+/// header fields are separate from both the buffer's section directory and each record's
+/// 16-byte header. This layout is our chosen representation, not a Metal-defined structure.
+///
+/// During traversal, one generated IFT callback handles several groups and Payload types.
+/// It reads the common header to find the record before it knows the concrete RayData type.
+/// The record's functionIndex selects a branch generated using `carriers`; that branch copies
+/// the concrete value from ray_data to thread storage, calls the group's visible shader, and
+/// copies changes back. The shader receives application Record data at record + 16. After
+/// traversal and closest-hit/miss dispatch, lowerTrace copies Payload back to the caller.
 struct TraceProgramDescriptor : RefObject
 {
     IRTraceProgramDescriptorType* sourceType = nullptr;
+    // Distinguishes generated callback names, e.g. __slang_portable_rt_0_candidate_triangle.
+    // Assigned per descriptor type in this compilation; it is not an SBT or function-table slot.
     Index index = 0;
     Schema schema;
     MetalRTDescriptorResources resources;
