@@ -34,33 +34,48 @@ using namespace PortableRT::Metal;
 ///     +------------------------------+
 ///     | intersectionFunctions (IFT)  |
 ///     | missFunctions (VFT)          |
-///     | closestHitFunctions (VFT)    |       Records device buffer
-///     | callableFunctions (VFT)      |       uint directory (16 bytes)
-///     | records ---------------------+------>+------------------------------------+
-///     | anyHitFunctions (VFT)        |       | [0] instance contributions offset  |
-///     | intersectionShaders (VFT)    |       | [1] hit records offset             |
-///     +------------------------------+       | [2] miss records offset            |
-///                                            | [3] callable records offset        |
-///                                            +------------------------------------+
-///                                            | Sections at those offsets          |
-///                                            | (the host may leave gaps)          |
-///                                            +------------------------------------+
+///     | closestHitFunctions (VFT)    |
+///     | callableFunctions (VFT)      |
+///     | records ---------------------+--> Records device buffer (below)
+///     | anyHitFunctions (VFT)        |
+///     | intersectionShaders (VFT)    |
+///     +------------------------------+
 ///
-/// The directory has four uint byte offsets (4 bytes each), relative to the buffer's start.
-/// Each offset locates a whole section. Section [0] stores 4-byte uint words: one contribution
-/// per instance for ordinary instancing, or a trie of child offsets and contributions for
-/// multilevel instancing. Its total size depends on the host's instance graph; it has no
-/// shader-record headers.
+///           Records device buffer
+///           +--------------------------------------------------------+
+///     +-----| Buffer header (16 bytes): four offsets                 |
+///     |     +--------------------------------------------------------+
+///     |     | Instance contributions                                 |
+///     |     | Hit records:                                           |
+///     |     |   record[0] = [16-byte header][Record][padding]        |----+
+///     |     |   record[1] = [16-byte header][Record][padding]        |    |
+///     |     |   ...                                                  |    |
+///     |     |   record[N] = [16-byte header][Record][padding]        |    |
+///     |     | Miss records: ...                                      |    |
+///     |     | Callable records: ...                                  |    |
+///     |     +--------------------------------------------------------+    |
+///     |                                                                   |
+///     +---> Buffer header (16 bytes): four 4-byte offsets                 |
+///           +------------------------------------+                        |
+///           | [0] instance contributions offset  |                        |
+///           | [1] hit records offset             |                        |
+///           | [2] miss records offset            |                        |
+///           | [3] callable records offset        |                        |
+///           +------------------------------------+                        |
+///                                                                         |
+///           One hit, miss, or callable record <---------------------------+
+///           [16-byte record header][Record data][padding]
+///                      |
+///                      +--> [functionIndex: 4 bytes][reserved: 12 bytes]
 ///
-/// Each hit, miss, or callable section is an array of records. Many records may select the
-/// same functionIndex while supplying different application Record bytes.
+/// The buffer header's offsets are relative to the buffer's start. They locate the sections;
+/// the host may leave gaps between sections. The instance contributions section stores
+/// 4-byte uint words: one contribution per instance for ordinary instancing, or a trie of
+/// child offsets and contributions for multilevel instancing. Its total size depends on the
+/// host's instance graph; it has no shader-record headers.
 ///
-///     record[0] = [16-byte header][Record data][padding]
-///     record[1] = [16-byte header][Record data][padding]
-///     ...
-///     record[N] = [16-byte header][Record data][padding]
-///                        |
-///                        +--> [functionIndex: 4 bytes][reserved: 12 bytes]
+/// Hit, miss, and callable records share the expanded record layout above. Many records may
+/// select the same functionIndex while supplying different application Record bytes.
 ///
 /// For a given schema, every record in a section has the same byte size, but the three
 /// sections can use different sizes. Each stride includes the header and rounds up to 16:
