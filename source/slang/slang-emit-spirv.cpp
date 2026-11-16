@@ -5291,9 +5291,7 @@ struct SPIRVEmitContext : public SourceEmitterBase, public SPIRVEmitSharedContex
                 auto sourceType =
                     cast<IRRaytracingAccelerationStructureType>(inst->getOperand(0)->getDataType());
                 auto resultType = cast<IRRaytracingAccelerationStructureType>(inst->getDataType());
-                SLANG_RELEASE_ASSERT(getIntVal(sourceType->getMaxLevelCount()) == 2);
-                SLANG_RELEASE_ASSERT(getIntVal(resultType->getMaxLevelCount()) == 0xFFFF);
-                // AS(2) and AS(0xFFFF) emit the same OpTypeAccelerationStructureKHR. Reuse the
+                // The level operand does not affect the emitted SPIR-V AS type. Reuse the
                 // operand's value ID, so this conversion emits no instruction or handle copy.
                 SLANG_RELEASE_ASSERT(ensureInst(sourceType) == ensureInst(resultType));
                 auto inner = ensureInst(inst->getOperand(0));

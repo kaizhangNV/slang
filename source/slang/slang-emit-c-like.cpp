@@ -2709,11 +2709,6 @@ void CLikeSourceEmitter::defaultEmitInstExpr(IRInst* inst, const EmitOpInfo& inO
             SLANG_RELEASE_ASSERT(
                 isD3DTarget(getTargetReq()) || isKhronosTarget(getTargetReq()) ||
                 isCUDATarget(getTargetReq()));
-            auto sourceType =
-                cast<IRRaytracingAccelerationStructureType>(inst->getOperand(0)->getDataType());
-            auto resultType = cast<IRRaytracingAccelerationStructureType>(inst->getDataType());
-            SLANG_RELEASE_ASSERT(getIntVal(sourceType->getMaxLevelCount()) == 2);
-            SLANG_RELEASE_ASSERT(getIntVal(resultType->getMaxLevelCount()) == 0xFFFF);
             emitOperand(inst->getOperand(0), outerPrec);
             break;
         }

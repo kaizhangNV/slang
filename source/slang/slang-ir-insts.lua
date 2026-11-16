@@ -3077,9 +3077,9 @@ local insts = {
 	-- already concrete types.
 	{ CastDescriptorHandleToResource = { operands = { { "handle" } } } },
 	{ CastResourceToDescriptorHandle = { operands = { { "resource" } } } },
-	-- Converts a portable AS(2) value to the core AS(0xFFFF) type expected by native TraceRay.
-	-- On HLSL, GLSL, CUDA, and SPIR-V both types denote the same resource; emit the operand
-	-- directly. Metal does not support this conversion because its portable AS is an argument buffer.
+	-- Converts a portable acceleration structure to the core resource type expected by native TraceRay.
+	-- HLSL, GLSL, CUDA, and SPIR-V ignore the level operand, so emit the value directly.
+	-- Metal does not support this conversion because its portable AS is an argument buffer.
 	{ castToNativeAccelerationStructure = { operands = { { "value" } } } },
 	-- Wrap/unwrap a `uint` heap index in an untyped descriptor-heap handle. This is an internal
 	-- representation only: the `lowerUntypedResourceHandleToUInt` pass forwards each cast to its
