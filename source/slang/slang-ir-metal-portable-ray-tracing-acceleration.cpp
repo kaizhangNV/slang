@@ -640,7 +640,7 @@ bool physicalizeAccelerationStructures(
     // share the same SSA value or storage. One wrapper per native signature lets propagation
     // diagnose incompatible motion requirements on that shared storage. Untraced portable
     // declarations receive the same two-field layout with NoMotion. Native RayQuery AS types
-    // use depth -1 and remain unchanged.
+    // use the 0xFFFF marker and remain unchanged.
     IRBuilder builder(module);
     builder.setInsertInto(module);
     List<IRRaytracingAccelerationStructureType*> sourceTypes;
@@ -650,7 +650,7 @@ bool physicalizeAccelerationStructures(
         if (!type)
             continue;
         SLANG_RELEASE_ASSERT(type->getOperandCount() == 1);
-        if (getIntVal(type->getOperand(0)) != -1)
+        if (getIntVal(type->getOperand(0)) != 0xFFFF)
             sourceTypes.add(type);
     }
     // The first entries correspond to trace uses; the remaining entries describe the default

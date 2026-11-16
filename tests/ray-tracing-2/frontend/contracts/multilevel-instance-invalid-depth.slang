@@ -2,12 +2,13 @@
 //TEST:SIMPLE(filecheck=INVALID): -experimental-feature -entry main -target metal -profile metallib_2_4 -DTEST_DEPTH=-2
 //TEST:SIMPLE(filecheck=INVALID): -experimental-feature -entry main -target metal -profile metallib_2_4 -DTEST_DEPTH=0
 //TEST:SIMPLE(filecheck=INVALID): -experimental-feature -entry main -target metal -profile metallib_2_4 -DTEST_DEPTH=33
+//TEST:SIMPLE(filecheck=INVALID): -experimental-feature -entry main -target metal -profile metallib_2_4 -DTEST_DEPTH=0xFFFF
 //TEST:SIMPLE(filecheck=VALID): -experimental-feature -entry main -target metal -profile metallib_2_4 -DTEST_DEPTH=2 -validate-ir
 
 import slang.raytracing.portable;
 
 // Reject invalid portable depths when producing IR, even when the shader only stores an AS.
-// In particular, -1 must not turn a portable binding into the core type's native resource.
+// In particular, 0xFFFF must not turn a portable binding into the core type's native resource.
 rt::MultiLevelAccelerationStructure<TEST_DEPTH> scene;
 RWStructuredBuffer<rt::MultiLevelAccelerationStructure<TEST_DEPTH>> saved;
 

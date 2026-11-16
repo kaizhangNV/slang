@@ -67,7 +67,7 @@ bool isExecutableStageInterface(InterfaceDecl* interfaceDecl);
 bool isAccelerationStructureType(Type* type);
 
 /// Lowers a portable acceleration-structure type, checking an explicit maximum depth while its
-/// source declaration still distinguishes MultiLevel<-1> from the legacy native AS(-1) type.
+/// source declaration still distinguishes MultiLevel<0xFFFF> from the core native AS(0xFFFF) type.
 /// A symbolic depth receives an ordinary static assertion in the lowered type's hoisted scope.
 IRType* lowerAccelerationStructureType(
     IRBuilder* builder,

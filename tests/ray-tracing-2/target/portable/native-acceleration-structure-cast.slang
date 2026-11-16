@@ -75,14 +75,14 @@ void RayGeneration()
 }
 
 // Immediately before emission, the helper parameter and global still use AS(2). Only the
-// operand passed to the native intrinsic has the AS(-1) view; no type-normalization pass ran.
+// operand passed to the native intrinsic has the AS(0xFFFF) view; no type-normalization pass ran.
 // IR: ### AFTER collectMetadata:
 // IR: func %traceSelected
 // IR: param [[SELECTED:%[A-Za-z0-9_]+]] : RaytracingAccelerationStructure(2 : Int)
-// IR: let [[NATIVE:%[A-Za-z0-9_]+]] : RaytracingAccelerationStructure(-1 : Int) = castToNativeAccelerationStructure([[SELECTED]])
+// IR: let [[NATIVE:%[A-Za-z0-9_]+]] : RaytracingAccelerationStructure(65535 : Int) = castToNativeAccelerationStructure([[SELECTED]])
 // IR: call {{%[A-Za-z0-9_]+}}([[NATIVE]],
 // IR-DAG: let %scene : RaytracingAccelerationStructure(2 : Int) = global_param
-// IR-DAG: let %queryScene : RaytracingAccelerationStructure(-1 : Int) = global_param
+// IR-DAG: let %queryScene : RaytracingAccelerationStructure(65535 : Int) = global_param
 
 // Even at -O0 the native resource is passed directly, with no resource bit-cast helper.
 // HLSL-NOT: bit_cast

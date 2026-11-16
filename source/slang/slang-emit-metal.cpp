@@ -2151,7 +2151,7 @@ void MetalSourceEmitter::emitSimpleTypeImpl(IRType* type)
                     // Only the core native AS type reaches emission here. Portable source types
                     // have already become argument buffers containing a Metal AS field.
                     SLANG_RELEASE_ASSERT(
-                        type->getOperandCount() == 1 && getIntVal(type->getOperand(0)) == -1);
+                        type->getOperandCount() == 1 && getIntVal(type->getOperand(0)) == 0xFFFF);
                 }
                 m_writer->emit("metal::raytracing::acceleration_structure<");
                 _emitMetalRayTracingTagList(m_writer, tags, 0);

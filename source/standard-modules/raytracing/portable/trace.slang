@@ -16,7 +16,7 @@ internal struct EmptyTracePayload
 /// Uses the portable handle as the core acceleration structure on native ray-tracing targets.
 ///
 /// Consider `RayTracer.trace` passing an `AccelerationStructure` to the core `TraceRay` function.
-/// The caller has IR type AS(2), while TraceRay takes AS(-1). These types emit as the same native
+/// The caller has IR type AS(2), while TraceRay takes AS(0xFFFF). These types emit as the same native
 /// resource, so this instruction emits its operand directly without copying or changing the AS.
 [require(cuda_glsl_hlsl_spirv)]
 __intrinsic_op(castToNativeAccelerationStructure)

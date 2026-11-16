@@ -310,7 +310,7 @@ IRType* lowerAccelerationStructureType(
     auto literal = as<IRIntLit>(levelCount);
     if (explicitDepth && literal && (literal->getValue() < 1 || literal->getValue() > 32))
     {
-        // Diagnose before type construction: MultiLevel<-1> would otherwise become the same IR
+        // Diagnose before type construction: MultiLevel<0xFFFF> would otherwise become the same IR
         // type as the legacy API. The error stops successful compilation; lowering can continue
         // using its ordinary recovery path after reporting the invalid source argument.
         auto sourceLoc = builder->getSourceLocInfo();

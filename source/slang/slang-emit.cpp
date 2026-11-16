@@ -701,13 +701,13 @@ void calcRequiredLoweringPassSet(
         break;
     case kIROp_RaytracingAccelerationStructureType:
         // On Metal, a portable AS declaration needs an argument buffer even when this entry
-        // does not trace. The core AS(-1) keeps its native resource binding. Other targets
+        // does not trace. The core AS(0xFFFF) keeps its native resource binding. Other targets
         // emit both AS types directly and need no lowering for these declarations.
         SLANG_RELEASE_ASSERT(inst->getOperandCount() == 1);
         if (isMetalTarget(codeGenContext->getTargetReq()))
         {
             if (auto levelCount = as<IRIntLit>(inst->getOperand(0));
-                !levelCount || levelCount->getValue() != -1)
+                !levelCount || levelCount->getValue() != 0xFFFF)
                 result.portableRayTracing = true;
         }
         break;

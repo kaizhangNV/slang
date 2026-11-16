@@ -29,4 +29,4 @@ void main()
 // CHECK: ### AFTER specializeModule:
 // CHECK-DAG: let %ordinaryScene : RaytracingAccelerationStructure(2 : Int) = global_param
 // CHECK-DAG: let %explicitScene : RaytracingAccelerationStructure(2 : Int) = global_param
-// CHECK-DAG: let %nativeScene : RaytracingAccelerationStructure(-1 : Int) = global_param
+// CHECK-DAG: let %nativeScene : RaytracingAccelerationStructure(65535 : Int) = global_param

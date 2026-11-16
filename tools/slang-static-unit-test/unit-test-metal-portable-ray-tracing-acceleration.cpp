@@ -18,7 +18,7 @@ SLANG_UNIT_TEST(metalPortableAccelerationStructureComponents)
     builder.setInsertInto(module);
     IRInst* topology = builder.getIntValue(builder.getIntType(), 2);
     auto sourceType = builder.getType(kIROp_RaytracingAccelerationStructureType, 1, &topology);
-    IRInst* nativeTopology = builder.getIntValue(builder.getIntType(), -1);
+    IRInst* nativeTopology = builder.getIntValue(builder.getIntType(), 0xFFFF);
     auto nativeType =
         builder.getType(kIROp_RaytracingAccelerationStructureType, 1, &nativeTopology);
     auto nativeScene = builder.createGlobalParam(nativeType);

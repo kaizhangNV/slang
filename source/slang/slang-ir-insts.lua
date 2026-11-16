@@ -537,7 +537,7 @@ local insts = {
 							},
 						},
 					},
-					-- Source types have one operand: -1 for the core native resource, or the maximum
+					-- Source types have one operand: 0xFFFF for the core native resource, or the maximum
 					-- level count N in [1, 32] for portable traversal. AccelerationStructure and
 					-- MultiLevelAccelerationStructure<2> share [2]. Native RT emitters ignore N.
 					-- Metal replaces portable types with argument buffers. N=1 selects primitive
@@ -3077,7 +3077,7 @@ local insts = {
 	-- already concrete types.
 	{ CastDescriptorHandleToResource = { operands = { { "handle" } } } },
 	{ CastResourceToDescriptorHandle = { operands = { { "resource" } } } },
-	-- Converts a portable AS(2) value to the core AS(-1) type expected by native TraceRay.
+	-- Converts a portable AS(2) value to the core AS(0xFFFF) type expected by native TraceRay.
 	-- On HLSL, GLSL, CUDA, and SPIR-V both types denote the same resource; emit the operand
 	-- directly. Metal does not support this conversion because its portable AS is an argument buffer.
 	{ castToNativeAccelerationStructure = { operands = { { "value" } } } },
