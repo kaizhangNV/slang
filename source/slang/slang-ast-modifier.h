@@ -676,8 +676,9 @@ class IntrinsicTypeModifier : public Modifier
 
     Token opToken;
 
-    // Literal operands before the declaration's generic arguments in the lowered IR type.
-    FIDDLE() List<int64_t> irOperands;
+    // Additional literal opreands to provide when creating instances.
+    // (e.g., for a texture type this passes in shape/mutability info)
+    FIDDLE() List<uint32_t> irOperands;
 };
 
 // More HLSL Keyword

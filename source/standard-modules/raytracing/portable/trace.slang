@@ -13,6 +13,16 @@ namespace rt
 internal struct EmptyTracePayload
 {}
 
+/// Uses the portable handle as the core acceleration structure on native ray-tracing targets.
+///
+/// Consider `RayTracer.trace` passing an `AccelerationStructure` to the core `TraceRay` function.
+/// The caller has IR type AS(2), while TraceRay takes AS(-1). These types emit as the same native
+/// resource, so this instruction emits its operand directly without copying or changing the AS.
+[require(cuda_glsl_hlsl_spirv)]
+__intrinsic_op(castToNativeAccelerationStructure)
+internal RaytracingAccelerationStructure __asNativeAccelerationStructure<AS>(AS value)
+    where AS : IAccelerationStructure;
+
 /// Emits the Metal trace operation for traversal without motion.
 ///
 /// The ordinary intrinsic-call lowering passes these arguments directly to `metalTraceRay`.
@@ -189,11 +199,10 @@ public extension<Schema> RayTracer<Schema>
                 payload);
             break;
         default:
-            // Native targets represent the portable handle as the core acceleration structure.
-            // The cast connects this generic parameter to TraceRay's concrete signature;
-            // native lowering makes both types identical and removes the cast.
+            // Both AS types represent the same native resource. The conversion only supplies
+            // the core type expected by TraceRay; emission uses accelerationStructure directly.
             TraceRay(
-                bit_cast<RaytracingAccelerationStructure>(accelerationStructure),
+                __asNativeAccelerationStructure(accelerationStructure),
                 desc.rayFlags,
                 desc.instanceMask,
                 desc.sbtOffset,
@@ -281,10 +290,9 @@ public extension<Schema> RayTracer<Schema>
             break;
         case glsl:
         case spirv:
-            // Native lowering represents the portable handle as the core acceleration
-            // structure, so this cast disappears before emitting TraceMotionRay.
+            // As for TraceRay, the conversion emits the same native handle directly.
             TraceMotionRay(
-                bit_cast<RaytracingAccelerationStructure>(accelerationStructure),
+                __asNativeAccelerationStructure(accelerationStructure),
                 desc.rayFlags,
                 desc.instanceMask,
                 desc.sbtOffset,

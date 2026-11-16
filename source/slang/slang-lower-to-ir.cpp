@@ -2922,8 +2922,8 @@ struct ValLoweringVisitor : ValVisitor<ValLoweringVisitor, LoweredValInfo, Lower
         IROp op = IROp(intrinsicTypeModifier->irOp);
         List<IRInst*> operands;
         // Fixed operands distinguish representations that share an opcode. For example,
-        // the core acceleration structure declares -1 and portable AccelerationStructure declares
-        // 2. MultiLevel<N> instead supplies its level count through the generic argument below.
+        // portable AccelerationStructure declares 2. The core declaration omits the operand,
+        // so the IR builder supplies -1. MultiLevel<N> supplies its generic argument below.
         for (auto operand : intrinsicTypeModifier->irOperands)
             operands.add(getBuilder()->getIntValue(getBuilder()->getIntType(), operand));
         // If there are any substitutions attached to the declRef,

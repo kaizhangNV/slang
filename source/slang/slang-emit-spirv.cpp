@@ -5286,6 +5286,21 @@ struct SPIRVEmitContext : public SourceEmitterBase, public SPIRVEmitSharedContex
         case kIROp_Lsh:
             result = emitArithmetic(parent, inst);
             break;
+        case kIROp_CastToNativeAccelerationStructure:
+            {
+                auto sourceType =
+                    cast<IRRaytracingAccelerationStructureType>(inst->getOperand(0)->getDataType());
+                auto resultType = cast<IRRaytracingAccelerationStructureType>(inst->getDataType());
+                SLANG_RELEASE_ASSERT(getIntVal(sourceType->getMaxLevelCount()) == 2);
+                SLANG_RELEASE_ASSERT(getIntVal(resultType->getMaxLevelCount()) == -1);
+                // AS(2) and AS(-1) emit the same OpTypeAccelerationStructureKHR. Reuse the
+                // operand's value ID, so this conversion emits no instruction or handle copy.
+                SLANG_RELEASE_ASSERT(ensureInst(sourceType) == ensureInst(resultType));
+                auto inner = ensureInst(inst->getOperand(0));
+                registerInst(inst, inner);
+                result = inner;
+                break;
+            }
         case kIROp_CastDescriptorHandleToUInt2:
         case kIROp_CastUInt2ToDescriptorHandle:
         case kIROp_CastUInt64ToDescriptorHandle:

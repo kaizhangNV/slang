@@ -1558,6 +1558,11 @@ CLikeSourceEmitter::FoldPolicy CLikeSourceEmitter::getFoldPolicy(IRInst* inst)
     case kIROp_GetValueFromBoundInterface:
         return FoldPolicy::Always;
 
+    // This conversion only changes the IR type. Keeping it folded emits the original AS
+    // expression, while the normal folding checks preserve the evaluation of its operand.
+    case kIROp_CastToNativeAccelerationStructure:
+        return FoldPolicy::Always;
+
     case kIROp_GetVulkanRayTracingPayloadLocation:
         return FoldPolicy::Always;
 
@@ -2697,6 +2702,19 @@ void CLikeSourceEmitter::defaultEmitInstExpr(IRInst* inst, const EmitOpInfo& inO
             m_writer->emit(prec.op);
             m_writer->emit(" ");
             emitOperand(inst->getOperand(1), rightSide(outerPrec, prec));
+            break;
+        }
+    case kIROp_CastToNativeAccelerationStructure:
+        {
+            SLANG_RELEASE_ASSERT(
+                isD3DTarget(getTargetReq()) || isKhronosTarget(getTargetReq()) ||
+                isCUDATarget(getTargetReq()));
+            auto sourceType =
+                cast<IRRaytracingAccelerationStructureType>(inst->getOperand(0)->getDataType());
+            auto resultType = cast<IRRaytracingAccelerationStructureType>(inst->getDataType());
+            SLANG_RELEASE_ASSERT(getIntVal(sourceType->getMaxLevelCount()) == 2);
+            SLANG_RELEASE_ASSERT(getIntVal(resultType->getMaxLevelCount()) == -1);
+            emitOperand(inst->getOperand(0), outerPrec);
             break;
         }
     case kIROp_CastDescriptorHandleToUInt2:

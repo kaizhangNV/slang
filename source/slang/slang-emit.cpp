@@ -700,12 +700,16 @@ void calcRequiredLoweringPassSet(
         result.traceProgramDescriptor = true;
         break;
     case kIROp_RaytracingAccelerationStructureType:
-        // Portable AS declarations need target representation even when this entry does not
-        // trace. The native RayQuery resource uses -1 and keeps its existing binding.
+        // On Metal, a portable AS declaration needs an argument buffer even when this entry
+        // does not trace. The core AS(-1) keeps its native resource binding. Other targets
+        // emit both AS types directly and need no lowering for these declarations.
         SLANG_RELEASE_ASSERT(inst->getOperandCount() == 1);
-        if (auto levelCount = as<IRIntLit>(inst->getOperand(0));
-            !levelCount || levelCount->getValue() != -1)
-            result.portableRayTracing = true;
+        if (isMetalTarget(codeGenContext->getTargetReq()))
+        {
+            if (auto levelCount = as<IRIntLit>(inst->getOperand(0));
+                !levelCount || levelCount->getValue() != -1)
+                result.portableRayTracing = true;
+        }
         break;
     case kIROp_MatrixType:
         // An `Unknown` layout needs the pass. So does `Unknown` passed as a generic argument,

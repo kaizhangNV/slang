@@ -2952,6 +2952,13 @@ IRInst* IRBuilder::_findOrEmitHoistableInst(
 
 IRType* IRBuilder::getType(IROp op, UInt operandCount, IRInst* const* operands)
 {
+    if (op == kIROp_RaytracingAccelerationStructureType && operandCount == 0)
+    {
+        // The core declaration omits the level count. Supply its native sentinel before
+        // interning so omitted and explicit -1 operands produce the same canonical type.
+        IRInst* nativeLevelCount = getIntValue(getIntType(), -1);
+        return getType(op, 1, &nativeLevelCount);
+    }
     return (IRType*)createIntrinsicInst(nullptr, op, operandCount, operands);
 }
 
@@ -9734,6 +9741,7 @@ bool IRInst::mightHaveSideEffects(
     case kIROp_CastDescriptorHandleToUInt64:
     case kIROp_CastDescriptorHandleToResource:
     case kIROp_CastResourceToDescriptorHandle:
+    case kIROp_CastToNativeAccelerationStructure:
     case kIROp_CastUIntToUntypedResourceHandle:
     case kIROp_CastUntypedResourceHandleToUInt:
     case kIROp_CastUIntToUntypedSamplerHandle:
