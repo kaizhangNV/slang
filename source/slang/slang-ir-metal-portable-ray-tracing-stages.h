@@ -5,6 +5,9 @@
 
 namespace Slang
 {
+class DiagnosticSink;
+class TargetProgram;
+
 namespace PortableRT
 {
 namespace Metal
@@ -67,8 +70,9 @@ IRInst* getRayPayloadReference(
     IRInst* rayData,
     IRType* payloadType);
 
-/// Restores a stage's nominal data reference from its erased ABI pointer. Void and empty source
-/// types carry no bytes; their references remain nominal tokens until ordinary legalization.
+/// Builds a pointer to dataType from the thread void* passed through a Metal function table.
+/// Nonempty data keeps its existing address and storage. Void returns a typed null pointer;
+/// an empty struct gets a typed local that later empty-type legalization removes.
 IRInst* getStageDataReference(IRBuilder& builder, IRInst* erasedAddress, IRType* dataType);
 
 /// Binds one logical accessor result to a concrete adapter value. A reference getter's logical
@@ -141,4 +145,18 @@ void lowerVisibleStageInputs(IRModule* module, const List<VisibleAdapter>& adapt
 
 } // namespace Metal
 } // namespace PortableRT
+
+/// Creates VFT adapters for selected, specialized logical stage entry points.
+/// No schema discovery is needed: separately compiled callers use the same fixed signatures.
+/// Removes those logical entries from entryPoints, leaving ordinary native entries in that list,
+/// and returns the generated adapters separately.
+/// Include these roots in the shared lowerVisibleStageInputs batch so ordinary source helpers
+/// receive the invocation state of their actual caller.
+List<PortableRT::Metal::VisibleAdapter> createMetalStageAdapters(
+    IRModule* module,
+    TargetProgram* targetProgram,
+    List<IRFunc*>& entryPoints,
+    bool& requiresResultTypeLowering,
+    DiagnosticSink* sink);
+
 } // namespace Slang

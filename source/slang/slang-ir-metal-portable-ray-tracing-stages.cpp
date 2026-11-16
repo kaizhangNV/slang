@@ -1,5 +1,6 @@
 #include "slang-ir-metal-portable-ray-tracing-stages.h"
 
+#include "slang-ir-metal-portable-ray-tracing-candidates.h"
 #include "slang-ir-portable-ray-tracing-util.h"
 #include "slang-ir-util.h"
 
@@ -25,24 +26,49 @@ IRType* getRayPayloadStorageType(IRBuilder& builder, IRType* payloadType)
     return isEmptyType(payloadType) ? builder.getVoidType() : payloadType;
 }
 
+/// Builds an IR pointer to stage data using the concrete type expected by the selected shader.
+/// Metal function-table signatures pass payload, callable data, and attributes as thread void*
+/// so independently compiled shaders agree on the argument types. The selected adapter knows
+/// the concrete type from the shader's input contract and restores that type here.
+///
+/// Consider a miss shader whose Context.Payload is `struct Payload { float value; }`.
+/// The generated caller and adapter conceptually do the following (other arguments omitted):
+///     // Caller: pass the address of the actual payload through the common table signature.
+///     Payload payload;
+///     missTable[index]((thread void*)&payload, ...);
+///     // Selected miss adapter: recover the pointer type needed by input.payload.value.
+///     thread Payload* typedPayload = (thread Payload*)payloadAddress;
+///
+/// `erasedAddress` is the IR value for payloadAddress, and `dataType` is Payload. The returned
+/// pointer lets later input lowering pass the same payload storage to invoke and its helpers.
+/// For nonempty data, the caller must supply storage of the matching type in the thread address
+/// space; this function does not discover or validate the storage's type at runtime.
+/// Void and empty structs need no transported bytes, so those cases ignore erasedAddress.
 IRInst* getStageDataReference(IRBuilder& builder, IRInst* erasedAddress, IRType* dataType)
 {
     if (as<IRVoidType>(dataType))
     {
-        // A retained helper may still take a nominal void reference. It has no storage, so use
-        // a typed null pointer instead of constructing an invalid void local or store.
+        // An ordinary helper can still have a reference parameter whose value type is void.
+        // Keep that pointer type with a null value: there is no data to access, and creating a
+        // local variable or a store with value type void would be invalid IR.
         return builder.getNullPtrValue(builder.getPtrType(dataType, AddressSpace::ThreadLocal));
     }
     if (isEmptyType(dataType))
     {
-        // Consider Payload = ApplicationEmpty. Its nominal reference is still meaningful to
-        // ordinary source calls even though transport has no bytes. Empty-type legalization
-        // removes this local token without dereferencing the erased ABI pointer.
+        // Consider Payload = ApplicationEmpty, where `struct ApplicationEmpty {}` has no fields.
+        // Helpers still expect a reference to that specific struct, so supply an initialized
+        // local of the correct type. There are no payload bytes to recover from erasedAddress.
+        // Later empty-type legalization removes this local and the empty arguments using it.
         auto value = builder.emitVar(dataType);
         builder.emitStore(value, builder.emitDefaultConstruct(dataType));
         return value;
     }
+    // Nonempty data needs an address operand. This checks the presence of the IR instruction,
+    // not whether the pointer it represents is non-null at runtime.
     SLANG_RELEASE_ASSERT(erasedAddress);
+    // Cast thread void* to thread dataType*. Only the pointer's pointee type changes; its
+    // address and address space stay the same. This emits no load, store, or copy of the data.
+    // For example, writes through the recovered Payload* update the caller's original payload.
     return builder.emitBitCast(
         builder.getPtrType(dataType, AddressSpace::ThreadLocal),
         erasedAddress);
@@ -719,4 +745,106 @@ void lowerVisibleStageInputs(IRModule* module, const List<VisibleAdapter>& adapt
 
 } // namespace Metal
 } // namespace PortableRT
+
+List<PortableRT::Metal::VisibleAdapter> createMetalStageAdapters(
+    IRModule* module,
+    TargetProgram*,
+    List<IRFunc*>& entryPoints,
+    bool& requiresResultTypeLowering,
+    DiagnosticSink* sink)
+{
+    using namespace PortableRT::Metal;
+
+    struct SelectedStage
+    {
+        PortableRT::SchemaStage stage;
+        String name;
+    };
+
+    List<VisibleAdapter> result;
+    List<IRFunc*> nativeEntries;
+    List<SelectedStage> selectedStages;
+    IRBuilder builder(module);
+    for (auto invoke : entryPoints)
+    {
+        auto input = PortableRT::getEntryPointInputInfo(invoke);
+        if (!input)
+        {
+            nativeEntries.add(invoke);
+            continue;
+        }
+        auto entry = invoke->findDecoration<IREntryPointDecoration>();
+        SLANG_RELEASE_ASSERT(entry);
+
+        // Selecting Miss supplies a checked invoke and Context without selecting a program
+        // schema. The same source contract fixes the VFT signature in the caller's compilation;
+        // only this adapter needs the implementation and its logical input decoration.
+        SelectedStage selected;
+        selected.stage.stage = entry->getProfile().getStage();
+        selected.stage.isPresent = true;
+        selected.stage.invoke = invoke;
+        selected.stage.input = input;
+        selected.name = entry->getName()->getStringSlice();
+        selectedStages.add(_Move(selected));
+
+        // The final adapter owns the selected export. Keep the original function callable,
+        // without an entry-point signature or its reflected shader-record parameter layout.
+        PortableRT::demoteStageImplementation(invoke);
+        if (auto keepAlive = invoke->findDecoration<IRKeepAliveDecoration>())
+            keepAlive->removeAndDeallocate();
+        if (auto layout = invoke->findDecoration<IRLayoutDecoration>())
+            layout->removeAndDeallocate();
+    }
+
+    // Candidate adapters clone parts of the source call graph. Remove remaining entry markers
+    // before cloning, so linked implementations used as helpers also remain ordinary functions.
+    PortableRT::demoteStageImplementations(module);
+
+    for (const auto& selected : selectedStages)
+    {
+        const auto& stage = selected.stage;
+        auto input = stage.input;
+        auto symbolName = selected.name.getUnownedSlice();
+        VisibleAdapter root;
+        if (stage.stage == Stage::AnyHit || stage.stage == Stage::Intersection)
+        {
+            root = createSelectedCandidateAdapter(
+                module,
+                stage,
+                symbolName,
+                requiresResultTypeLowering,
+                sink);
+        }
+        else
+        {
+            auto requirements = getStageContractRequirements(stage.stage);
+            auto descriptorPointer =
+                builder.getPtrType(builder.getUIntType(), AddressSpace::Uniform);
+            if (stage.stage == Stage::Callable)
+            {
+                root = createCallableAdapter(
+                    module,
+                    stage,
+                    requirements,
+                    symbolName,
+                    descriptorPointer);
+            }
+            else
+            {
+                SLANG_RELEASE_ASSERT(
+                    stage.stage == Stage::ClosestHit || stage.stage == Stage::Miss);
+                root = createVisibleAdapter(
+                    module,
+                    stage,
+                    requirements,
+                    symbolName,
+                    descriptorPointer);
+            }
+        }
+        result.add(_Move(root));
+    }
+    entryPoints = _Move(nativeEntries);
+    return result;
+}
+
 } // namespace Slang

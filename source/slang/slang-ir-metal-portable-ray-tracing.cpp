@@ -6,7 +6,6 @@
 #include "slang-ir-metal-portable-ray-tracing-instance-path.h"
 #include "slang-ir-metal-portable-ray-tracing-resources.h"
 #include "slang-ir-metal-portable-ray-tracing-stages.h"
-#include "slang-ir-metal-portable-ray-tracing-standalone.h"
 #include "slang-ir-portable-ray-tracing-schema.h"
 #include "slang-ir-portable-ray-tracing-util.h"
 #include "slang-ir-util.h"
