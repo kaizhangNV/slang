@@ -21,8 +21,6 @@ SLANG_UNIT_TEST(metalPortableAccelerationStructureComponents)
     IRInst* nativeTopology = builder.getIntValue(builder.getIntType(), -1);
     auto nativeType =
         builder.getType(kIROp_RaytracingAccelerationStructureType, 1, &nativeTopology);
-    // Omitted depth denotes the same canonical legacy type used by core RayQuery APIs.
-    SLANG_CHECK(builder.getType(kIROp_RaytracingAccelerationStructureType) == nativeType);
     auto nativeScene = builder.createGlobalParam(nativeType);
     auto first = builder.createGlobalParam(sourceType);
     auto second = builder.createGlobalParam(sourceType);

@@ -21021,7 +21021,7 @@ struct RayDesc
 /// @category raytracing
 __builtin
 __magic_type(RaytracingAccelerationStructureType)
-__intrinsic_type($(kIROp_RaytracingAccelerationStructureType))
+__intrinsic_type($(kIROp_RaytracingAccelerationStructureType), -1)
 struct RaytracingAccelerationStructure
 {
     // Shared by the raytracing and rayquery APIs; since the capability system cannot
