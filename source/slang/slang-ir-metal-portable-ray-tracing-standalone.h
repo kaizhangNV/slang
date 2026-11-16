@@ -13,7 +13,7 @@ class TargetProgram;
 /// and returns the generated adapters separately.
 /// Include these roots in the shared lowerVisibleStageInputs batch so ordinary source helpers
 /// receive the invocation state of their actual caller.
-List<PortableRT::Metal::VisibleAdapter> prepareMetalStandaloneStages(
+List<PortableRT::Metal::VisibleAdapter> createMetalStageAdapters(
     IRModule* module,
     TargetProgram* targetProgram,
     List<IRFunc*>& entryPoints,

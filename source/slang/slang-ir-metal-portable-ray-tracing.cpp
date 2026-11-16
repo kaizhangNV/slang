@@ -850,7 +850,7 @@ void lowerMetalPortableRayTracing(
     // 1. Build wrappers for the selected stages while their source input types still describe
     // the portable contract. The AS argument-buffer conversion below replaces those types.
     // Do this before collecting dispatches because candidate wrappers can clone shader bodies.
-    auto adapters = prepareMetalStandaloneStages(
+    auto adapters = createMetalStageAdapters(
         module,
         targetProgram,
         entryPoints,

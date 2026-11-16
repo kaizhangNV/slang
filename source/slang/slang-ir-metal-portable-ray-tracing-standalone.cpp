@@ -8,7 +8,7 @@ namespace Slang
 {
 using namespace PortableRT::Metal;
 
-List<VisibleAdapter> prepareMetalStandaloneStages(
+List<VisibleAdapter> createMetalStageAdapters(
     IRModule* module,
     TargetProgram*,
     List<IRFunc*>& entryPoints,
