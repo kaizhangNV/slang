@@ -75,8 +75,11 @@ IRInst* getRayPayloadReference(
 /// an empty struct gets a typed local that later empty-type legalization removes.
 IRInst* getStageDataReference(IRBuilder& builder, IRInst* erasedAddress, IRType* dataType);
 
-/// Binds one logical accessor result to a concrete adapter value. A reference getter's logical
-/// result type can differ from the value's physical pointer type, which retains its address space.
+/// Records which wrapper value supplies an input-read instruction with a given opcode and type.
+/// For example, {MetalRTGetCurrentDistance, float, distanceParam} tells lowerVisibleStageInputs
+/// to pass the wrapper's distance parameter through source helpers and replace their matching
+/// reads. The getter's result type can differ from the supplied value's type: an instance-index
+/// getter returns uint, while its wrapper supplies a pointer to the array of instance indices.
 struct StageInputBinding
 {
     IROp op;
@@ -84,7 +87,8 @@ struct StageInputBinding
     IRInst* value;
 };
 
-/// Keeps adapter-owned invocation values until all calls have been created and can be threaded.
+/// Returns the generated wrapper and the input replacement rules for lowerVisibleStageInputs.
+/// That later step runs after TraceRay/CallShader lowering has created any additional input reads.
 struct VisibleAdapter
 {
     IRFunc* function = nullptr;

@@ -473,6 +473,11 @@ IRFuncType* getCallableFunctionSignature(
     return builder.getFuncType(types, builder.getVoidType());
 }
 
+/// Creates the Metal function-table wrapper for a selected miss or closest-hit shader.
+/// The wrapper receives physical arguments such as a payload address and hit distance, then
+/// calls the source invoke method. This function also records which wrapper values supply reads
+/// of the logical shader input. Later, lowerVisibleStageInputs passes those values through invoke
+/// and its helpers and replaces the input-read instructions with the corresponding values.
 VisibleAdapter createVisibleAdapter(
     IRModule* module,
     const SchemaStage& stage,
@@ -481,6 +486,10 @@ VisibleAdapter createVisibleAdapter(
     IRType* descriptorPointerType)
 {
     SLANG_RELEASE_ASSERT(stage.stage == Stage::ClosestHit || stage.stage == Stage::Miss);
+
+    // Create the exported function with the signature expected by its visible function table.
+    // Both the table type and the parameters below use getVisibleParameters, so their types and
+    // order agree. Mark this as a Metal visible function and keep its selected export name.
     IRBuilder builder(module);
     builder.setInsertInto(module->getModuleInst());
     VisibleAdapter result;
@@ -504,6 +513,15 @@ VisibleAdapter createVisibleAdapter(
 
     builder.setInsertInto(result.function);
     builder.emitBlock();
+
+    // Create the incoming parameters and keep two lookups while constructing this wrapper:
+    //     parameters[Data] = %payload              // find an argument by its role
+    //     values[MetalRTGetCurrentDistance] = %distance // find the value for an input read
+    // The first lookup also covers arguments that need a cast or load, such as the payload and
+    // record addresses. The second covers arguments associated with a getter instruction.
+    // `seen` tracks (getter opcode, getter result type) pairs already saved in result.bindings.
+    // These are C++ construction data; result.bindings is the list returned for later input
+    // lowering. None of these dictionaries or lists becomes a shader buffer.
     Dictionary<ParameterKind, IRInst*> parameters;
     Dictionary<IROp, IRInst*> values;
     HashSet<KeyValuePair<IROp, IRType*>> seen;
@@ -511,16 +529,22 @@ VisibleAdapter createVisibleAdapter(
     {
         auto value = builder.emitParam(parameter.type);
         builder.addNameHintDecoration(value, UnownedTerminatedStringSlice(parameter.name));
+        // Global-context lowering uses this marker to find the incoming shared resources.
         if (parameter.kind == ParameterKind::GlobalResources)
             builder.addDecoration(value, kIROp_MetalRTGlobalResourceContextDecoration);
         parameters.add(parameter.kind, value);
         if (parameter.operation != kIROp_Invalid)
             values.add(parameter.operation, value);
-        // Consider a miss shader that calls tracer.callShader through a helper. Lowering that
-        // dispatch creates launch queries after this adapter is built. Bind the fixed uint3
-        // parameters now, so those later queries use this invocation's values without adding
-        // parameters to the VFT signature. Other accesses can require the source result type,
-        // such as an indexed instance query whose parameter is an array pointer.
+        // These two uint3 arguments describe the originating ray-generation launch. Save both
+        // values even when the source body does not read them yet. Consider
+        // Miss.invoke calling a helper that contains CallShader. Later, lowerCallable creates
+        // MetalRTGetDispatchRaysIndex/Dimensions in that helper to pass to the callable shader.
+        // The binding saved here says, for example:
+        //     (MetalRTGetDispatchRaysIndex, uint3) -> %dispatchRaysIndex
+        // lowerVisibleStageInputs then passes this existing argument through invoke and the
+        // helper, replacing the new getter. The wrapper needs no extra parameter.
+        // Other getters are recorded by the body scan below, which supplies their result type.
+        // For example, an instance-index getter returns uint, but its argument is a uint*.
         if (stage.isPresent && (parameter.operation == kIROp_MetalRTGetDispatchRaysIndex ||
                                 parameter.operation == kIROp_MetalRTGetDispatchRaysDimensions))
         {
@@ -528,17 +552,23 @@ VisibleAdapter createVisibleAdapter(
             result.bindings.add({parameter.operation, parameter.type, value});
         }
     }
+
+    // A missing stage needs only the function signature and an empty body.
     if (!stage.isPresent)
     {
-        // A placeholder occupies a dense VFT position but has no source body or state access.
         builder.emitReturn();
         return result;
     }
     SLANG_RELEASE_ASSERT(stage.invoke && stage.input);
+
+    // Keep the descriptor and whole records-buffer arguments in the returned description.
     if (auto descriptor = parameters.tryGetValue(ParameterKind::Descriptor))
         result.descriptorResources = *descriptor;
     result.records = parameters.getValue(ParameterKind::Records);
 
+    // Find input reads in invoke and the ordinary helper functions it calls. For each kind of
+    // read, construct its replacement value inside this wrapper. Leave the source instructions
+    // in place for now: lowerVisibleStageInputs will forward these values through their callers.
     HashSet<IRFunc*> visited;
     List<IRInst*> operations;
     collectOperations(stage.invoke, visited, operations);
@@ -547,6 +577,7 @@ VisibleAdapter createVisibleAdapter(
         auto op = operation->getOp();
         auto type = operation->getDataType();
         IRInst* value = nullptr;
+        // Recover a typed pointer to the caller's payload so writes update the same storage.
         if (op == kIROp_PortableRTGetPayload)
             value = getStageDataReference(
                 builder,
@@ -556,6 +587,8 @@ VisibleAdapter createVisibleAdapter(
             value = *bound;
         else if (op == kIROp_PortableRTGetRecord)
         {
+            // Read this shader's Record value from the incoming record-data address. Empty
+            // records have no bytes to load, so construct their value without using the address.
             if (isEmptyType(type))
                 value = as<IRVoidType>(type) ? builder.getVoidValue()
                                              : builder.emitDefaultConstruct(type);
@@ -572,6 +605,9 @@ VisibleAdapter createVisibleAdapter(
         }
         else if (op == kIROp_PortableRTGetHitAttributes)
         {
+            // Triangle/curve attribute views carry no data themselves; their getters use the
+            // separate barycentric/front-facing/curve parameters. Procedural attributes have an
+            // application-defined type, which we load through the incoming attributes pointer.
             if (isBuiltinAttributeView(operation))
                 value = builder.emitDefaultConstruct(type);
             else
@@ -584,6 +620,8 @@ VisibleAdapter createVisibleAdapter(
         }
         else if (op == kIROp_MetalRTGetObjectSpaceRay)
         {
+            // The signature passes the ray components separately. Assemble the RayDesc value
+            // expected by this getter from origin, minimum distance, direction and hit distance.
             IRInst* fields[] = {
                 parameters.getValue(ParameterKind::ObjectOrigin),
                 values.getValue(kIROp_MetalRTGetMinDistance),
@@ -591,9 +629,14 @@ VisibleAdapter createVisibleAdapter(
                 values.getValue(kIROp_MetalRTGetCurrentDistance)};
             value = builder.emitMakeStruct(type, SLANG_COUNT_OF(fields), fields);
         }
+        // Save one rule per opcode/result type, even if several helpers contain the same read.
+        // For example, all float MetalRTGetCurrentDistance reads use this wrapper's %distance.
         if (value && seen.add({op, type}))
             result.bindings.add({op, type, value});
     }
+
+    // Call the original method with its empty logical input. Later input lowering adds the
+    // arguments needed by its body and helpers, using the replacement rules recorded above.
     emitInvoke(builder, stage.invoke);
     builder.emitReturn();
     return result;
