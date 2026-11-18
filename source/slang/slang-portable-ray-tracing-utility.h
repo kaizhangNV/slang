@@ -94,9 +94,9 @@ Type* getAssociatedType(
 ConcreteTypePack* getConcreteEntryTypes(Type* entryListType);
 
 /// Adds PortableRTStageInputDecoration to the IR struct type for a recognized stage input.
-/// Its six operands are the stage kind, acceleration-structure type, payload type (callable
-/// data for CallableInput), record type, primitive type, and attributes type. Non-hit inputs use
-/// void for the last two operands. Other aggregate declarations are unchanged.
+/// Its operands are the stage kind, acceleration-structure type, payload type (callable data for
+/// CallableInput), record type, primitive type, attributes type, and motion type. Non-hit inputs
+/// use void for primitive and attributes. Other aggregate declarations are unchanged.
 /// The callback lowers checked semantic types synchronously in the caller's existing generic
 /// environment. The builder uses that environment's insertion location.
 void addStageInputDecoration(

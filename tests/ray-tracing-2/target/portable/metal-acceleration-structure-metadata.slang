@@ -1,4 +1,5 @@
 //TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry RayGeneration -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=CANDIDATE): -experimental-feature -entry AnyHit -target metal -profile metallib_2_4 -validate-ir
 //TEST:SIMPLE(filecheck=PROVIDER): -experimental-feature -entry Miss -target metal -profile metallib_2_4 -validate-ir
 
 import slang.raytracing.portable;
@@ -99,9 +100,9 @@ void RayGeneration()
 // METAL-DAG: uint device* instanceContributionMetadata
 // METAL-DAG: first{{[^;]*}}instanceContributionMetadata
 // METAL-DAG: second{{[^;]*}}instanceContributionMetadata
-// METAL-DAG: intersection(triangle,
 // METAL-DAG: get_committed_instance_id
 // METAL-DAG: queryScene{{.*}}buffer(
+// METAL-NOT: intersection(triangle,
 
 // The separately selected provider reads output without tracing. Its shared resource context
 // must retain the portable AS argument buffers and the direct native AS from this component.
@@ -109,3 +110,8 @@ void RayGeneration()
 // PROVIDER-DAG: accelerationStructure
 // PROVIDER-DAG: queryScene
 // PROVIDER-DAG: visible]] void Miss_miss
+
+// Native candidates receive the selected AS metadata through the per-ray header.
+// CANDIDATE-DAG: intersection(triangle,
+// CANDIDATE-DAG: instanceContributionMetadata
+// CANDIDATE-DAG: instance_id]]

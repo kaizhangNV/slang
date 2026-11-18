@@ -2860,7 +2860,6 @@ static void cloneDecorationToVar(IRInst* srcInst, IRInst* varInst)
         case kIROp_UserTypeNameDecoration:
         case kIROp_SemanticDecoration:
         case kIROp_MemoryQualifierSetDecoration:
-        case kIROp_MetalRTCandidateDescriptorDecoration:
         case kIROp_MetalRTGlobalResourceContextDecoration:
             cloneDecoration(decoration, varInst);
             break;

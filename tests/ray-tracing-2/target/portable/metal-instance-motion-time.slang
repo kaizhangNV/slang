@@ -1,5 +1,7 @@
 //TEST:SIMPLE(filecheck=INSTANCE): -experimental-feature -entry RayGeneration -stage raygeneration -target metal -profile metallib_2_4 -validate-ir
 //TEST:SIMPLE(filecheck=COMBINED): -experimental-feature -entry RayGeneration -stage raygeneration -target metal -profile metallib_2_4 -DCOMBINED_MOTION=1 -validate-ir
+//TEST:SIMPLE(filecheck=INSTANCE_PROVIDER): -experimental-feature -entry AnyHit -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=COMBINED_PROVIDER): -experimental-feature -entry AnyHit -target metal -profile metallib_2_4 -DCOMBINED_MOTION=1 -validate-ir
 
 import slang.raytracing.portable;
 
@@ -106,13 +108,19 @@ void RayGeneration()
 // INSTANCE-DAG: intersector<metal::raytracing::instancing, metal::raytracing::triangle_data, metal::raytracing::world_space_data, metal::raytracing::instance_motion>
 // INSTANCE-DAG: intersection_function_table<metal::raytracing::instancing, metal::raytracing::triangle_data, metal::raytracing::world_space_data, metal::raytracing::instance_motion>
 // INSTANCE-DAG: float time_
-// INSTANCE-DAG: intersection(triangle, metal::raytracing::instancing, metal::raytracing::triangle_data, metal::raytracing::world_space_data, metal::raytracing::instance_motion)
-// INSTANCE-DAG: instanceMask_{{[0-9]+}}, {{.*}}time_{{[0-9]+}}, {{.*}}intersectionFunctions_
+// INSTANCE_PROVIDER-DAG: intersection(triangle, metal::raytracing::instancing, metal::raytracing::triangle_data, metal::raytracing::world_space_data, metal::raytracing::instance_motion)
+// INSTANCE-DAG: instanceMask_{{[0-9]+}}, {{.*}}time_{{[0-9]+}}, {{.*}}table_
 // INSTANCE-NOT: metalRTGetRayTime
+// INSTANCE_PROVIDER-DAG: AnyHit_anyhit(
+// INSTANCE_PROVIDER-DAG: ray_data
+// INSTANCE_PROVIDER-NOT: metalRTGetRayTime
 // COMBINED-DAG: acceleration_structure<metal::raytracing::instancing, metal::raytracing::primitive_motion, metal::raytracing::instance_motion>
 // COMBINED-DAG: intersector<metal::raytracing::instancing, metal::raytracing::triangle_data, metal::raytracing::world_space_data, metal::raytracing::primitive_motion, metal::raytracing::instance_motion>
 // COMBINED-DAG: intersection_function_table<metal::raytracing::instancing, metal::raytracing::triangle_data, metal::raytracing::world_space_data, metal::raytracing::primitive_motion, metal::raytracing::instance_motion>
 // COMBINED-DAG: float time_
-// COMBINED-DAG: intersection(triangle, metal::raytracing::instancing, metal::raytracing::triangle_data, metal::raytracing::world_space_data, metal::raytracing::primitive_motion, metal::raytracing::instance_motion)
-// COMBINED-DAG: instanceMask_{{[0-9]+}}, {{.*}}time_{{[0-9]+}}, {{.*}}intersectionFunctions_
+// COMBINED_PROVIDER-DAG: intersection(triangle, metal::raytracing::instancing, metal::raytracing::triangle_data, metal::raytracing::world_space_data, metal::raytracing::primitive_motion, metal::raytracing::instance_motion)
+// COMBINED-DAG: instanceMask_{{[0-9]+}}, {{.*}}time_{{[0-9]+}}, {{.*}}table_
 // COMBINED-NOT: metalRTGetRayTime
+// COMBINED_PROVIDER-DAG: AnyHit_anyhit(
+// COMBINED_PROVIDER-DAG: ray_data
+// COMBINED_PROVIDER-NOT: metalRTGetRayTime

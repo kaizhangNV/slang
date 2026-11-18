@@ -495,6 +495,13 @@ void addStageInputDecoration(
         astBuilder,
         traceContextType,
         KnownBuiltinDeclName::RayTracingTraceAccelerationStructure);
+    // A native Metal candidate can be compiled without a schema. Preserve its checked motion
+    // mode alongside the AS type so its callback tags agree with independently compiled traces.
+    auto motionType = getAssociatedType(
+        linkage,
+        astBuilder,
+        traceContextType,
+        KnownBuiltinDeclName::RayTracingTraceMotion);
     auto payloadRole = stage == Stage::Callable
                            ? KnownBuiltinDeclName::RayTracingContextCallableData
                            : KnownBuiltinDeclName::RayTracingContextPayload;
@@ -529,6 +536,7 @@ void addStageInputDecoration(
         lowerType(recordType, userData),
         primitiveType,
         attributesType,
+        lowerType(motionType, userData),
     };
     builder->addDecoration(
         irType,

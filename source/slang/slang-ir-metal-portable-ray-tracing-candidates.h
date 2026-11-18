@@ -6,39 +6,28 @@
 namespace Slang
 {
 class DiagnosticSink;
+class TargetRequest;
 
 namespace PortableRT
 {
 namespace Metal
 {
 
-/// Builds the fixed signatures shared by independently compiled candidate stages and their tables.
+/// Builds the fixed signature used by procedural AnyHit providers and their VFT.
 IRFuncType* getAnyHitFunctionSignature(IRBuilder& builder);
-IRFuncType* getIntersectionFunctionSignature(IRBuilder& builder);
 
-/// Compiles only the selected candidate stage. An intersection adapter receives its any-hit table
-/// and index from schema glue, so the same compiled shader can participate in different groups.
+/// Compiles the selected candidate stage using its checked primitive and trace context.
+/// Triangle/curve AnyHit and procedural Intersection become native intersection callbacks;
+/// procedural AnyHit remains a visible provider called by ReportHit.
 VisibleAdapter createSelectedCandidateAdapter(
     IRModule* module,
+    TargetRequest* target,
     const SchemaStage& stage,
+    const RayDataHeader& header,
+    const MetalRTCandidateResources& candidateResources,
     UnownedStringSlice symbolName,
     bool& requiresResultTypeLowering,
     DiagnosticSink* sink);
-
-/// Creates body-free candidate dispatch for a descriptor. Runtime records choose a schema group;
-/// its checked types determine storage, while independently supplied VFT handles select code.
-void createCandidateAdapters(
-    IRModule* module,
-    const Schema& schema,
-    const MetalRTDescriptorResources& resources,
-    const Dictionary<IRType*, RayData>& carriers,
-    const RayDataHeader& header,
-    UInt tags,
-    IRIntegerValue maxLevels,
-    IRIntegerValue hitStride,
-    IRFunc* instanceContribution,
-    IRType* instancePathParamType,
-    UnownedStringSlice symbolPrefix);
 
 } // namespace Metal
 } // namespace PortableRT

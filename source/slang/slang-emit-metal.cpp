@@ -565,6 +565,22 @@ void MetalSourceEmitter::emitMetalRTTraceDispatch(IRMetalRTTraceDispatch* trace)
 
     m_writer->emit("{\n");
     m_writer->indent();
+    // The actual allocation includes schema-sized attribute storage after the common prefix.
+    // Let the Metal compiler compute that field's offset, including its native payload padding.
+    m_writer->emit("*(");
+    emitOperand(trace->getCommittedAttributesOffsetAddress(), getInfo(EmitOp::General));
+    m_writer->emit(") = ");
+    if (as<IRPtrLit>(trace->getCommittedAttributes()))
+        m_writer->emit("0u");
+    else
+    {
+        m_writer->emit("uint((thread uchar*)");
+        emitOperand(trace->getCommittedAttributes(), getInfo(EmitOp::General));
+        m_writer->emit(" - (thread uchar*)");
+        emitOperand(trace->getRayData(), getInfo(EmitOp::General));
+        m_writer->emit(")");
+    }
+    m_writer->emit(";\n");
     m_writer->emit("metal::raytracing::intersector<");
     _emitMetalRayTracingTagList(m_writer, tagMask, maxLevels);
     m_writer->emit("> _slang_intersector;\n");
@@ -584,6 +600,9 @@ void MetalSourceEmitter::emitMetalRTTraceDispatch(IRMetalRTTraceDispatch* trace)
                        "metal::raytracing::geometry_type::bounding_box);\n");
         break;
     default:
+        if (tagMask & IRIntegerValue(MetalRTTag::CurveData))
+            m_writer->emit("_slang_intersector.assume_geometry_type("
+                           "metal::raytracing::geometry_type::all);\n");
         break;
     }
 
@@ -763,9 +782,7 @@ void MetalSourceEmitter::emitMetalRTTraceDispatch(IRMetalRTTraceDispatch* trace)
         emitOperand(trace->getHitRecordStride(), getInfo(EmitOp::General));
         m_writer->emit(";\nuint _slang_hit_function_index = *((device uint*)"
                        "_slang_hit_record);\n");
-        m_writer->emit("if (_slang_hit_function_index != 0xffffffffU && ");
-        emitOperand(trace->getClosestHitPresenceLookup(), getInfo(EmitOp::General));
-        m_writer->emit("(_slang_hit_function_index))\n{\n");
+        m_writer->emit("if (_slang_hit_function_index != 0xffffffffU)\n{\n");
         m_writer->indent();
         emitOperand(trace->getClosestHitFunctions(), getInfo(EmitOp::Postfix));
         m_writer->emit("[_slang_hit_function_index](");
@@ -773,10 +790,7 @@ void MetalSourceEmitter::emitMetalRTTraceDispatch(IRMetalRTTraceDispatch* trace)
         if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::HitAttributes))
         {
             m_writer->emit(", ");
-            emitOperand(trace->getAttributesLookup(), getInfo(EmitOp::General));
-            m_writer->emit("(");
-            emitOperand(trace->getRayData(), getInfo(EmitOp::General));
-            m_writer->emit(", _slang_hit_function_index)");
+            emitOperand(trace->getCommittedAttributes(), getInfo(EmitOp::General));
         }
         if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::Distance) ||
             hasRequirement(closestHitRequirements, MetalRTStageRequirement::ObjectSpaceRay))
@@ -2022,8 +2036,7 @@ void MetalSourceEmitter::emitSimpleTypeImpl(IRType* type)
         {
             auto ptrType = cast<IRPtrTypeBase>(type);
             if (type->getOp() == kIROp_BorrowInParamType ||
-                (type->getOp() == kIROp_RefParamType &&
-                 ptrType->getAccessQualifier() == AccessQualifier::Read))
+                ptrType->getAccessQualifier() == AccessQualifier::Read)
             {
                 m_writer->emit("const ");
             }

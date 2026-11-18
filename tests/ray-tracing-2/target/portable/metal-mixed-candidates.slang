@@ -1,4 +1,6 @@
 //TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry RayGeneration -stage raygeneration -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=TRIANGLE): -experimental-feature -entry TriangleAnyHit -stage anyhit -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=BOX): -experimental-feature -entry Intersection -stage intersection -target metal -profile metallib_2_4 -validate-ir
 
 import slang.raytracing.portable;
 
@@ -76,8 +78,8 @@ rt::AccelerationStructure scene;
 rt::TraceProgramDescriptor<Schema, 1> program;
 RWStructuredBuffer<uint> output;
 
-// Only the procedural source reads hitKind. A shared candidate requirement can nevertheless
-// add front_facing to the triangle IFT signature, which must carry triangle_data consistently.
+// Separately compiled triangle and procedural callbacks use the same native tag profile as
+// traversal, even though their source bodies access different candidate properties.
 [shader("raygeneration")]
 void RayGeneration()
 {
@@ -91,6 +93,8 @@ void RayGeneration()
     output[0] = payload;
 }
 
-// METAL-DAG: intersection(triangle, metal::raytracing::instancing, metal::raytracing::triangle_data{{[^)]*}})
-// METAL-DAG: intersection(bounding_box, metal::raytracing::instancing, metal::raytracing::triangle_data{{[^)]*}})
+// METAL-DAG: intersection_function_table<metal::raytracing::instancing, metal::raytracing::triangle_data, metal::raytracing::world_space_data>
+// METAL-NOT: {{\[\[intersection\(}}
 // METAL-NOT: metalRTGetHitKind
+// TRIANGLE: intersection(triangle, metal::raytracing::instancing, metal::raytracing::triangle_data, metal::raytracing::world_space_data)
+// BOX: intersection(bounding_box, metal::raytracing::instancing, metal::raytracing::triangle_data, metal::raytracing::world_space_data)

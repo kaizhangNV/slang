@@ -104,12 +104,13 @@ void RayGeneration()
     tracer.trace(ray, scene, program, payloadB);
 }
 
-// Every call and callback must share one carrier, including its procedural attribute storage.
+// All empty payload types share one prefix and one allocation with packed committed attributes.
 // METAL: struct PortableRTRayData_{{[0-9]+}}
-// METAL: Attributes{{.*}} customAttributes
+// METAL: struct PortableRTRayDataAllocation_{{[0-9]+}}
+// METAL: AnyValue4 committedAttributes
 // METAL-NOT: struct PortableRTRayData_
 
 // ANYHIT: visible]]
 // ANYHIT-NOT: metalRTIgnoreHit
-// INTERSECTION: visible]]
+// INTERSECTION: intersection(bounding_box,
 // INTERSECTION-NOT: metalRTReportHit

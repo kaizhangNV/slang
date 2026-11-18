@@ -320,7 +320,6 @@ struct IntroduceExplicitGlobalContextPass
                 m_metalIntersectionFunctions.getArrayView());
 
         orderSharedGlobalParameters();
-        assignCandidateDescriptorBindings();
         diagnoseCandidateResourceAccesses();
         diagnoseProviderGroupSharedAccesses();
 
@@ -432,9 +431,9 @@ struct IntroduceExplicitGlobalContextPass
         for (auto function : m_metalVisibleFunctions)
             createContextForVisibleFunction(function);
 
-        // Candidate glue is called by the driver and has no direct source-stage calls from
-        // which to infer resources. Fill every bindable field in the same component layout.
-        // An ordinary callback without indirect candidates still binds only what it reads.
+        // Native candidates may call a separately compiled procedural AnyHit provider. Fill
+        // every bindable field in the shared component layout so its indirect reads have the
+        // same resource context. Callbacks without indirect calls bind only what they read.
         for (auto function : m_metalIntersectionFunctions)
             createContextForEntryPoint(function, true);
 
@@ -587,46 +586,12 @@ struct IntroduceExplicitGlobalContextPass
             });
     }
 
-    // The descriptor belongs to an IFT object, not to a particular source global: a host may
-    // create several descriptors of the same schema. Its extra driver binding follows the
-    // complete component's buffer range, including declarations unused by this shader body.
-    void assignCandidateDescriptorBindings()
-    {
-        UInt descriptorIndex = 0;
-        for (auto parameter : m_sharedGlobalParams)
-        {
-            auto layout = findVarLayout(parameter.globalParam);
-            auto offset = layout->findOffsetAttr(LayoutResourceKind::MetalBuffer);
-            if (!offset)
-                continue;
-            auto size = layout->getTypeLayout()->findSizeAttr(LayoutResourceKind::MetalBuffer);
-            SLANG_RELEASE_ASSERT(size && size->getSize().isFinite());
-            descriptorIndex =
-                Math::Max(descriptorIndex, offset->getOffset() + size->getFiniteSize());
-        }
-        IRBuilder builder(m_module);
-        for (auto function : m_metalIntersectionFunctions)
-        {
-            for (auto parameter : function->getParams())
-            {
-                if (!parameter->findDecoration<IRMetalRTCandidateDescriptorDecoration>())
-                    continue;
-                IRTypeLayout::Builder typeLayout(&builder);
-                typeLayout.addResourceUsage(LayoutResourceKind::MetalBuffer, 1);
-                IRVarLayout::Builder varLayout(&builder, typeLayout.build());
-                varLayout.findOrAddResourceInfo(LayoutResourceKind::MetalBuffer)->offset =
-                    descriptorIndex;
-                builder.addLayoutDecoration(parameter, varLayout.build());
-            }
-        }
-    }
-
     // AnyHit and Intersection providers execute under the intersection driver's resource
     // restrictions. Checking their actual reads diagnoses an unsupported texture without
     // rejecting an unrelated ray-generation texture declared in the same component.
     void diagnoseCandidateResourceAccesses()
     {
-        List<IRFunc*> providers;
+        List<IRFunc*> providers = m_metalIntersectionFunctions;
         for (auto function : m_metalVisibleFunctions)
         {
             auto visible = function->findDecoration<IRMetalVisibleFunctionDecoration>();
@@ -658,10 +623,12 @@ struct IntroduceExplicitGlobalContextPass
     // Other compute entries in the component may still use the same declaration.
     void diagnoseProviderGroupSharedAccesses()
     {
-        if (!m_metalVisibleFunctions.getCount())
+        List<IRFunc*> providers = m_metalVisibleFunctions;
+        providers.addRange(m_metalIntersectionFunctions);
+        if (!providers.getCount())
             return;
         Dictionary<IRInst*, HashSet<IRFunc*>> references;
-        buildEntryPointReferenceGraph(references, m_metalVisibleFunctions.getArrayView());
+        buildEntryPointReferenceGraph(references, providers.getArrayView());
         for (auto globalVar : m_globalVars)
         {
             if (!as<IRGroupSharedRate>(globalVar->getRate()))

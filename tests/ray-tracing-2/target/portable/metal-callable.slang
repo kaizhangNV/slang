@@ -61,7 +61,7 @@ void RayGeneration()
 }
 
 // METAL-NOT: visible]]
-// METAL-DAG: visible_function_table<void(void thread*, uint3, uint3, uchar device*, uint constant*, uint device*, uchar thread*)>
+// METAL-DAG: visible_function_table<void(void thread*, uint3, uint3, uchar device*, uint constant*, const uint device*, uchar thread*)>
 // METAL-DAG: _slang_callable_record
 // METAL-DAG: _slang_callable_function_index
 // METAL-NOT: visible]]

@@ -114,7 +114,8 @@ void RayGeneration()
 // ANYHIT-NEXT: uint instanceCount
 // ANYHIT: return *(candidateState{{[_0-9]*}}->[[INDICES]] +
 // ANYHIT: return *(candidateState{{[_0-9]*}}->[[IDS]] +
-// ANYHIT: visible]] uint AnyHit_anyhit(void thread* candidateState
+// ANYHIT: intersection(triangle,
+// ANYHIT: AnyHit_anyhit(
 // ANYHIT-NOT: metal::array_ref
 // ANYHIT-NOT: max_levels
 // TRACE-NOT: metal::array_ref
@@ -124,10 +125,10 @@ void RayGeneration()
 // TRACE: , 1u, &_slang_result.instance_id, &_slang_result.user_instance_id
 // TRACE-NOT: metal::array_ref
 // TRACE-NOT: max_levels
-// The candidate adapter fills the same one-element path without requiring native array_ref.
-// TRACE: ->instanceIndices{{[_0-9]*}} = &
-// TRACE: ->instanceIDs{{[_0-9]*}} = &
-// TRACE: ->instanceCount{{[_0-9]*}} = 1U;
-// TRACE: intersection(triangle,
-// TRACE-NOT: metal::array_ref
-// TRACE-NOT: max_levels
+// The separately selected candidate fills the same one-element path without native array_ref.
+// ANYHIT: ->instanceIndices{{[_0-9]*}} = &
+// ANYHIT: ->instanceIDs{{[_0-9]*}} = &
+// ANYHIT: ->instanceCount{{[_0-9]*}} = 1U;
+// ANYHIT-NOT: metal::array_ref
+// ANYHIT-NOT: max_levels
+// TRACE-NOT: intersection(triangle,

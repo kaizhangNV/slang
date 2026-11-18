@@ -133,22 +133,26 @@ void RayGeneration()
     observed[3] = payload;
 }
 
-// METAL-DAG: accept_intersection
-// METAL-DAG: continue_search
-// METAL-DAG: intersection(bounding_box,
-// METAL-DAG: min_distance
-// METAL-DAG: max_distance
-// METAL-DAG: opaque
-// METAL-DAG: buffer(
+// Ray generation only uses the descriptor and selected IFT; candidate bodies are separate exports.
+// METAL-DAG: intersection_function_table<
+// METAL-DAG: tables
 // METAL-DAG: anyHitFunctions
-// METAL-DAG: intersectionShaders
 // METAL-NOT: readCurrentLimit
 // METAL-NOT: filter_
+// METAL-NOT: intersectionShaders
+// METAL-NOT: {{\[\[intersection\(}}
 // METAL-NOT: metalRTReportHit
 // METAL-NOT: metalRTIgnoreHit
-// PROVIDER-DAG: visible]]
+// PROVIDER-DAG: intersection(bounding_box,
+// PROVIDER-DAG: accept_intersection
+// PROVIDER-DAG: continue_search
+// PROVIDER-DAG: min_distance
+// PROVIDER-DAG: max_distance
+// PROVIDER-DAG: opaque
 // PROVIDER-DAG: readCurrentLimit
 // PROVIDER-DAG: portableRTReportHit
+// PROVIDER-NOT: intersectionShaders
+// PROVIDER-NOT: visible]]
 // PROVIDER-NOT: metalRTReportHit
 // FILTER-DAG: visible]]
 // FILTER-DAG: filter

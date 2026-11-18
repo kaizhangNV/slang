@@ -115,8 +115,10 @@ struct Callable : rt::ICallableShader
 // METAL: *(Record_{{[0-9]+}} device*)((ulong)(recordData_
 // METAL: visible]] uint Filter_anyhit(
 // METAL: *(Record_{{[0-9]+}} device*)((ulong)({{.*}}->record_
-// METAL: visible]] uint Intersect_intersection(
+// METAL: uint [[INTERSECT:portableRTCandidateImplementation_[0-9]+]](void thread* candidateState_
 // METAL: *(Record_{{[0-9]+}} device*)((ulong)({{.*}}->record_
+// METAL: intersection(bounding_box,{{.*}} Intersect_intersection(
+// METAL: [[INTERSECT]](
 // METAL: visible]] void Miss_miss(
 // METAL: *(Record_{{[0-9]+}} device*)((ulong)(recordData_
 // METAL: visible]] void Callable_callable(

@@ -10,8 +10,7 @@ using namespace Slang;
 namespace
 {
 
-// Count only the selected entry's outer parameter list; the intersection adapter also has a
-// visible-function-table parameter whose function signature contains its own comma.
+// Count only the selected entry's outer parameter list, excluding nested function types.
 int countCandidateParameters(const char* declaration)
 {
     auto cursor = strchr(declaration, '(');
@@ -34,8 +33,8 @@ int countCandidateParameters(const char* declaration)
 } // namespace
 
 // Compile each candidate shader from serialized IR without defining any schema. The two filters
-// deliberately use different inputs; their ABI must stay identical. The intersection shader must
-// call an externally supplied filter handle rather than retaining either filter's implementation.
+// deliberately use different inputs; their visible ABI must stay identical. Intersection is a
+// native callback that calls an externally supplied filter handle without retaining either filter.
 SLANG_UNIT_TEST(portableRayTracingMetalCandidatesCompileIndependently)
 {
     const char* source = R"(
@@ -148,7 +147,7 @@ SLANG_UNIT_TEST(portableRayTracingMetalCandidatesCompileIndependently)
     const Selection selections[] = {
         {"FirstAnyHit", SLANG_STAGE_ANY_HIT, "firstFilter", 2},
         {"SecondAnyHit", SLANG_STAGE_ANY_HIT, "secondFilter", 2},
-        {"IntersectionProvider", SLANG_STAGE_INTERSECTION, "candidateReport", 4},
+        {"IntersectionProvider", SLANG_STAGE_INTERSECTION, "candidateReport", 0},
     };
     for (const auto& selection : selections)
     {
@@ -190,15 +189,34 @@ SLANG_UNIT_TEST(portableRayTracingMetalCandidatesCompileIndependently)
         String text(UnownedStringSlice(
             static_cast<const char*>(code->getBufferPointer()),
             code->getBufferSize()));
-        String declaration("uint ");
+        String declaration(" ");
         declaration.append(selection.name);
-        auto signature = strstr(text.getBuffer(), declaration.getBuffer());
+        auto exportDecoration = strstr(
+            text.getBuffer(),
+            selection.stage == SLANG_STAGE_ANY_HIT ? "[[visible]]" : "[[intersection(");
+        SLANG_CHECK_ABORT(exportDecoration);
+        auto signature = strstr(exportDecoration, declaration.getBuffer());
         SLANG_CHECK_ABORT(signature);
-        SLANG_CHECK(countCandidateParameters(signature) == selection.parameterCount);
-        auto visible = strstr(text.getBuffer(), "[[visible]]");
-        SLANG_CHECK_ABORT(visible);
-        SLANG_CHECK(!strstr(visible + 11, "[[visible]]"));
-        SLANG_CHECK(!strstr(text.getBuffer(), "[[intersection("));
+        if (selection.stage == SLANG_STAGE_ANY_HIT)
+        {
+            SLANG_CHECK(countCandidateParameters(signature) == selection.parameterCount);
+            auto visible = strstr(text.getBuffer(), "[[visible]]");
+            SLANG_CHECK_ABORT(visible);
+            SLANG_CHECK(!strstr(visible + 11, "[[visible]]"));
+            SLANG_CHECK(!strstr(text.getBuffer(), "[[intersection("));
+        }
+        else
+        {
+            // The selected Intersection is the native export. Its payload supplies the record
+            // stride and candidate-resource pointer, so no schema or descriptor binding is needed.
+            SLANG_CHECK(strstr(text.getBuffer(), "[[intersection(bounding_box,"));
+            SLANG_CHECK(strstr(signature, "[[payload]]"));
+            SLANG_CHECK(strstr(text.getBuffer(), "hitRecordStride"));
+            SLANG_CHECK(strstr(text.getBuffer(), "candidateResources"));
+            SLANG_CHECK(!strstr(text.getBuffer(), "[[visible]]"));
+            SLANG_CHECK(!strstr(text.getBuffer(), "intersectionShaders"));
+            SLANG_CHECK(!strstr(text.getBuffer(), "candidateDescriptor"));
+        }
         SLANG_CHECK(strstr(text.getBuffer(), "globalResourceContext"));
         SLANG_CHECK(strstr(text.getBuffer(), "observed"));
         SLANG_CHECK(!strstr(text.getBuffer(), "metalRTIgnoreHit"));

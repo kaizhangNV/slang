@@ -55,6 +55,13 @@ static void checkDescriptorLayout(IRTypeLayout* layout, const MetalRTDescriptorR
     SLANG_CHECK_ABORT(group != nullptr);
     auto fields = as<IRStructTypeLayout>(group->getElementVarLayout()->getTypeLayout());
     SLANG_CHECK_ABORT(fields && fields->getFieldCount() == UInt(MetalRTDescriptorResource::Count));
+    SLANG_CHECK(fields->getFieldCount() == 6); // Six fixed fields; no intersection-shader VFT.
+    SLANG_CHECK(
+        fields->getSizeInBytes().getFiniteValue().getValidValue() ==
+        48); // Six eight-byte GPU values.
+    SLANG_CHECK(fields->getAlignmentInBytes() == 8);
+    SLANG_CHECK(
+        fields->findSizeAttr(LayoutResourceKind::MetalArgumentBufferElement)->getFiniteSize() == 6);
     for (UInt i = 0; i < fields->getFieldCount(); ++i)
     {
         SLANG_CHECK(
@@ -62,8 +69,42 @@ static void checkDescriptorLayout(IRTypeLayout* layout, const MetalRTDescriptorR
         auto offset = fields->getFieldLayout(i)->findOffsetAttr(
             LayoutResourceKind::MetalArgumentBufferElement);
         SLANG_CHECK_ABORT(offset != nullptr);
-        SLANG_CHECK(offset->getOffset() == i);
+        SLANG_CHECK(offset->getOffset() == i); // Argument IDs stay 0 through 5.
+        auto fieldLayout = fields->getFieldLayout(i);
+        SLANG_CHECK(fieldLayout->findOffsetAttr(LayoutResourceKind::Uniform)->getOffset() == i * 8);
+        SLANG_CHECK(
+            fieldLayout->getTypeLayout()->getSizeInBytes().getFiniteValue().getValidValue() == 8);
     }
+
+    auto tables =
+        as<IRPtrType>(resources.getField(MetalRTDescriptorResource::Tables)->getFieldType());
+    SLANG_CHECK_ABORT(tables);
+    SLANG_CHECK(tables->getAddressSpace() == AddressSpace::Global); // Host GPU address of entries.
+    SLANG_CHECK(tables->getAccessQualifier() == AccessQualifier::Read);
+    SLANG_CHECK(tables->getValueType() == resources.tableEntryType);
+    SLANG_CHECK(resources.tableField->getParent() == resources.tableEntryType);
+    auto tableHandle = as<IRDescriptorHandleType>(resources.tableField->getFieldType());
+    SLANG_CHECK_ABORT(tableHandle);
+    SLANG_CHECK(tableHandle->getResourceType()->getOp() == kIROp_MetalIntersectionFunctionTable);
+
+    auto candidateField = resources.getField(MetalRTDescriptorResource::CandidateResources);
+    SLANG_CHECK(candidateField->getFieldType() == resources.candidateResources.type);
+    auto anyHitHandle =
+        as<IRDescriptorHandleType>(resources.candidateResources.anyHitFunctions->getFieldType());
+    SLANG_CHECK_ABORT(anyHitHandle); // The callback pointer refers to stored GPU handles.
+    SLANG_CHECK(anyHitHandle->getResourceType()->getOp() == kIROp_MetalVisibleFunctionTable);
+    auto candidateLayout = as<IRStructTypeLayout>(
+        fields->getFieldLayout(UInt(MetalRTDescriptorResource::CandidateResources))
+            ->getTypeLayout());
+    SLANG_CHECK_ABORT(candidateLayout && candidateLayout->getFieldCount() == 1);
+    SLANG_CHECK(
+        candidateLayout->getFieldLayoutAttrs()[0]->getFieldKey() ==
+        resources.candidateResources.anyHitFunctions->getKey());
+    auto anyHitLayout = candidateLayout->getFieldLayout(0);
+    SLANG_CHECK(
+        anyHitLayout->findOffsetAttr(LayoutResourceKind::MetalArgumentBufferElement)->getOffset() ==
+        0); // Relative ID 0 occupies descriptor ID 5, without another buffer allocation.
+    SLANG_CHECK(anyHitLayout->findOffsetAttr(LayoutResourceKind::Uniform)->getOffset() == 0);
 }
 
 SLANG_UNIT_TEST(metalPortableDescriptorNestedLayouts)
@@ -77,6 +118,7 @@ SLANG_UNIT_TEST(metalPortableDescriptorNestedLayouts)
     auto first = createDescriptorType(builder);
     auto second = createDescriptorType(builder);
     auto signature = builder.getFuncType(0, nullptr, builder.getVoidType());
+    auto candidateResources = createMetalRTCandidateResources(module, signature);
     List<MetalRTDescriptorResources> resources;
     resources.add(createMetalRTDescriptorResources(
         module,
@@ -86,8 +128,7 @@ SLANG_UNIT_TEST(metalPortableDescriptorNestedLayouts)
         signature,
         signature,
         signature,
-        signature,
-        signature));
+        candidateResources));
     resources.add(createMetalRTDescriptorResources(
         module,
         second,
@@ -96,8 +137,10 @@ SLANG_UNIT_TEST(metalPortableDescriptorNestedLayouts)
         signature,
         signature,
         signature,
-        signature,
-        signature));
+        candidateResources));
+    SLANG_CHECK(
+        resources[0].candidateResources.type ==
+        resources[1].candidateResources.type); // One callback view works with either schema.
 
     // Model two specializations of Holder<S> that share one declared field key and source layout.
     // Each descriptor's concrete type must still select its own generated resource fields.
@@ -185,6 +228,7 @@ SLANG_UNIT_TEST(metalPortableDescriptorGlobalLayoutOnlyKeys)
     builder.setInsertInto(module);
     auto descriptorType = createDescriptorType(builder);
     auto signature = builder.getFuncType(0, nullptr, builder.getVoidType());
+    auto candidateResources = createMetalRTCandidateResources(module, signature);
     List<MetalRTDescriptorResources> resources;
     resources.add(createMetalRTDescriptorResources(
         module,
@@ -194,8 +238,7 @@ SLANG_UNIT_TEST(metalPortableDescriptorGlobalLayoutOnlyKeys)
         signature,
         signature,
         signature,
-        signature,
-        signature));
+        candidateResources));
 
     IRTypeLayout::Builder opaqueBuilder(&builder);
     opaqueBuilder.addResourceUsage(LayoutResourceKind::MetalBuffer, LayoutSize(1));

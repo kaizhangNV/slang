@@ -58,7 +58,7 @@ void main()
 // METAL-NEXT: float [[SCALE:scale_[0-9]+]];
 // METAL-NEXT: };
 // METAL: struct [[RESOURCES:PortableRTDescriptorResources_[A-Za-z0-9_]+]]
-// METAL: intersection_function_table
+// METAL: const PortableRTIFTEntry_{{[A-Za-z0-9_]+}} device* tables_
 // METAL: visible_function_table
 // METAL: float [[READ:readScale_[0-9]+]](const [[PARAMS]] constant* [[VALUE:[A-Za-z0-9_]+]])
 // METAL: return [[VALUE]]->[[SCALE]];

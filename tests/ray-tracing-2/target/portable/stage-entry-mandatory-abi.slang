@@ -94,9 +94,12 @@ struct EmptyCallable : rt::ICallableShader
 // HLSLMISS: [shader("miss")]void EmptyMiss_miss(inout {{.*}} : SV_RayPayload)
 // HLSLCALLABLE: [shader("callable")]void EmptyCallable_callable(inout {{[^,)]+}})
 
-// Metal keeps its fixed visible-function signatures even when no input getter is used.
+// Metal keeps its native callback and visible-function signatures for empty bodies.
 // METALCUSTOM: visible]] void EmptyCustomClosestHit_closesthit(void thread* payload_{{[0-9]+}}, void thread* attributes_
-// METALTRIANGLE: visible]] uint EmptyTriangleAnyHit_anyhit(void thread* candidateState_{{[0-9]+}}, uchar thread* globalResourceContext_
+// METALTRIANGLE: intersection(triangle,{{.*}} EmptyTriangleAnyHit_anyhit(
+// METALTRIANGLE-SAME: float2 {{barycentric_coord_[0-9]+}} {{\[\[barycentric_coord\]\]}}
+// METALTRIANGLE-SAME: bool {{front_facing_[0-9]+}} {{\[\[front_facing\]\]}}
+// METALTRIANGLE-SAME: ray_data PortableRTRayData_{{[0-9]+}}& {{rayData_[0-9]+}} {{\[\[payload\]\]}}
 // METALMISS: visible]] void EmptyMiss_miss(void thread* payload_
 // METALCALLABLE: visible]] void EmptyCallable_callable(void thread* data_{{[0-9]+}}, uint3 dispatchRaysIndex_
 

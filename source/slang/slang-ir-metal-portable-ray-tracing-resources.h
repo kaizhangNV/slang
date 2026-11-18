@@ -6,12 +6,22 @@
 namespace Slang
 {
 
-/// Describes a synthesized argument buffer whose fields each occupy one Metal resource ID.
-/// Descriptor tables and an acceleration structure's metadata use the same layout construction.
+/// Describes a synthesized argument buffer containing Metal resource IDs, GPU pointers, and
+/// inline resource structs. Descriptor and acceleration-structure resources share layout creation.
 struct MetalRTArgumentBufferResources
 {
     IRUniformParameterGroupType* physicalParameterBlockType = nullptr;
     IRStructType* resourcesStruct = nullptr;
+};
+
+/// Holds the inline descriptor fields needed by a native candidate callback. All descriptors
+/// share this type so a callback can use its pointer without knowing the calling schema.
+/// Fields use DescriptorHandle storage, matching Metal argument-buffer element lowering. This
+/// also keeps raw pointers to the subobject intact when resource legalization splits logical types.
+struct MetalRTCandidateResources
+{
+    IRStructType* type = nullptr;
+    IRStructField* anyHitFunctions = nullptr;
 };
 
 /// Owns one schema's physical argument-buffer type. The source descriptor remains the canonical
@@ -19,13 +29,21 @@ struct MetalRTArgumentBufferResources
 struct MetalRTDescriptorResources : MetalRTArgumentBufferResources
 {
     IRTraceProgramDescriptorType* sourceType = nullptr;
+    MetalRTCandidateResources candidateResources;
+    IRStructType* tableEntryType = nullptr;
+    IRStructField* tableField = nullptr;
     IRStructField* fields[UInt(MetalRTDescriptorResource::Count)] = {};
 
     IRStructField* getField(MetalRTDescriptorResource role) const { return fields[UInt(role)]; }
 };
 
-/// Creates the physical IFT, five VFTs, and records pointer without changing the source type.
-/// Signatures are the already-computed table-wide native signatures, including unused tables.
+/// Creates the common inline candidate-resource type containing the procedural AnyHit VFT.
+MetalRTCandidateResources createMetalRTCandidateResources(
+    IRModule* module,
+    IRFuncType* anyHitSignature);
+
+/// Creates the fixed descriptor's IFT-array pointer, four VFTs, and records pointer. The AnyHit
+/// VFT is an inline candidate-resource subobject; the source descriptor type stays unchanged.
 MetalRTDescriptorResources createMetalRTDescriptorResources(
     IRModule* module,
     IRTraceProgramDescriptorType* sourceType,
@@ -34,8 +52,7 @@ MetalRTDescriptorResources createMetalRTDescriptorResources(
     IRFuncType* missSignature,
     IRFuncType* closestHitSignature,
     IRFuncType* callableSignature,
-    IRFuncType* anyHitSignature,
-    IRFuncType* intersectionSignature);
+    const MetalRTCandidateResources& candidateResources);
 
 /// Replaces the listed opaque descriptor types and their existing storage layouts in one walk.
 /// Concrete type/layout pairs distinguish shared field keys in different generic specializations.

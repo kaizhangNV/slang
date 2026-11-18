@@ -69,6 +69,17 @@ bool getTraceContextRequirements(
     }
     if (target->getTargetCaps().implies(CapabilityAtom::metal_raytracing_extended_limits))
         result.tags |= UInt(MetalRTTag::ExtendedLimits);
+
+    // Independently compiled native callbacks and traces must use exactly the same tag list.
+    // A triangle AnyHit cannot discover whether its caller also traces curves. Select the data
+    // profile from the target and TraceContext, never from a schema or a selected shader body:
+    // all supported profiles carry triangle data; Metal 3.1 profiles also carry curve data;
+    // instanced profiles carry the world-space values required by hit-stage inputs.
+    result.tags |= UInt(MetalRTTag::TriangleData);
+    if (target->getTargetCaps().implies(CapabilityAtom::metallib_3_1))
+        result.tags |= UInt(MetalRTTag::CurveData);
+    if (result.tags & UInt(MetalRTTag::Instancing))
+        result.tags |= UInt(MetalRTTag::WorldSpaceData);
     return true;
 }
 

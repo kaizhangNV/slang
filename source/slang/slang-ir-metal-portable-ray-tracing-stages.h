@@ -7,6 +7,8 @@ namespace Slang
 {
 class DiagnosticSink;
 class TargetProgram;
+class TargetRequest;
+struct MetalRTCandidateResources;
 
 namespace PortableRT
 {
@@ -26,37 +28,45 @@ struct StageRequirements
 
     bool has(MetalRTStageRequirement requirement) const { return (mask & UInt(requirement)) != 0; }
     void add(MetalRTStageRequirement requirement) { mask |= UInt(requirement); }
-
-    /// Combines the contracts whose state a shared traversal carrier must transport.
-    void combine(const StageRequirements& other);
 };
 
-/// Names the runtime record selectors shared by every payload carrier in one schema.
+/// Defines the schema-independent prefix supplied to every native candidate callback. The
+/// selected stage knows its Payload type; byte offsets describe the remaining traversal storage.
 struct RayDataHeader
 {
     IRStructType* type = nullptr;
     IRStructKey* recordsKey = nullptr;
     IRStructKey* instanceContributionMetadataKey = nullptr;
+    IRStructKey* candidateResourcesKey = nullptr;
     IRStructKey* sbtOffsetKey = nullptr;
     IRStructKey* sbtStrideKey = nullptr;
-};
-
-/// Refers to the one canonical carrier created by descriptor lowering. This is a transient view
-/// of its fields, not an alternative IR identity; the owning lowering context retains its lifetime.
-struct RayData
-{
-    IRStructType* type = nullptr;
-    IRStructKey* payloadKey = nullptr;
-    IRStructKey* headerKey = nullptr;
-    RayDataHeader* header = nullptr;
+    IRStructKey* hitRecordStrideKey = nullptr;
+    IRStructKey* committedAttributesOffsetKey = nullptr;
     IRStructKey* minDistanceKey = nullptr;
     IRStructKey* rayTimeKey = nullptr;
     IRStructKey* rayFlagsKey = nullptr;
     IRStructKey* dispatchRaysIndexKey = nullptr;
     IRStructKey* dispatchRaysDimensionsKey = nullptr;
     IRStructKey* customHitKindKey = nullptr;
-    Dictionary<IRType*, IRStructKey*> customAttributeKeys;
 };
+
+/// Describes the common header followed by one concrete Payload. Traversal may append committed
+/// attribute storage, but separately compiled callbacks need only this prefix and its byte offset.
+struct RayData
+{
+    IRStructType* type = nullptr;
+    IRStructKey* payloadKey = nullptr;
+    IRStructKey* headerKey = nullptr;
+    const RayDataHeader* header = nullptr;
+};
+
+/// Builds the fixed header shared by traversal and independently compiled native callbacks.
+RayDataHeader createRayDataHeader(
+    IRModule* module,
+    const MetalRTCandidateResources& candidateResources);
+
+/// Builds the header and Payload prefix without depending on a schema or attribute-type order.
+RayData createRayDataPrefix(IRModule* module, const RayDataHeader& header, IRType* payloadType);
 
 /// Uses canonical void as the physical payload key for every genuinely empty source type.
 /// Nominal source types remain unchanged; only their zero-byte transport representation is shared.
@@ -129,6 +139,7 @@ IRFuncType* getCallableFunctionSignature(
 /// Create every adapter before lowerVisibleStageInputs so a shared method sees all its callers.
 VisibleAdapter createVisibleAdapter(
     IRModule* module,
+    TargetRequest* target,
     const SchemaStage& stage,
     const StageRequirements& tableRequirements,
     UnownedStringSlice symbolName,
@@ -150,7 +161,7 @@ void lowerVisibleStageInputs(IRModule* module, const List<VisibleAdapter>& adapt
 } // namespace Metal
 } // namespace PortableRT
 
-/// Creates VFT adapters for selected, specialized logical stage entry points.
+/// Creates native candidate callbacks and VFT adapters for selected logical stage entry points.
 /// No schema discovery is needed: separately compiled callers use the same fixed signatures.
 /// Removes those logical entries from entryPoints, leaving ordinary native entries in that list,
 /// and returns the generated adapters separately.
@@ -160,6 +171,8 @@ List<PortableRT::Metal::VisibleAdapter> createMetalStageAdapters(
     IRModule* module,
     TargetProgram* targetProgram,
     List<IRFunc*>& entryPoints,
+    const PortableRT::Metal::RayDataHeader& header,
+    const MetalRTCandidateResources& candidateResources,
     bool& requiresResultTypeLowering,
     DiagnosticSink* sink);
 

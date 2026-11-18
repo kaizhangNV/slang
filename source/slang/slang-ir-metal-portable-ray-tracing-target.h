@@ -53,17 +53,17 @@ enum class MetalRTGeometryKind : UInt
     BoundingBox,
 };
 
-/// Defines the stable argument-buffer IDs of a physical TraceProgramDescriptor. Unused tables
-/// retain their field IDs so adding a stage does not move the record buffer or other resources.
+/// Defines the stable argument-buffer IDs of a physical TraceProgramDescriptor. Each field
+/// occupies eight bytes; CandidateResources is an inline struct containing one AnyHit VFT.
+/// Unused fields stay present, keeping the descriptor size at 48 bytes for every schema.
 enum class MetalRTDescriptorResource : UInt
 {
-    IntersectionFunctionTable = 0,
+    Tables = 0,
     MissVisibleFunctionTable = 1,
     ClosestHitVisibleFunctionTable = 2,
     CallableVisibleFunctionTable = 3,
     Records = 4,
-    AnyHitVisibleFunctionTable = 5,
-    IntersectionVisibleFunctionTable = 6,
+    CandidateResources = 5,
     Count,
 };
 
@@ -76,8 +76,9 @@ enum class MetalRTRecordSection : UInt
     Callable = 2,
 };
 
-/// Every record begins with its function index and reserved words, followed by the application
-/// record. Keep these constants shared by lowering and Metal emission.
+/// Hit records start with closest-hit and procedural-any-hit VFT indices, then two reserved
+/// words. Miss/callable records start with their VFT index and three reserved words. Application
+/// record bytes follow this header; absent hit providers use 0xffffffff.
 static constexpr UInt kMetalRTRecordHeaderSize = 16;
 static constexpr UInt kMetalRTRecordAlignment = 16;
 

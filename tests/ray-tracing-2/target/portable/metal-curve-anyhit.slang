@@ -78,12 +78,18 @@ void RayGeneration()
     output[0] = payload;
 }
 
-// METAL-DAG: intersection(curve, metal::raytracing::instancing, metal::raytracing::curve_data{{[^)]*}})
-// METAL-DAG: curve_parameter
-// METAL-DAG: accept_intersection
-// METAL-DAG: continue_search
+// Traversal selects a host-bound table; selecting RayGeneration does not compile AnyHit.
+// METAL-DAG: intersection_function_table<
+// METAL-DAG: tables
 // METAL-DAG: anyHitFunctions
 // METAL-NOT: readCurveParameter
-// PROVIDER-DAG: visible]]
-// PROVIDER-DAG: readCurveParameter
+// METAL-NOT: {{\[\[intersection\(}}
 // METAL-NOT: metalRTIgnoreHit
+// The selected AnyHit is the native callback and directly reaches its ordinary helper.
+// PROVIDER-DAG: intersection(curve,
+// PROVIDER-DAG: readCurveParameter
+// PROVIDER-DAG: accept_intersection
+// PROVIDER-DAG: continue_search
+// PROVIDER-DAG: curve_parameter
+// PROVIDER-NOT: visible]]
+// PROVIDER-NOT: metalRTIgnoreHit

@@ -61,48 +61,72 @@ public enum HitRecordLayout
 /// - Metal: a generated ParameterBlock-like argument buffer containing function tables and a
 ///   record-data buffer. These are lowering artifacts, not fields available to Slang source.
 ///
-/// The current Metal lowering uses one table for each dispatch role, shared by all payload types
-/// in the schema. The block-relative argument-buffer IDs are:
+/// The Metal argument buffer has six eight-byte fields, with eight-byte alignment and a total
+/// size of 48 bytes. These block-relative argument IDs and byte offsets stay fixed for every
+/// Schema, rayTypeCount, and hitRecordLayout, including when a table is unused:
 ///
 /// @verbatim
-///     Field                   Resource kind                         Metal [[id]]
-///     intersectionFunctions   intersection-function table           0
-///     missFunctions           miss visible-function table           1
-///     closestHitFunctions     closest-hit visible-function table    2
-///     callableFunctions       callable visible-function table       3
-///     records                 record-data buffer                    4
-///     anyHitFunctions         any-hit visible-function table        5
-///     intersectionShaders     intersection visible-function table   6
+///     Field                              Resource kind                 ID   Byte offset
+///     tables                             pointer to IFT entries         0    0
+///     missFunctions                      miss VFT                       1    8
+///     closestHitFunctions                closest-hit VFT                2   16
+///     callableFunctions                  callable VFT                   3   24
+///     records                            pointer to record directory     4   32
+///     candidateResources.anyHitFunctions procedural-any-hit VFT         5   40
 /// @endverbatim
+///
+/// `candidateResources` is an inline eight-byte subobject, not another buffer allocation. The
+/// compiler can pass its address to a callback that needs the procedural AnyHit table.
+/// `tables` points to rayTypeCount contiguous IFT entries, each containing one eight-byte Metal
+/// IFT gpuResourceID. A trace selects tables[desc.rayType]; SharedAcrossGeometries also has
+/// rayTypeCount tables. There is no runtime count field or intersection-shader VFT.
+///
+/// The host writes buffer GPU addresses into pointer fields and table gpuResourceID values into
+/// VFT fields; these are never CPU object pointers. Bind the buffer at the descriptor's reflected
+/// outer binding and keep all indirectly referenced resources resident.
+/// Increasing rayTypeCount adds IFT entries and table objects, not top-level shader bindings.
 ///
 /// The record buffer begins with three uint byte offsets to the hit, miss, and callable sections,
-/// respectively. Each record has a 16-byte header: a uint functionIndex and 12 reserved bytes,
-/// followed by its Context.Record data. A section's uniform byte stride is
-/// `alignUp(16 + largest Record size in that section, 16)`.
+/// respectively. Section starts are 16-byte aligned. Each record has a 16-byte header followed by
+/// its Context.Record data. A section's uniform byte stride is
+/// `alignUp(16 + largest Record size in that section, 16)`, with a minimum of 16 bytes. Use Metal's
+/// structured-buffer layout for Record sizes and offsets, including every Record type in Schema.
 ///
-/// Metal preserves the runtime SBT record index; its record header replaces the native shader
-/// identifier with a function index, while its application data still supplies `input.record`:
+/// The host assigns VFT slots independently of schema-list order and SBT record positions. Several
+/// records may reuse one slot. Hit records store separate closest-hit and procedural-any-hit slots;
+/// 0xffffffff means the corresponding shader is absent. Triangle/curve records always use
+/// 0xffffffff for anyHitIndex because native traversal invokes their AnyHit callback directly.
 ///
 /// @verbatim
-///     hitRecord = byteBase(records) + hitSectionByteOffset + recordIndex * hitStride
+///     Hit header:      [closestHitIndex][anyHitIndex][reserved = 0][reserved = 0]
+///     Miss header:     [missVFTIndex]               [three reserved uints = 0]
+///     Callable header: [callableVFTIndex]           [three reserved uints = 0]
 ///
-///     D3D/Vulkan hit record               Metal hit record
-///     shader identifier / group handle -> header.functionIndex = f
-///     application record data          -> Context.Record bytes after the 16-byte header
+///     hitRecord = byteBase(records) + hitSectionByteOffset + recordIndex * hitStride
+///     input.record = Context.Record bytes after hitRecord's 16-byte header
 ///
 ///     Candidate hit:
-///       intersectionFunctions[primitiveSlot] -> compute recordIndex -> read f
-///       -> select hit group f -> intersectionShaders[f] / anyHitFunctions[f], when present
+///       tables[desc.rayType][nativeInstanceOffset + nativeGeometryOffset]
+///         -> Intersection for procedural geometry, or AnyHit for triangles/curves
+///       Procedural reportHit -> candidateResources.anyHitFunctions[anyHitIndex], if present
 ///     Committed hit:
-///       compute recordIndex -> read f -> closestHitFunctions[f], when present
+///       compute recordIndex -> read closestHitIndex -> call that closest-hit VFT slot, if present
 /// @endverbatim
 ///
-/// In this current mapping, the IFT slot selects a generated primitive dispatcher. That dispatcher
-/// selects the hit group's candidate logic using f, the index in Schema.HitGroups. Several records
-/// can share f. Miss and callable records similarly select entries in their corresponding VFTs
-/// through their headers. Instance contributions come from the acceleration structure's metadata.
-/// The planned IFT-array and native-stage-callback migration will change this Metal binding layout;
-/// it is not implemented by the fixed-count API change alone.
+/// The host populates each IFT with the selected stages' native function handles. For triangle or
+/// curve groups without AnyHit, it uses Metal's matching opaque entry. Procedural Intersection
+/// remains required even without AnyHit. Sharing a stage between groups reuses its function handle.
+/// The native IFT offsets must select code compatible with the computed record; their numerical
+/// values need not equal recordIndex. Instance contributions come from the separately bound
+/// acceleration structure's metadata, which the host keeps consistent with its IFT mapping.
+/// Set the pipeline's maxCallStackDepth for the longest indirect call chain: procedural
+/// Intersection calling AnyHit requires at least two levels; nested traces/callables need more.
+///
+/// Compile related traces and native callbacks with the same TraceContext and target capabilities.
+/// Their shared tag profile includes triangle_data, curve_data when metallib_3_1 is enabled, and
+/// world_space_data when instancing is enabled. TraceContext supplies depth and motion; explicit
+/// metal_raytracing_extended_limits enables extended_limits. Schema/body-based tag reduction is
+/// not implemented. Ordinary global resources must also share the same component layout.
 ///
 /// D3D, Vulkan, and OptiX traces require at most 15 ray types for PerGeometry or 16 for shared
 /// records because their native selectors use four bits. Classic Metal IFT tracing has no such

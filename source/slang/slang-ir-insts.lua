@@ -1801,11 +1801,11 @@ local insts = {
 				{ "instanceHitGroupContributionLookup" },
                 { "instanceContributionMetadata" },
                 { "payload" },
-                { "attributesLookup" },
+                { "committedAttributes" },
                 { "customHitKindAddress" },
                 { "dispatchRaysIndex" },
                 { "dispatchRaysDimensions" },
-                { "closestHitPresenceLookup" },
+                { "committedAttributesOffsetAddress" },
 			},
 		},
 	},
@@ -2337,10 +2337,6 @@ local insts = {
 				MetalRTGlobalResourceContextDecoration = {},
 			},
 			{
-				-- The owning IFT instance supplies its descriptor as a native buffer argument.
-				MetalRTCandidateDescriptorDecoration = {},
-			},
-			{
 				-- An explicitly selected logical Metal stage remains an ordinary exported
 				-- helper. It is an executable analysis root, not a native shader entry.
 				MetalRTStandaloneStageDecoration = {},
@@ -2579,6 +2575,7 @@ local insts = {
 						{ "recordType", "IRType" },
 						{ "primitiveType", "IRType" },
 						{ "attributesType", "IRType" },
+						{ "motionType", "IRType" },
 					},
 				},
 			},

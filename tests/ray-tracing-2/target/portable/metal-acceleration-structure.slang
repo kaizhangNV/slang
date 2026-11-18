@@ -88,18 +88,20 @@ void RayGeneration()
     output[0] = payload;
 }
 
+// Traversal uses the fixed profile shared with separately compiled callbacks.
+// The AS resource itself retains only topology and motion tags.
 // PLAIN-DAG: acceleration_structure<metal::raytracing::instancing>
 // PLAIN-DAG: instanceContributionMetadata
-// PLAIN-DAG: intersector<metal::raytracing::instancing>
+// PLAIN-DAG: intersector<metal::raytracing::instancing, metal::raytracing::triangle_data, metal::raytracing::world_space_data>
 // PRIMITIVE-DAG: acceleration_structure<>
-// PRIMITIVE-DAG: intersector<>
+// PRIMITIVE-DAG: intersector<metal::raytracing::triangle_data>
 // MULTI-DAG: acceleration_structure<metal::raytracing::instancing>
-// MULTI-DAG: intersector<metal::raytracing::instancing, metal::raytracing::max_levels<3>>
+// MULTI-DAG: intersector<metal::raytracing::instancing, metal::raytracing::triangle_data, metal::raytracing::curve_data, metal::raytracing::world_space_data, metal::raytracing::max_levels<3>>
 // MOTION-DAG: acceleration_structure<metal::raytracing::instancing, metal::raytracing::primitive_motion>
 // MOTION-DAG: instanceContributionMetadata
-// MOTION-DAG: intersector<metal::raytracing::instancing, metal::raytracing::primitive_motion>
+// MOTION-DAG: intersector<metal::raytracing::instancing, metal::raytracing::triangle_data, metal::raytracing::world_space_data, metal::raytracing::primitive_motion>
 // EXTENDED-DAG: acceleration_structure<metal::raytracing::instancing>
-// EXTENDED-DAG: intersector<metal::raytracing::instancing, metal::raytracing::extended_limits>
+// EXTENDED-DAG: intersector<metal::raytracing::instancing, metal::raytracing::triangle_data, metal::raytracing::world_space_data, metal::raytracing::extended_limits>
 // INVALID: error[E38096]
 // VERSION: error[E38097]
 // INSTANCE: error[E38098]

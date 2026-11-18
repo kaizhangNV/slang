@@ -6,6 +6,37 @@
 namespace Slang
 {
 
+MetalRTCandidateResources createMetalRTCandidateResources(
+    IRModule* module,
+    IRFuncType* anyHitSignature)
+{
+    SLANG_RELEASE_ASSERT(anyHitSignature);
+    IRBuilder builder(module);
+    builder.setInsertInto(module);
+    MetalRTCandidateResources result;
+    result.type = builder.createStructType();
+    builder.addNameHintDecoration(result.type, toSlice("PortableRTCandidateResources"));
+    auto key = builder.createStructKey();
+    builder.addNameHintDecoration(key, toSlice("anyHitFunctions"));
+    IRInst* operands[] = {
+        anyHitSignature,
+        builder.getIntValue(builder.getIntType(), Int(Stage::AnyHit)),
+    };
+    // This host-written field stores a GPU handle, as in Metal argument-buffer lowering.
+    // Keeping it a storage value lets callbacks carry a pointer to the subobject without
+    // resource legalization splitting that pointer. Decode the handle when loading the table.
+    result.anyHitFunctions = builder.createStructField(
+        result.type,
+        key,
+        builder.getType(
+            kIROp_DescriptorHandleType,
+            builder.getType(kIROp_MetalVisibleFunctionTable, SLANG_COUNT_OF(operands), operands)));
+    // Its only field is already Metal's eight-byte handle representation. Preserve this
+    // physical type when another struct embeds it and ray data points to that subobject.
+    builder.addPhysicalTypeDecoration(result.type);
+    return result;
+}
+
 MetalRTDescriptorResources createMetalRTDescriptorResources(
     IRModule* module,
     IRTraceProgramDescriptorType* sourceType,
@@ -14,14 +45,15 @@ MetalRTDescriptorResources createMetalRTDescriptorResources(
     IRFuncType* missSignature,
     IRFuncType* closestHitSignature,
     IRFuncType* callableSignature,
-    IRFuncType* anyHitSignature,
-    IRFuncType* intersectionSignature)
+    const MetalRTCandidateResources& candidateResources)
 {
     SLANG_RELEASE_ASSERT(sourceType && missSignature && closestHitSignature && callableSignature);
+    SLANG_RELEASE_ASSERT(candidateResources.type && candidateResources.anyHitFunctions);
     IRBuilder builder(module);
     builder.setInsertInto(module);
     MetalRTDescriptorResources result;
     result.sourceType = sourceType;
+    result.candidateResources = candidateResources;
     result.resourcesStruct = builder.createStructType();
     builder.addNameHintDecoration(result.resourcesStruct, toSlice("PortableRTDescriptorResources"));
 
@@ -35,10 +67,27 @@ MetalRTDescriptorResources createMetalRTDescriptorResources(
         builder.getIntValue(builder.getIntType(), tagMask),
         builder.getIntValue(builder.getIntType(), maxLevels),
     };
+    result.tableEntryType = builder.createStructType();
+    builder.addNameHintDecoration(result.tableEntryType, toSlice("PortableRTIFTEntry"));
+    auto tableKey = builder.createStructKey();
+    builder.addNameHintDecoration(tableKey, toSlice("table"));
+    // Each host-written IFT entry stores one GPU resource ID. The device pointer addresses
+    // handle storage; lowerTrace decodes the loaded handle before passing the IFT to traversal.
+    result.tableField = builder.createStructField(
+        result.tableEntryType,
+        tableKey,
+        builder.getType(
+            kIROp_DescriptorHandleType,
+            builder.getType(kIROp_MetalIntersectionFunctionTable, 2, intersectionOperands)));
+    builder.addPhysicalTypeDecoration(result.tableEntryType); // One eight-byte stored handle.
     addField(
-        MetalRTDescriptorResource::IntersectionFunctionTable,
-        builder.getType(kIROp_MetalIntersectionFunctionTable, 2, intersectionOperands),
-        "intersectionFunctions");
+        MetalRTDescriptorResource::Tables,
+        builder.getPtrType(
+            result.tableEntryType,
+            AccessQualifier::Read,
+            AddressSpace::Global,
+            builder.getDefaultBufferLayoutType()),
+        "tables");
     auto addVisibleTable =
         [&](MetalRTDescriptorResource role, IRFuncType* signature, Stage stage, const char* name)
     {
@@ -62,18 +111,16 @@ MetalRTDescriptorResources createMetalRTDescriptorResources(
         "callableFunctions");
     addField(
         MetalRTDescriptorResource::Records,
-        builder.getPtrType(builder.getUIntType(), AddressSpace::Global),
+        builder.getPtrType(
+            builder.getUIntType(),
+            AccessQualifier::Read,
+            AddressSpace::Global,
+            builder.getDefaultBufferLayoutType()),
         "records");
-    addVisibleTable(
-        MetalRTDescriptorResource::AnyHitVisibleFunctionTable,
-        anyHitSignature,
-        Stage::AnyHit,
-        "anyHitFunctions");
-    addVisibleTable(
-        MetalRTDescriptorResource::IntersectionVisibleFunctionTable,
-        intersectionSignature,
-        Stage::Intersection,
-        "intersectionShaders");
+    addField(
+        MetalRTDescriptorResource::CandidateResources,
+        candidateResources.type,
+        "candidateResources");
     IRInst* parameterBlockOperands[] = {result.resourcesStruct};
     result.physicalParameterBlockType = cast<IRUniformParameterGroupType>(
         builder.getType(kIROp_ParameterBlockType, 1, parameterBlockOperands));
@@ -98,31 +145,58 @@ IRVarLayout* cloneVarLayout(IRBuilder& builder, IRVarLayout* source, IRTypeLayou
     return result.build();
 }
 
-// Adds the private argument-buffer IDs without changing the source binding footprint. Source
-// reflection already allocated one parameter-block handle; this supplies its resource fields.
+// Lays out generated resource structs using Metal's eight-byte GPU handles and pointers. Consider
+// descriptor.candidateResources.anyHitFunctions: the outer field starts at ID 5 and byte 40, while
+// its member starts at relative ID 0 and byte 0. Keeping the nested layout preserves that subobject
+// when ordinary target legalization processes a pointer to it.
+IRTypeLayout* createResourceLayout(IRBuilder& builder, IRType* type)
+{
+    if (auto structType = as<IRStructType>(type))
+    {
+        IRStructTypeLayout::Builder structBuilder(&builder);
+        UInt fieldIndex = 0;
+        for (auto field : structType->getFields())
+        {
+            auto fieldTypeLayout = createResourceLayout(builder, field->getFieldType());
+            IRVarLayout::Builder fieldBuilder(&builder, fieldTypeLayout);
+            fieldBuilder.findOrAddResourceInfo(LayoutResourceKind::MetalArgumentBufferElement)
+                ->offset = LayoutOffset(fieldIndex);
+            fieldBuilder.findOrAddResourceInfo(LayoutResourceKind::Uniform)->offset =
+                LayoutOffset(fieldIndex * 8);
+            structBuilder.addField(field->getKey(), fieldBuilder.build());
+            fieldIndex +=
+                fieldTypeLayout->findSizeAttr(LayoutResourceKind::MetalArgumentBufferElement)
+                    ->getFiniteSize();
+        }
+        structBuilder.addResourceUsage(
+            LayoutResourceKind::MetalArgumentBufferElement,
+            LayoutSize(fieldIndex));
+        structBuilder.addResourceUsage(LayoutResourceKind::Uniform, LayoutSize(fieldIndex * 8));
+        structBuilder.addAlignment(LayoutResourceKind::Uniform, 8);
+        return structBuilder.build();
+    }
+
+    SLANG_RELEASE_ASSERT(
+        as<IRPtrType>(type) || as<IRDescriptorHandleType>(type) ||
+        type->getOp() == kIROp_MetalAccelerationStructureType ||
+        type->getOp() == kIROp_MetalVisibleFunctionTable ||
+        type->getOp() == kIROp_MetalIntersectionFunctionTable);
+    IRTypeLayout::Builder resourceBuilder(&builder);
+    resourceBuilder.addResourceUsage(LayoutResourceKind::MetalArgumentBufferElement, LayoutSize(1));
+    resourceBuilder.addResourceUsage(LayoutResourceKind::Uniform, LayoutSize(8));
+    resourceBuilder.addAlignment(LayoutResourceKind::Uniform, 8);
+    return resourceBuilder.build();
+}
+
+// Adds private argument-buffer contents without changing the source binding footprint. Source
+// reflection already allocated one parameter-block handle; its binding remains authoritative.
 IRTypeLayout* createPhysicalLayout(
     IRBuilder& builder,
     const MetalRTArgumentBufferResources& resources,
     IRTypeLayout* sourceLayout)
 {
-    IRTypeLayout::Builder fieldTypeBuilder(&builder);
-    fieldTypeBuilder.addResourceUsage(
-        LayoutResourceKind::MetalArgumentBufferElement,
-        LayoutSize(1));
-    auto fieldTypeLayout = fieldTypeBuilder.build();
-    IRStructTypeLayout::Builder structBuilder(&builder);
-    UInt fieldIndex = 0;
-    for (auto field : resources.resourcesStruct->getFields())
-    {
-        IRVarLayout::Builder fieldBuilder(&builder, fieldTypeLayout);
-        fieldBuilder.findOrAddResourceInfo(LayoutResourceKind::MetalArgumentBufferElement)->offset =
-            LayoutOffset(fieldIndex++);
-        structBuilder.addField(field->getKey(), fieldBuilder.build());
-    }
-    structBuilder.addResourceUsage(
-        LayoutResourceKind::MetalArgumentBufferElement,
-        LayoutSize(fieldIndex));
-    auto structLayout = structBuilder.build();
+    auto structLayout =
+        cast<IRStructTypeLayout>(createResourceLayout(builder, resources.resourcesStruct));
     IRVarLayout::Builder containerBuilder(&builder, sourceLayout);
     IRVarLayout::Builder elementBuilder(&builder, structLayout);
     IRParameterGroupTypeLayout::Builder groupBuilder(&builder);

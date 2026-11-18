@@ -1,8 +1,10 @@
 #include "slang-ir-metal-portable-ray-tracing-stages.h"
 
+#include "slang-ir-any-value-marshalling.h"
 #include "slang-ir-metal-portable-ray-tracing-candidates.h"
 #include "slang-ir-portable-ray-tracing-util.h"
 #include "slang-ir-util.h"
+#include "slang-target-program.h"
 
 namespace Slang
 {
@@ -11,14 +13,67 @@ namespace PortableRT
 namespace Metal
 {
 
-void StageRequirements::combine(const StageRequirements& other)
+RayDataHeader createRayDataHeader(
+    IRModule* module,
+    const MetalRTCandidateResources& candidateResources)
 {
-    mask |= other.mask;
-    minDistance |= other.minDistance;
-    rayTime |= other.rayTime;
-    rayFlags |= other.rayFlags;
-    dispatchRaysIndex |= other.dispatchRaysIndex;
-    dispatchRaysDimensions |= other.dispatchRaysDimensions;
+    IRBuilder builder(module);
+    builder.setInsertInto(module);
+    RayDataHeader result;
+    result.type = builder.createStructType();
+    builder.addNameHintDecoration(result.type, toSlice("PortableRTRayDataHeader"));
+    auto addField = [&](IRType* type, const char* name)
+    {
+        auto key = builder.createStructKey();
+        builder.addNameHintDecoration(key, UnownedTerminatedStringSlice(name));
+        builder.createStructField(result.type, key, type);
+        return key;
+    };
+    auto uintType = builder.getUIntType();
+    auto uintPointer = builder.getPtrType(uintType, AddressSpace::Global);
+    result.recordsKey = addField(
+        builder.getPtrType(
+            uintType,
+            AccessQualifier::Read,
+            AddressSpace::Global,
+            builder.getDefaultBufferLayoutType()),
+        "records");
+    result.instanceContributionMetadataKey = addField(uintPointer, "instanceContributionMetadata");
+    result.candidateResourcesKey = addField(
+        builder.getPtrType(candidateResources.type, AddressSpace::Uniform),
+        "candidateResources");
+    result.sbtOffsetKey = addField(uintType, "sbtOffset");
+    result.sbtStrideKey = addField(uintType, "sbtStride");
+    result.hitRecordStrideKey = addField(uintType, "hitRecordStride");
+    result.committedAttributesOffsetKey = addField(uintType, "committedAttributesOffset");
+    result.minDistanceKey = addField(builder.getFloatType(), "minDistance");
+    result.rayTimeKey = addField(builder.getFloatType(), "time");
+    result.rayFlagsKey = addField(uintType, "rayFlags");
+    auto uint3 = builder.getVectorType(uintType, 3);
+    result.dispatchRaysIndexKey = addField(uint3, "dispatchIndex");
+    result.dispatchRaysDimensionsKey = addField(uint3, "dispatchDimensions");
+    result.customHitKindKey = addField(uintType, "customHitKind");
+    return result;
+}
+
+RayData createRayDataPrefix(IRModule* module, const RayDataHeader& header, IRType* payloadType)
+{
+    IRBuilder builder(module);
+    builder.setInsertInto(module);
+    RayData result;
+    result.type = builder.createStructType();
+    builder.addNameHintDecoration(result.type, toSlice("PortableRTRayData"));
+    result.header = &header;
+    result.headerKey = builder.createStructKey();
+    builder.addNameHintDecoration(result.headerKey, toSlice("header"));
+    builder.createStructField(result.type, result.headerKey, header.type);
+    if (!isEmptyType(payloadType))
+    {
+        result.payloadKey = builder.createStructKey();
+        builder.addNameHintDecoration(result.payloadKey, toSlice("payload"));
+        builder.createStructField(result.type, result.payloadKey, payloadType);
+    }
+    return result;
 }
 
 IRType* getRayPayloadStorageType(IRBuilder& builder, IRType* payloadType)
@@ -294,7 +349,13 @@ List<ParameterInfo> getVisibleParameters(
          "dispatchRaysDimensions",
          kIROp_MetalRTGetDispatchRaysDimensions});
     result.add(
-        {ParameterKind::Records, builder.getPtrType(uintType, AddressSpace::Global), "records"});
+        {ParameterKind::Records,
+         builder.getPtrType(
+             uintType,
+             AccessQualifier::Read,
+             AddressSpace::Global,
+             builder.getDefaultBufferLayoutType()),
+         "records"});
     result.add(
         {ParameterKind::GlobalResources,
          builder.getPtrType(builder.getUInt8Type(), AddressSpace::ThreadLocal),
@@ -337,7 +398,11 @@ List<ParameterInfo> getCallableParameters(
     result.add({ParameterKind::Descriptor, descriptorPointerType, "descriptorResources"});
     result.add(
         {ParameterKind::Records,
-         builder.getPtrType(builder.getUIntType(), AddressSpace::Global),
+         builder.getPtrType(
+             builder.getUIntType(),
+             AccessQualifier::Read,
+             AddressSpace::Global,
+             builder.getDefaultBufferLayoutType()),
          "records"});
     result.add(
         {ParameterKind::GlobalResources,
@@ -480,6 +545,7 @@ IRFuncType* getCallableFunctionSignature(
 /// and its helpers and replaces the input-read instructions with the corresponding values.
 VisibleAdapter createVisibleAdapter(
     IRModule* module,
+    TargetRequest* target,
     const SchemaStage& stage,
     const StageRequirements& tableRequirements,
     UnownedStringSlice symbolName,
@@ -607,15 +673,24 @@ VisibleAdapter createVisibleAdapter(
         {
             // Triangle/curve attribute views carry no data themselves; their getters use the
             // separate barycentric/front-facing/curve parameters. Procedural attributes have an
-            // application-defined type, which we load through the incoming attributes pointer.
+            // application-defined type packed in the shared committed-attribute storage. Its
+            // packing is independent of schema order and native Metal float3 padding.
             if (isBuiltinAttributeView(operation))
                 value = builder.emitDefaultConstruct(type);
             else
             {
-                value = builder.emitLoad(getStageDataReference(
-                    builder,
-                    parameters.getValue(ParameterKind::HitAttributes),
-                    type));
+                if (isEmptyType(type))
+                    value = builder.emitDefaultConstruct(type);
+                else
+                {
+                    auto packedSize = getAnyValueSize(type, target);
+                    SLANG_RELEASE_ASSERT(packedSize > 0);
+                    auto packedType = builder.getAnyValueType(packedSize);
+                    auto address = builder.emitBitCast(
+                        builder.getPtrType(packedType, AddressSpace::ThreadLocal),
+                        parameters.getValue(ParameterKind::HitAttributes));
+                    value = builder.emitUnpackAnyValue(type, builder.emitLoad(address));
+                }
             }
         }
         else if (op == kIROp_MetalRTGetObjectSpaceRay)
@@ -731,7 +806,7 @@ VisibleAdapter createCallableAdapter(
 
 void lowerVisibleStageInputs(IRModule* module, const List<VisibleAdapter>& adapters)
 {
-    // Different schemas can bind the same logical getter through different physical pointer or
+    // Different stage contexts can bind the same logical getter through different pointer or
     // path types. Partition by those canonical types rather than erasing their address spaces.
     using Query = KeyValuePair<IROp, IRType*>;
     using BindingKey = KeyValuePair<Query, IRType*>;
@@ -791,8 +866,10 @@ void lowerVisibleStageInputs(IRModule* module, const List<VisibleAdapter>& adapt
 
 List<PortableRT::Metal::VisibleAdapter> createMetalStageAdapters(
     IRModule* module,
-    TargetProgram*,
+    TargetProgram* targetProgram,
     List<IRFunc*>& entryPoints,
+    const PortableRT::Metal::RayDataHeader& header,
+    const MetalRTCandidateResources& candidateResources,
     bool& requiresResultTypeLowering,
     DiagnosticSink* sink)
 {
@@ -846,14 +923,16 @@ List<PortableRT::Metal::VisibleAdapter> createMetalStageAdapters(
     for (const auto& selected : selectedStages)
     {
         const auto& stage = selected.stage;
-        auto input = stage.input;
         auto symbolName = selected.name.getUnownedSlice();
         VisibleAdapter root;
         if (stage.stage == Stage::AnyHit || stage.stage == Stage::Intersection)
         {
             root = createSelectedCandidateAdapter(
                 module,
+                targetProgram->getTargetReq(),
                 stage,
+                header,
+                candidateResources,
                 symbolName,
                 requiresResultTypeLowering,
                 sink);
@@ -878,6 +957,7 @@ List<PortableRT::Metal::VisibleAdapter> createMetalStageAdapters(
                     stage.stage == Stage::ClosestHit || stage.stage == Stage::Miss);
                 root = createVisibleAdapter(
                     module,
+                    targetProgram->getTargetReq(),
                     stage,
                     requirements,
                     symbolName,

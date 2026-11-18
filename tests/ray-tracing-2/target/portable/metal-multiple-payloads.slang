@@ -130,9 +130,10 @@ void RayGeneration()
 // METAL-NOT: visible]]
 // METAL-DAG: RadiancePayload{{.*}} payload_
 // METAL-DAG: ShadowPayload{{.*}} payload_
-// METAL-DAG: RadianceAttributes{{.*}} customAttributes_
-// METAL-DAG: ShadowAttributes{{.*}} customAttributes_
-// METAL-DAG: intersection(bounding_box,
+// Each payload gets its own allocation with enough packed storage for compatible attributes.
+// METAL-DAG: AnyValue12{{.*}} committedAttributes_
+// METAL-DAG: AnyValue4{{.*}} committedAttributes_
+// METAL-NOT: intersection(bounding_box,
 // METAL-NOT: visible]]
 // METAL-NOT: metalTraceRay
 
@@ -140,12 +141,12 @@ void RayGeneration()
 // RADIANCE: ->count{{.*}}rt_ClosestHitInput_hitKind_get
 // RADIANCE: visible]] void RadianceClosestHit_closesthit(void thread* payload{{.*}}, void thread* attributes
 // RADIANCE: (RadiancePayload{{.*}} thread*){{.*}}payload
-// RADIANCE: (RadianceAttributes{{.*}} thread*){{.*}}attributes
+// RADIANCE: unpackAnyValue
 // RADIANCE: RadianceClosestHit_invoke{{.*}}hitKind
 // RADIANCE-NOT: PortableRTRayData
 
 // SHADOW: ->visible{{.*}} = {{.*}}->flags
 // SHADOW: visible]] void ShadowClosestHit_closesthit(void thread* payload{{.*}}, void thread* attributes
 // SHADOW: (ShadowPayload{{.*}} thread*){{.*}}payload
-// SHADOW: (ShadowAttributes{{.*}} thread*){{.*}}attributes
+// SHADOW: unpackAnyValue
 // SHADOW-NOT: PortableRTRayData

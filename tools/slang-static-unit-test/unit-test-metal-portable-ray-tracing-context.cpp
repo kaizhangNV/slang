@@ -201,9 +201,9 @@ SLANG_UNIT_TEST(metalPortableSharedResourceLayoutOrder)
     }
 }
 
-// Body-free IFT glue binds the complete component buffer set before calling an independently
-// compiled provider. Its descriptor receives the next free buffer binding, even though the
-// selected body does not directly reference the last declared component buffer.
+// A native candidate binds the complete component buffer set for an independently compiled
+// AnyHit provider, including buffers its own body does not read. The candidate-resource view
+// arrives through ray data, so there is no additional descriptor buffer binding.
 SLANG_UNIT_TEST(metalPortableIntersectionGlobalBuffers)
 {
     StaticUnitTestEnv env(unitTestContext);
@@ -217,12 +217,7 @@ SLANG_UNIT_TEST(metalPortableIntersectionGlobalBuffers)
     auto helper = startContextTestFunction(builder, module, signature);
     builder.emitLoad(usedBuffer);
     builder.emitReturn();
-    auto descriptorType = builder.getPtrType(builder.getUIntType(), AddressSpace::Uniform);
-    IRType* callbackParameters[] = {descriptorType};
-    auto callbackSignature = builder.getFuncType(1, callbackParameters, builder.getVoidType());
-    auto callback = startContextTestFunction(builder, module, callbackSignature);
-    auto descriptor = callback->getFirstParam();
-    builder.addDecoration(descriptor, kIROp_MetalRTCandidateDescriptorDecoration);
+    auto callback = startContextTestFunction(builder, module, signature);
     builder.emitIntrinsicInst(
         builder.getPtrType(builder.getUInt8Type(), AddressSpace::ThreadLocal),
         kIROp_MetalRTGetGlobalResourceContext,
@@ -240,10 +235,16 @@ SLANG_UNIT_TEST(metalPortableIntersectionGlobalBuffers)
     introduceExplicitGlobalContext(module, CodeGenTarget::Metal, &sink);
     SLANG_CHECK(getContextTestParameter(callback) == nullptr);
     SLANG_CHECK(getContextTestParameter(helper) != nullptr);
-    SLANG_CHECK(cast<IRFuncType>(callback->getDataType())->getParamCount() == 3);
-    auto layout = findVarLayout(descriptor);
-    SLANG_CHECK_ABORT(layout != nullptr);
-    SLANG_CHECK(layout->findOffsetAttr(LayoutResourceKind::MetalBuffer)->getOffset() == 8);
+    SLANG_CHECK(cast<IRFuncType>(callback->getDataType())->getParamCount() == 2);
+    HashSet<UInt> bindings;
+    for (auto parameter : callback->getParams())
+    {
+        auto layout = findVarLayout(parameter);
+        SLANG_CHECK_ABORT(layout != nullptr);
+        bindings.add(layout->findOffsetAttr(LayoutResourceKind::MetalBuffer)->getOffset());
+    }
+    SLANG_CHECK(bindings.contains(3)); // The buffer read by the direct helper.
+    SLANG_CHECK(bindings.contains(7)); // Also available to the indirect AnyHit provider.
     finalizeMetalPortableRayTracingGlobalContext(module, &sink);
     SLANG_CHECK(sink.getErrorCount() == 0);
 }

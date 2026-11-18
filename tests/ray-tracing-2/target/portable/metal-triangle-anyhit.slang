@@ -78,12 +78,18 @@ void RayGeneration()
     output[0] = payload;
 }
 
-// METAL-DAG: intersection(triangle,
-// METAL-DAG: barycentric_coord
-// METAL-DAG: accept_intersection
-// METAL-DAG: continue_search
+// Traversal selects a host-bound table; selecting RayGeneration does not compile AnyHit.
+// METAL-DAG: intersection_function_table<
+// METAL-DAG: tables
 // METAL-DAG: anyHitFunctions
 // METAL-NOT: readBarycentric
-// PROVIDER-DAG: visible]]
-// PROVIDER-DAG: readBarycentric
+// METAL-NOT: {{\[\[intersection\(}}
 // METAL-NOT: metalRTIgnoreHit
+// The selected AnyHit is the native callback and directly reaches its ordinary helper.
+// PROVIDER-DAG: intersection(triangle,
+// PROVIDER-DAG: readBarycentric
+// PROVIDER-DAG: accept_intersection
+// PROVIDER-DAG: continue_search
+// PROVIDER-DAG: barycentric_coord
+// PROVIDER-NOT: visible]]
+// PROVIDER-NOT: metalRTIgnoreHit

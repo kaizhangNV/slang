@@ -170,7 +170,7 @@ void RayGeneration()
 
 // METAL-DAG: visible]] void ProceduralClosestHit_closesthit(
 // METAL-DAG: visible]] uint FilterCandidate_anyhit(
-// METAL-DAG: visible]] uint TwoCandidates_intersection(
+// METAL-DAG: intersection(bounding_box,{{.*}} TwoCandidates_intersection(
 // METAL-DAG: rt_IntersectionInput_reportHit_{{[0-9]+}}(1.0f, 7U,
 // METAL-DAG: rt_IntersectionInput_reportHit_{{[0-9]+}}(3.0f, 9U,
 // METAL-DAG: visible]] void BackgroundMiss_miss(

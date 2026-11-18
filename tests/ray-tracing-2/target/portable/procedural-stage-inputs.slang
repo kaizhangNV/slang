@@ -101,7 +101,8 @@ struct ProceduralIntersection : rt::IIntersectionShader
 // METALCH: visible]] void ProceduralClosestHit_closesthit(void thread* [[P:payload_[0-9]+]], void thread* [[A:attributes_[0-9]+]],
 // METALCH-SAME: uint [[PRIMITIVE:primitiveIndex_[0-9]+]],
 // METALCH-SAME: uint thread* [[INSTANCE:instanceIDs_[0-9]+]],
-// METALCH: *(Attributes_{{[0-9]+}} thread*)((ulong)([[A]]))
+// METALCH: AnyValue8 [[PACKED:_S[0-9]+]] = *(AnyValue8 thread*)((ulong)([[A]]));
+// METALCH: Attributes_{{[0-9]+}} {{_S[0-9]+}} = unpackAnyValue8_{{[0-9]+}}(&[[PACKED]]);
 // METALCH: ProceduralClosestHit_invoke_{{[0-9]+}}({{.*}}, [[PRIMITIVE]], [[INSTANCE]]);
 // Any-hit reads custom attributes from the candidate and reports IgnoreHit via its result.
 // METALAH: rt_AnyHitInput_ignoreHit_
@@ -114,8 +115,11 @@ struct ProceduralIntersection : rt::IIntersectionShader
 // METALIS: ->candidateAttributes_
 // METALIS: [[TABLE]]{{\[}}[[SLOT]]{{\]}}(
 // METALIS: ->committedAttributes_
-// METALIS: visible]] uint ProceduralIntersection_intersection(void thread* candidateState_
-// METALIS-SAME: visible_function_table<uint(void thread*, uchar thread*)>
+// METALIS: intersection(bounding_box,
+// METALIS-SAME: ProceduralIntersection_intersection(
+// METALIS-SAME: ray_data PortableRTRayData_{{[0-9]+}}& rayData_
+// METALIS: candidateResources_
+// METALIS-NOT: visible]]
 
 // OptiX consumes custom attributes as registers and provides builtins through intrinsics.
 // CUDACH-DAG: optixGetInstanceId()

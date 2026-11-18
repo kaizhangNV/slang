@@ -1,4 +1,4 @@
-//TEST:SIMPLE(filecheck=PRIMITIVE): -experimental-feature -entry RayGeneration -stage raygeneration -target metal -capability metallib_3_1 -D LEVELS=1 -validate-ir
+//TEST:SIMPLE(filecheck=PRIMITIVE): -experimental-feature -entry AnyHit -stage anyhit -target metal -capability metallib_3_1 -D LEVELS=1 -validate-ir
 //TEST:SIMPLE(filecheck=PROVIDER): -experimental-feature -entry AnyHit -stage anyhit -target metal -capability metallib_3_1 -D LEVELS=3 -validate-ir
 //TEST:SIMPLE(filecheck=MULTI): -experimental-feature -entry RayGeneration -stage raygeneration -target metal -capability metallib_3_1 -D LEVELS=3 -validate-ir
 
@@ -74,24 +74,23 @@ void RayGeneration()
     output[0] = payload;
 }
 
-// PRIMITIVE: intersection(triangle, metal::raytracing::triangle_data)
+// PRIMITIVE: intersection(triangle, metal::raytracing::triangle_data, metal::raytracing::curve_data)
 // PRIMITIVE-NOT: instance_id
 // PRIMITIVE-NOT: user_instance_id
 // PRIMITIVE-NOT: object_to_world_transform
 // PRIMITIVE-NOT: world_to_object_transform
 // MULTI-DAG: max_levels<3>
 // MULTI-DAG: metal::array_ref<uint>
-// MULTI-DAG: instance_id
-// MULTI-DAG: user_instance_id
-// MULTI-DAG: object_to_world_transform
-// MULTI-DAG: world_to_object_transform
 // Both committed hits and candidate callbacks walk the selected AS metadata from word zero.
 // The trie must not read a section offset from the program's records buffer.
 // MULTI-DAG: uint nodeOrContribution{{[^=]*}} = 0U;
 // MULTI-DAG: *(instanceContributionMetadata{{.*}} + (nodeOrContribution{{.*}} +
-// MULTI-DAG: portableRTInstanceContribution{{.*}}((&rayData{{.*}})->instanceContributionMetadata
-
-// PROVIDER-DAG: visible]]
+// PROVIDER-DAG: portableRTInstanceContribution
+// PROVIDER-DAG: intersection(triangle,
+// PROVIDER-DAG: instance_id
+// PROVIDER-DAG: user_instance_id
+// PROVIDER-DAG: object_to_world_transform
+// PROVIDER-DAG: world_to_object_transform
 // PROVIDER-DAG: readPath
 // PROVIDER-DAG: instanceIndices
 // PROVIDER-DAG: instanceIDs
