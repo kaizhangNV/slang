@@ -51,7 +51,6 @@ void traceSecondary(inout uint payload)
     desc.ray.Direction = float3(0.0, 0.0, 1.0);
     desc.ray.TMax = 10.0;
     desc.instanceMask = 0xff;
-    desc.sbtStride = 1;
     rt::RayTracer<Schema> tracer;
     tracer.trace(desc, sceneBVH, program, payload);
 }
@@ -98,7 +97,7 @@ struct Schema : rt::ITraceProgramSchema
 }
 
 rt::AccelerationStructure sceneBVH;
-rt::TraceProgramDescriptor<Schema> program;
+rt::TraceProgramDescriptor<Schema, 1> program;
 RWStructuredBuffer<float4> resultBuffer;
 
 // Both launch lanes hit barycentrics (0.25, 0.25) at distance 1. The host permits depth two and
@@ -112,7 +111,6 @@ void RayGeneration()
     desc.ray.Direction = float3(0.0, 0.0, 1.0);
     desc.ray.TMax = 10.0;
     desc.instanceMask = 0xff;
-    desc.sbtStride = 1;
     float4 payload = float4(17.0);
     rt::RayTracer<Schema> tracer;
     tracer.trace(desc, sceneBVH, program, payload);
@@ -135,7 +133,7 @@ void RayGeneration()
 // METAL-DAG: metal::raytracing::intersector<
 // METAL-DAG: [_slang_miss_function_index]({{.*}}invocationValue_{{[0-9]+}}, invocationValue_
 // METAL-DAG: visible]] void RecursiveClosestHit_closesthit(
-// METAL-DAG: RecursiveClosestHit_invoke_{{[0-9]+}}((float4 thread*)((ulong)(payload_{{[0-9]+}})), dispatchRaysIndex_{{[0-9]+}}, dispatchRaysDimensions_
+// METAL-DAG: RecursiveClosestHit_invoke_{{[0-9]+}}(dispatchRaysIndex_{{[0-9]+}}, dispatchRaysDimensions_{{[0-9]+}}, (float4 thread*)((ulong)(payload_
 // METAL-DAG: visible]] void SecondaryMiss_miss(
 // METAL-DAG: SecondaryMiss_invoke_{{[0-9]+}}(dispatchRaysIndex_{{[0-9]+}}, dispatchRaysDimensions_{{[0-9]+}}, (uint thread*)((ulong)(payload_
 

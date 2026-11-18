@@ -128,7 +128,7 @@ struct Schema : rt::ITraceProgramSchema
 }
 
 rt::AccelerationStructure sceneBVH;
-rt::TraceProgramDescriptor<Schema> program;
+rt::TraceProgramDescriptor<Schema, 1> program;
 
 [shader("raygeneration")]
 void RayGeneration()
@@ -140,7 +140,6 @@ void RayGeneration()
     desc.ray.TMin = 0.0;
     desc.ray.TMax = 10.0;
     desc.instanceMask = 0xff;
-    desc.sbtStride = 1;
 
     uint4 payload = uint4(0);
     rt::RayTracer<Schema> tracer;

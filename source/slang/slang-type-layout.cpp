@@ -5559,9 +5559,9 @@ static TypeLayoutResult _createTypeLayout(TypeLayoutContext& context, Type* type
             type,
             rules);
     }
-    else if (as<TraceProgramDescriptorType>(type))
+    else if (as<TraceProgramDescriptorTypeBase>(type))
     {
-        // Consider a host binding containing TraceProgramDescriptor<SceneSchema>. Reflection
+        // Consider a host binding containing TraceProgramDescriptor<SceneSchema, 2>. Reflection
         // can be requested before linking or code generation, so the empty source declaration
         // cannot determine its resource usage. Metal supplies one argument buffer containing
         // the generated function tables and records. Native SBT targets supply those resources

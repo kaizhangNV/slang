@@ -18,7 +18,7 @@ import slang.raytracing.portable;
 
 void traceEnabled<Schema : rt::ITraceProgramSchema, Payload>(
     Schema.TraceContext.AccelerationStructure scene,
-    rt::TraceProgramDescriptor<Schema> program,
+    rt::TraceProgramDescriptor<Schema, 1> program,
     inout Payload payload)
     where Schema.TraceContext.Motion : rt::IEnabledRayMotion
 {
@@ -54,7 +54,7 @@ struct MissContext : rt::IPayloadContext
 }
 
 rt::AccelerationStructure scene;
-rt::TraceProgramDescriptor<Schema> program;
+rt::TraceProgramDescriptor<Schema, 1> program;
 
 struct TestMiss : rt::IMissShader
 {

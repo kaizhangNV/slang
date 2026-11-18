@@ -104,7 +104,7 @@ struct Schema : rt::ITraceProgramSchema
 }
 
 rt::AccelerationStructure scene;
-rt::TraceProgramDescriptor<Schema> program;
+rt::TraceProgramDescriptor<Schema, 2> program;
 RWStructuredBuffer<float4> output;
 
 [shader("raygeneration")]
@@ -114,14 +114,13 @@ void RayGeneration()
     ray.ray.Direction = float3(0, 0, 1);
     ray.ray.TMax = 10;
     ray.instanceMask = 255;
-    ray.sbtStride = 2;
     rt::RayTracer<Schema> tracer;
 
     // Both calls use one descriptor and one physical SBT. The host records select the matching
     // groups; payload and procedural attribute storage must remain distinct for the two calls.
     RadiancePayload radiance = {};
     tracer.trace(ray, scene, program, radiance);
-    ray.sbtOffset = 1;
+    ray.rayType = 1;
     ShadowPayload shadow = {};
     tracer.trace(ray, scene, program, shadow);
     output[0] = float4(radiance.color, radiance.count);

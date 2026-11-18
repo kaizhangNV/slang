@@ -21,21 +21,21 @@ struct Schema : rt::ITraceProgramSchema
 }
 
 // A descriptor may be bound directly or as part of a parameter block.
-rt::TraceProgramDescriptor<Schema> descriptor;
+rt::TraceProgramDescriptor<Schema, 1> descriptor;
 
 struct Bindings
 {
-    rt::TraceProgramDescriptor<Schema> descriptor;
+    rt::TraceProgramDescriptor<Schema, 1> descriptor;
 }
 ParameterBlock<Bindings> bindings;
 
 #ifdef TEST_OPTIONAL
 // Optional<T> needs an ordinary default value for its absent case, which an opaque descriptor does
 // not provide.
-Optional<rt::TraceProgramDescriptor<Schema>> optionalDescriptor;
+Optional<rt::TraceProgramDescriptor<Schema, 1>> optionalDescriptor;
 /*OPTIONAL:
 ^^^^^^^^ 'Optional<T>' cannot wrap a resource or opaque type
-^^^^^^^^ 'rt.TraceProgramDescriptor<Schema>' is a resource or opaque type and cannot be used as the value type of 'Optional<T>'.
+^^^^^^^^ 'rt.TraceProgramDescriptor<Schema, 1, rt.HitRecordLayout.PerGeometry>' is a resource or opaque type and cannot be used as the value type of 'Optional<T>'.
 */
 #endif
 
@@ -46,24 +46,24 @@ void main()
     descriptor.resources;
 /*RESOURCES:
                ^^^^^^^^^ member not found
-               ^^^^^^^^^ 'resources' is not a member of 'rt.TraceProgramDescriptor<Schema>'.
+               ^^^^^^^^^ 'resources' is not a member of 'rt.TraceProgramDescriptor<Schema, 1, rt.HitRecordLayout.PerGeometry>'.
 */
 #elif defined(TEST_CALL)
-    rt::TraceProgramDescriptor<Schema> fromCall = rt::TraceProgramDescriptor<Schema>();
+    rt::TraceProgramDescriptor<Schema, 1> fromCall = rt::TraceProgramDescriptor<Schema, 1>();
 /*CALL:
-                                                                                    ^ cannot use initializer list for type 'rt.TraceProgramDescriptor<Schema>'
+                                                                                          ^ cannot use initializer list for type 'rt.TraceProgramDescriptor<Schema, 1, rt.HitRecordLayout.PerGeometry>'
 */
 #elif defined(TEST_ARGUMENT)
-    rt::TraceProgramDescriptor<Schema> fromArgument = rt::TraceProgramDescriptor<Schema>(0);
+    rt::TraceProgramDescriptor<Schema, 1> fromArgument = rt::TraceProgramDescriptor<Schema, 1>(0);
 /*ARGUMENT:
-                                                                                        ^ cannot use initializer list for type 'rt.TraceProgramDescriptor<Schema>'
-                                                                                        ^ too many initializers in initializer list
-                                                                                        ^ too many initializers (expected 0, got 1)
+                                                                                              ^ cannot use initializer list for type 'rt.TraceProgramDescriptor<Schema, 1, rt.HitRecordLayout.PerGeometry>'
+                                                                                              ^ too many initializers in initializer list
+                                                                                              ^ too many initializers (expected 0, got 1)
 */
 #elif defined(TEST_INITIALIZER)
-    rt::TraceProgramDescriptor<Schema> fromInitializer = {};
+    rt::TraceProgramDescriptor<Schema, 1> fromInitializer = {};
 /*INITIALIZER:
-                                                         ^ cannot use initializer list for type 'rt.TraceProgramDescriptor<Schema>'
+                                                            ^ cannot use initializer list for type 'rt.TraceProgramDescriptor<Schema, 1, rt.HitRecordLayout.PerGeometry>'
 */
 #endif
 }

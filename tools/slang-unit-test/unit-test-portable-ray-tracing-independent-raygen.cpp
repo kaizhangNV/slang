@@ -94,7 +94,7 @@ SLANG_UNIT_TEST(portableRayTracingIndependentRayGeneration)
         }
 
         rt::AccelerationStructure scene;
-        rt::TraceProgramDescriptor<Schema> program;
+        rt::TraceProgramDescriptor<Schema, 1> program;
         RWStructuredBuffer<uint> result;
 
         [shader("raygeneration")]
@@ -104,7 +104,6 @@ SLANG_UNIT_TEST(portableRayTracingIndependentRayGeneration)
             desc.ray.Direction = float3(0, 0, 1);
             desc.ray.TMax = 10;
             desc.instanceMask = 255;
-            desc.sbtStride = 1;
             uint payload = 0;
             rt::RayTracer<Schema> tracer;
             tracer.trace(desc, scene, program, payload);

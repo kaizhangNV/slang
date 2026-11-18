@@ -70,7 +70,7 @@ struct Schema : rt::ITraceProgramSchema
 }
 
 rt::AccelerationStructure sceneBVH;
-rt::TraceProgramDescriptor<Schema> program;
+rt::TraceProgramDescriptor<Schema, 1> program;
 RWStructuredBuffer<float4> resultBuffer;
 
 // The host builds a single triangle at z = 1 and one hit/miss SBT record. The first ray hits
@@ -86,7 +86,6 @@ void RayGeneration()
     desc.ray.TMin = 0.0;
     desc.ray.TMax = 10.0;
     desc.instanceMask = 0xff;
-    desc.sbtStride = 1;
 
     float4 payload = float4(17.0);
     rt::RayTracer<Schema> tracer;

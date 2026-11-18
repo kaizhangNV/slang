@@ -699,6 +699,10 @@ void calcRequiredLoweringPassSet(
     case kIROp_TraceProgramDescriptorType:
         result.traceProgramDescriptor = true;
         break;
+    case kIROp_FlexibleTraceProgramDescriptorType:
+        codeGenContext->getSink()->diagnose(
+            Diagnostics::FlexibleTraceProgramDescriptorUnimplemented{.location = inst->sourceLoc});
+        break;
     case kIROp_RaytracingAccelerationStructureType:
         // On Metal, a portable AS declaration needs an argument buffer even when this entry
         // does not trace. The core AS(0xFFFF) keeps its native resource binding. Other targets
@@ -1135,6 +1139,8 @@ Result linkAndOptimizeIR(
     RequiredLoweringPassSet& requiredLoweringPassSet = codeGenContext->getRequiredLoweringPassSet();
     requiredLoweringPassSet = {};
     calcRequiredLoweringPassSet(requiredLoweringPassSet, codeGenContext, irModule->getModuleInst());
+    if (sink->getErrorCount() != 0)
+        return SLANG_FAIL;
 
     if (requiredLoweringPassSet.assumeAddress)
     {

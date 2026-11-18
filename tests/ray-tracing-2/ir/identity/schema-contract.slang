@@ -17,11 +17,11 @@
 // concrete shader-list types checked below.
 // CHECK: result code = 0
 // CHECK: ### AFTER specializeModule:
-// CHECK: func %copyDescriptor : Func(TraceProgramDescriptor(%Schema, [[WITNESS:%[A-Za-z0-9_]+]],
+// CHECK: func %copyDescriptor : Func(TraceProgramDescriptor(%Schema, 1 : Int, 0 : Int, [[WITNESS:%[A-Za-z0-9_]+]],
 // CHECK-SAME: RaytracingAccelerationStructure(2 : Int), %rtx5FNoMotion, [[HITS:%[A-Za-z0-9_]+]], [[MISSES:%[A-Za-z0-9_]+]], [[CALLABLES:%[A-Za-z0-9_]+]]),
-// CHECK-SAME: TraceProgramDescriptor(%Schema, [[WITNESS]],
+// CHECK-SAME: TraceProgramDescriptor(%Schema, 1 : Int, 0 : Int, [[WITNESS]],
 // CHECK-SAME: RaytracingAccelerationStructure(2 : Int), %rtx5FNoMotion, [[HITS]], [[MISSES]], [[CALLABLES]]))
-// CHECK: param %descriptor : TraceProgramDescriptor(%Schema, [[WITNESS]],
+// CHECK: param %descriptor : TraceProgramDescriptor(%Schema, 1 : Int, 0 : Int, [[WITNESS]],
 // CHECK-SAME: RaytracingAccelerationStructure(2 : Int), %rtx5FNoMotion, [[HITS]], [[MISSES]], [[CALLABLES]])):
 
 // Miss and callable lists retain only their entry types and Record types. Hit-only operands
@@ -48,9 +48,9 @@
 // CHECK-NEXT: [KnownBuiltinDecoration({{[0-9]+}} : Int)]
 // CHECK-NEXT: [nameHint("rt.HitGroupList")]
 // CHECK-NEXT: struct [[HITS]] : Type;
-// CHECK: let %program : TraceProgramDescriptor(%Schema, [[WITNESS]],
+// CHECK: let %program : TraceProgramDescriptor(%Schema, 1 : Int, 0 : Int, [[WITNESS]],
 // CHECK-SAME: RaytracingAccelerationStructure(2 : Int), %rtx5FNoMotion, [[HITS]], [[MISSES]], [[CALLABLES]]) = global_param
-// CHECK: let {{%[A-Za-z0-9_]+}} : TraceProgramDescriptor(%Schema, [[WITNESS]],
+// CHECK: let {{%[A-Za-z0-9_]+}} : TraceProgramDescriptor(%Schema, 1 : Int, 0 : Int, [[WITNESS]],
 // CHECK-SAME: RaytracingAccelerationStructure(2 : Int), %rtx5FNoMotion, [[HITS]], [[MISSES]], [[CALLABLES]]) = call %copyDescriptor(%program)
 
 // Scan the entire specialized module separately: the descriptor's type dependencies must not
@@ -183,14 +183,14 @@ struct Schema : rt::ITraceProgramSchema
     typealias MissShaders = rt::MissShaderList<Miss>;
     typealias CallableShaders = rt::CallableShaderList<Callable>;
 }
-rt::TraceProgramDescriptor<Schema> program;
+rt::TraceProgramDescriptor<Schema, 1> program;
 rt::AccelerationStructure scene;
 
 // This descriptor is first lowered with an unknown schema. Specializing the helper
 // must reuse the concrete descriptor type above, including all five schema-type operands.
 [noinline]
-rt::TraceProgramDescriptor<S> copyDescriptor<S : rt::ITraceProgramSchema>(
-    rt::TraceProgramDescriptor<S> descriptor)
+rt::TraceProgramDescriptor<S, 1> copyDescriptor<S : rt::ITraceProgramSchema>(
+    rt::TraceProgramDescriptor<S, 1> descriptor)
 {
     return descriptor;
 }

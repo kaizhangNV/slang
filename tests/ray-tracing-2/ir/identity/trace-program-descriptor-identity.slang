@@ -16,14 +16,14 @@ struct Schema : rt::ITraceProgramSchema
     typealias CallableShaders = rt::EmptyCallableShaderList;
 }
 
-rt::TraceProgramDescriptor<Schema> descriptor;
+rt::TraceProgramDescriptor<Schema, 1> descriptor;
 
 // The imported serialized module must preserve the compiler-owned operation, including its
-// schema type argument and conformance witness as its first two operands.
+// schema, count, layout, and conformance witness as its first four operands.
 // CHECK-NOT: TraceProgramDescriptorResources
 // CHECK: [nameHint("descriptor")]
 // CHECK-NEXT: [export({{.*}})]
-// CHECK-NEXT: let %descriptor : TraceProgramDescriptor(%Schema, %{{[0-9]+}}, {{.*}}) = global_param
+// CHECK-NEXT: let %descriptor : TraceProgramDescriptor(%Schema, 1 : Int, 0 : Enum(Int), %{{[0-9]+}}, {{.*}}) = global_param
 // CHECK-NOT: TraceProgramDescriptorResources
 
 [numthreads(1, 1, 1)]

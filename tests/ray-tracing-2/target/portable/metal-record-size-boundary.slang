@@ -36,7 +36,7 @@ struct Schema : rt::ITraceProgramSchema
     typealias CallableShaders = rt::EmptyCallableShaderList;
 }
 rt::AccelerationStructure scene;
-rt::TraceProgramDescriptor<Schema> program;
+rt::TraceProgramDescriptor<Schema, 1> program;
 RWStructuredBuffer<uint> output;
 [shader("raygeneration")]
 void RayGeneration()

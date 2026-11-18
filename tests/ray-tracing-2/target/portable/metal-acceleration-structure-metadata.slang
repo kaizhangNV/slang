@@ -69,7 +69,7 @@ struct Schema : rt::ITraceProgramSchema
 rt::AccelerationStructure first;
 rt::AccelerationStructure second;
 RaytracingAccelerationStructure queryScene;
-rt::TraceProgramDescriptor<Schema> program;
+rt::TraceProgramDescriptor<Schema, 1> program;
 RWStructuredBuffer<uint> output;
 
 // Both structures may report instance index zero, while the host supplies contributions 2 and
@@ -82,7 +82,6 @@ void RayGeneration()
     ray.ray.Direction = float3(0, 0, 1);
     ray.ray.TMax = 10;
     ray.instanceMask = 255;
-    ray.sbtStride = 1;
     uint firstPayload = 0;
     uint secondPayload = 0;
     rt::RayTracer<Schema> tracer;

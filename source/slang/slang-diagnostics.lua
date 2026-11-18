@@ -4710,6 +4710,20 @@ err(
     span { loc = "location", message = "Record must have a supported storage layout, alignment at most 16 bytes, and a record stride representable in 32 bits" }
 )
 
+err(
+    "flexible-trace-program-descriptor-unimplemented",
+    38114,
+    "FlexibleTraceProgramDescriptor code generation is not implemented",
+    span { loc = "location", message = "use TraceProgramDescriptor with a fixed rayTypeCount for executable shaders" }
+)
+
+err(
+    "invalid-trace-program-descriptor-indexing",
+    38115,
+    "TraceProgramDescriptor requires a positive rayTypeCount and a hitRecordLayout of PerGeometry or SharedAcrossGeometries",
+    span { loc = "location", message = "use a supported fixed count and hit-record layout" }
+)
+
 
 err(
     "specialization-parameter-of-name-not-specialized",

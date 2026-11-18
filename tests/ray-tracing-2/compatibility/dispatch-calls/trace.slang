@@ -37,11 +37,12 @@ struct Schema : rt::ITraceProgramSchema
 }
 
 rt::AccelerationStructure scene;
-rt::TraceProgramDescriptor<Schema> program;
+RaytracingAccelerationStructure nativeScene;
+rt::TraceProgramDescriptor<Schema, 1> program;
 
 void traceNative(rt::RayTraversalDesc desc, inout Payload payload)
 {
-    TraceRay(scene, 0, 0xff, 0, 0, 0, desc.ray, payload);
+    TraceRay(nativeScene, 0, 0xff, 0, 0, 0, desc.ray, payload);
 }
 
 [shader("raygeneration")]

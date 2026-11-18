@@ -24,8 +24,9 @@ SLANG_UNIT_TEST(portableRayTracingDescriptorLayoutBeforeCodegen)
             typealias CallableShaders = rt::EmptyCallableShaderList;
         }
 
-        rt::TraceProgramDescriptor<Schema> first;
-        rt::TraceProgramDescriptor<Schema> second;
+        rt::TraceProgramDescriptor<Schema, 2> first;
+        rt::TraceProgramDescriptor<Schema, 3> second;
+        rt::TraceProgramDescriptor<Schema, 2, rt::HitRecordLayout.SharedAcrossGeometries> shared;
         ConstantBuffer<uint> ordinary;
     )";
 
@@ -59,10 +60,30 @@ SLANG_UNIT_TEST(portableRayTracingDescriptorLayoutBeforeCodegen)
         SLANG_CHECK_ABORT(module != nullptr);
         auto layout = module->getLayout(0, diagnostics.writeRef());
         SLANG_CHECK_ABORT(layout != nullptr);
-        SLANG_CHECK_ABORT(layout->getParameterCount() == 3);
+        SLANG_CHECK_ABORT(layout->getParameterCount() == 4);
 
         auto first = layout->getParameterByIndex(0);
         auto second = layout->getParameterByIndex(1);
+        auto shared = layout->getParameterByIndex(2);
+        // Count and layout are part of the descriptor's type, despite having no runtime fields.
+        SLANG_CHECK(first->getType() != second->getType());
+        SLANG_CHECK(first->getType() != shared->getType());
+        for (unsigned i = 0; i < 3; ++i)
+        {
+            auto type = layout->getParameterByIndex(i)->getType();
+            auto generic = type->getGenericContainer();
+            SLANG_CHECK_ABORT(generic != nullptr);
+            SLANG_CHECK_ABORT(generic->getTypeParameterCount() == 1);
+            SLANG_CHECK_ABORT(generic->getValueParameterCount() == 2);
+            // The existing generic reflection API exposes Schema, rayTypeCount, and layout.
+            auto schema = generic->getConcreteType(generic->getTypeParameter(0));
+            SLANG_CHECK_ABORT(schema != nullptr);
+            SLANG_CHECK(UnownedStringSlice(schema->getName()) == "Schema");
+            SLANG_CHECK(
+                generic->getConcreteIntVal(generic->getValueParameter(0)) == (i == 1 ? 3 : 2));
+            SLANG_CHECK(
+                generic->getConcreteIntVal(generic->getValueParameter(1)) == (i == 2 ? 1 : 0));
+        }
         const auto buffer = slang::ParameterCategory::ConstantBuffer;
         const auto uniform = slang::ParameterCategory::Uniform;
         if (target == SLANG_METAL)

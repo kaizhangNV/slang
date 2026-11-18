@@ -63,7 +63,7 @@ struct Schema : rt::ITraceProgramSchema
 }
 
 rt::AccelerationStructure scene;
-rt::TraceProgramDescriptor<Schema> program;
+rt::TraceProgramDescriptor<Schema, 1> program;
 RWStructuredBuffer<float4> output;
 uniform uint rayFlags;
 
@@ -79,7 +79,6 @@ struct Tracer : ITracer
         desc.ray.TMax = 10.0;
         desc.rayFlags = rayFlags;
         desc.instanceMask = 255;
-        desc.sbtStride = 1;
         float4 payload = float4(17.0);
         rt::RayTracer<Schema> tracer;
         tracer.trace(desc, scene, program, payload);

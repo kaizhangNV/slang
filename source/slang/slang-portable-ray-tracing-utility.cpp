@@ -212,7 +212,7 @@ static bool _diagnoseInvalidBuiltinTypeUse(DiagnosticSink* sink, Type* type, Sou
 
 // Allows the ray-tracing library to select its stage-interface and descriptor AST types.
 // For example, `__magic_type(MissShaderType) interface IMissShader` and
-// `__magic_type(TraceProgramDescriptorType) struct TraceProgramDescriptor<Schema>` both store
+// `__magic_type(TraceProgramDescriptorType) struct TraceProgramDescriptor<Schema, N>` both store
 // their checked declaration reference. Existing type construction can therefore preserve their
 // generic arguments without a custom representation. Other core magic classes may require
 // different operands and cannot safely be applied to an ordinary declaration.
@@ -223,7 +223,7 @@ bool isBuiltinTypeModifier(MagicTypeModifier* modifier, Decl* decl)
     return (as<InterfaceDecl>(decl) &&
             modifier->magicNodeType.isSubClassOf<RayTracingStageInterfaceType>()) ||
            (as<StructDecl>(decl) &&
-            modifier->magicNodeType.isSubClassOf<TraceProgramDescriptorType>());
+            modifier->magicNodeType.isSubClassOf<TraceProgramDescriptorTypeBase>());
 }
 
 String getSourceTypeName(ASTBuilder* astBuilder, Type* stageType)
@@ -684,14 +684,16 @@ void addShaderListDecoration(
 // Appends the five schema types needed by the backend to a descriptor's IR operands.
 // Consider this declaration, where Schema conforms to ITraceProgramSchema:
 //
-//     rt::TraceProgramDescriptor<Schema> descriptor;
+//     rt::TraceProgramDescriptor<Schema, 2> descriptor;
 //
-// The caller has already lowered Schema and its conformance witness. This function appends the
-// remaining operands, so the caller can construct this complete IR type:
+// The caller has already lowered Schema, count, layout, and its conformance witness. This function
+// appends the remaining operands, so the caller can construct this complete IR type:
 //
 //     TraceProgramDescriptor
 //     {
 //         schema                    = Schema
+//         rayTypeCount              = 2
+//         hitRecordLayout           = PerGeometry
 //         schemaWitness             = Conformance(Schema : ITraceProgramSchema)
 //         accelerationStructureType = Schema.TraceContext.AccelerationStructure
 //         motionType                = Schema.TraceContext.Motion
@@ -726,7 +728,7 @@ void appendTraceProgramDescriptorOperands(
     IRType* (*lowerType)(Type*, void*),
     void* userData)
 {
-    SLANG_RELEASE_ASSERT(operands.getCount() == 2);
+    SLANG_RELEASE_ASSERT(operands.getCount() == 4);
     auto declRef = descriptorType->getDeclRef();
     auto generic = as<GenericDecl>(declRef.getDecl()->parentDecl);
     SLANG_RELEASE_ASSERT(generic);
@@ -785,6 +787,71 @@ void appendTraceProgramDescriptorOperands(
             userData),
     };
     operands.addRange(schemaOperands, SLANG_COUNT_OF(schemaOperands));
+}
+
+IRType* lowerTraceProgramDescriptorType(
+    IRBuilder* builder,
+    TraceProgramDescriptorType* sourceType,
+    const List<IRInst*>& operands,
+    DiagnosticSink* sink)
+{
+    SLANG_RELEASE_ASSERT(operands.getCount() == 9);
+    auto result = cast<IRTraceProgramDescriptorType>(builder->getType(
+        kIROp_TraceProgramDescriptorType,
+        UInt(operands.getCount()),
+        operands.getBuffer()));
+    auto count = result->getRayTypeCount();
+    auto layout = result->getHitRecordLayout();
+    auto countLiteral = as<IRIntLit>(count);
+    auto layoutLiteral = as<IRIntLit>(layout);
+
+    // The declaration fixes the enum values: PerGeometry = 0, SharedAcrossGeometries = 1.
+    // These are source-type invariants. Native tracing limits are checked by the target's
+    // trace overload; classic Metal IFT indexing does not have the IFB four-bit limit.
+    if (countLiteral && layoutLiteral)
+    {
+        auto countValue = countLiteral->getValue();
+        auto layoutValue = layoutLiteral->getValue();
+        if (countValue < 1 || (layoutValue != 0 && layoutValue != 1))
+        {
+            auto loc = builder->getSourceLocInfo();
+            sink->diagnose(Diagnostics::InvalidTraceProgramDescriptorIndexing{
+                .location = loc ? loc->sourceLoc : sourceType->getDeclRef().getDecl()->loc});
+        }
+        return result;
+    }
+
+    // Consider a field TraceProgramDescriptor<S, N, L> in a generic struct. Attach the check beside
+    // its canonical type so specialization validates N and L when it instantiates that type,
+    // including after module serialization. Unused generic types need not be instantiated.
+    IRBuilder checkBuilder(builder->getModule());
+    checkBuilder.setSourceLocInfo(builder->getSourceLocInfo());
+    checkBuilder.setInsertAfter(result);
+    auto boolType = checkBuilder.getBoolType();
+    auto perGeometry = checkBuilder.emitConstexprEql(
+        boolType,
+        layout,
+        checkBuilder.getIntValue(layout->getDataType(), 0));
+    auto shared = checkBuilder.emitConstexprEql(
+        boolType,
+        layout,
+        checkBuilder.getIntValue(layout->getDataType(), 1));
+    auto positive = checkBuilder.emitConstexprLeq(
+        boolType,
+        checkBuilder.getIntValue(count->getDataType(), 1),
+        count);
+    auto validLayout = checkBuilder.emitConstexprOr(boolType, perGeometry, shared);
+    IRInst* checkOperands[] = {
+        checkBuilder.emitConstexprAnd(boolType, positive, validLayout),
+        checkBuilder.getStringValue(
+            toSlice("TraceProgramDescriptor requires a positive rayTypeCount and a hitRecordLayout "
+                    "of PerGeometry or SharedAcrossGeometries"))};
+    checkBuilder.emitIntrinsicInst(
+        checkBuilder.getVoidType(),
+        kIROp_StaticAssert,
+        SLANG_COUNT_OF(checkOperands),
+        checkOperands);
+    return result;
 }
 
 // Returns the checked entry types used by the duplicate-entry diagnostic. The list's conformance

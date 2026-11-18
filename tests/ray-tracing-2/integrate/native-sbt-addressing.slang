@@ -126,7 +126,7 @@ struct Schema : rt::ITraceProgramSchema
 }
 
 rt::AccelerationStructure sceneBVH;
-rt::TraceProgramDescriptor<Schema> program;
+rt::TraceProgramDescriptor<Schema, 2> program;
 RWStructuredBuffer<uint4> resultBuffer;
 
 // The host puts two geometries in one BLAS and gives its instance an SBT contribution of one.
@@ -141,8 +141,7 @@ void RayGeneration()
     desc.ray.Direction = float3(0.0, 0.0, 1.0);
     desc.ray.TMax = 10.0;
     desc.instanceMask = 0xff;
-    desc.sbtOffset = 1;
-    desc.sbtStride = 2;
+    desc.rayType = 1;
     desc.missIndex = 1;
 
     uint4 payload = uint4(0);
@@ -172,10 +171,9 @@ void RayGeneration()
 // OptiX preserves the SBT addressing operands and exports every shader selected by the host.
 // CUDA: optixGetSbtGASIndex()
 // CUDA: __raygen__RayGeneration()
-// CUDA: ->sbtOffset_{{[0-9]+}} = 1U;
-// CUDA: ->sbtStride_{{[0-9]+}} = 2U;
+// CUDA: ->rayType_{{[0-9]+}} = 1U;
 // CUDA: ->missIndex_{{[0-9]+}} = 1U;
-// CUDA: optixTrace({{.*}}.sbtOffset_{{[0-9]+}}, {{.*}}.sbtStride_{{[0-9]+}}, {{.*}}.missIndex_
+// CUDA: optixTrace({{.*}}.rayType_{{[0-9]+}}, 2U, {{.*}}.missIndex_
 // CUDA: optixDirectCall<void>(1U,
 // CUDA: __closesthit__FirstHit_closesthit()
 // CUDA: __closesthit__SecondHit_closesthit()

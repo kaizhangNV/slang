@@ -82,7 +82,7 @@ struct Schema : rt::ITraceProgramSchema
 }
 
 rt::AccelerationStructure scene;
-rt::TraceProgramDescriptor<Schema> program;
+rt::TraceProgramDescriptor<Schema, 3> program;
 
 [shader("raygeneration")]
 void RayGeneration()
@@ -91,16 +91,15 @@ void RayGeneration()
     ray.ray.Direction = float3(0, 0, 1);
     ray.ray.TMax = 10;
     ray.instanceMask = 255;
-    ray.sbtStride = 3;
     rt::RayTracer<Schema> tracer;
 
     // The payload-less overload supplies the library's own empty type. Every selected group
     // still needs the same custom-attribute storage as the explicitly empty payload traces.
     tracer.trace(ray, scene, program);
-    ray.sbtOffset = 1;
+    ray.rayType = 1;
     EmptyPayloadA payloadA = {};
     tracer.trace(ray, scene, program, payloadA);
-    ray.sbtOffset = 2;
+    ray.rayType = 2;
     EmptyPayloadB payloadB = {};
     tracer.trace(ray, scene, program, payloadB);
 }

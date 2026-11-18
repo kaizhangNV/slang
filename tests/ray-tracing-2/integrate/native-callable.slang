@@ -38,7 +38,7 @@ struct Schema : rt::ITraceProgramSchema
     typealias CallableShaders = rt::CallableShaderList<AddThirtyOne>;
 }
 
-rt::TraceProgramDescriptor<Schema> program;
+rt::TraceProgramDescriptor<Schema, 1> program;
 RWStructuredBuffer<uint> resultBuffer;
 
 // The matching RHI test supplies a one-entry callable SBT. This deliberately needs no geometry:

@@ -44,7 +44,7 @@ struct Schema : rt::ITraceProgramSchema
     typealias CallableShaders = rt::EmptyCallableShaderList;
 }
 rt::AccelerationStructure scene;
-rt::TraceProgramDescriptor<Schema> program;
+rt::TraceProgramDescriptor<Schema, 1> program;
 RWStructuredBuffer<uint> output;
 [shader("raygeneration")]
 void RayGeneration()
@@ -53,7 +53,6 @@ void RayGeneration()
     ray.ray.Direction = float3(0, 0, 1);
     ray.ray.TMax = 100;
     ray.instanceMask = 255;
-    ray.sbtStride = 1;
     uint payload = 1;
     rt::RayTracer<Schema> tracer;
     tracer.trace(ray, scene, program, payload);

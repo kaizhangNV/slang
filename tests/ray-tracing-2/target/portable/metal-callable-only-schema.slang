@@ -73,7 +73,7 @@ struct Schema : rt::ITraceProgramSchema
     typealias CallableShaders = rt::CallableShaderList<Callable>;
 }
 
-rt::TraceProgramDescriptor<Schema> program;
+rt::TraceProgramDescriptor<Schema, 1> program;
 RWStructuredBuffer<uint> output;
 
 // No trace call or acceleration-structure resource exists. The complete schema still describes

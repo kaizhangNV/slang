@@ -23411,7 +23411,7 @@ bool isOpaqueHandleType(Type* type)
     if (PortableRT::getStageInputKind(isDeclRefTypeOf<AggTypeDecl>(type).getDecl()) !=
         Stage::Unknown)
         return true;
-    if (as<TraceProgramDescriptorType>(type))
+    if (as<TraceProgramDescriptorTypeBase>(type))
         return true;
     if (as<ResourceType>(type))
         return true;

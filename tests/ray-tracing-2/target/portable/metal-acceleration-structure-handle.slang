@@ -73,7 +73,7 @@ StructuredBuffer<Parameters> parameters;
 #endif
 uniform uint selectedRow;
 uniform uint selectedScene;
-rt::TraceProgramDescriptor<Schema> program;
+rt::TraceProgramDescriptor<Schema, 1> program;
 RWStructuredBuffer<uint> output;
 
 // A stored handle identifies the argument buffer containing both the native AS and its instance
@@ -93,7 +93,6 @@ void RayGeneration()
     ray.ray.Direction = float3(0, 0, 1);
     ray.ray.TMax = 10;
     ray.instanceMask = 255;
-    ray.sbtStride = 1;
     ray.time = 0.5;
     uint payload = 0;
     rt::RayTracer<Schema> tracer;

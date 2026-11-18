@@ -98,9 +98,9 @@ public typealias RayDesc = RayDesc;
 
 /// Supplies the per-call traversal controls and native SBT selectors.
 ///
-/// A program schema defines which stage programs are available, while `sbtOffset`, `sbtStride`,
-/// and `missIndex` select runtime records from the host-built SBT. `time` is consumed only by a
-/// motion-enabled trace context.
+/// A program schema defines which stage programs are available. The descriptor fixes the geometry
+/// multiplier; `rayType` and `missIndex` select runtime records from the host-built SBT. `time` is
+/// consumed only by a motion-enabled trace context.
 public struct RayTraversalDesc
 {
     /// Supplies the ray origin, direction, and traversal interval.
@@ -146,22 +146,12 @@ public struct RayTraversalDesc
     /// consistent with the instance masks stored in the acceleration structure.
     public uint instanceMask;
 
-    /// Supplies the ray's offset when selecting a hit-group record from the shader binding table.
-    /// A host can use this as the ray-type column of a logical geometry-by-ray-type table.
+    /// Selects the ray-type column of the descriptor's hit-record table.
     ///
     /// @par Constraints
-    /// Uses a runtime `uint`, not a schema-list index. The caller must choose this offset together
-    /// with `sbtStride` and the acceleration structure's record offsets to select a valid record
-    /// in the host-built shader binding table.
-    public uint sbtOffset;
-
-    /// Supplies the stride applied to the geometry contribution when selecting a hit-group record.
-    /// Counts records rather than bytes. For two ray-type columns per geometry row, use 2.
-    ///
-    /// @par Constraints
-    /// Uses a runtime `uint`. Its value must agree with the host-built shader binding table's
-    /// geometry layout and the native traversal operation's supported selector range.
-    public uint sbtStride;
+    /// Uses a runtime `uint`, not a schema-list index. The caller supplies a valid ray type for the
+    /// descriptor and a compatible host-built table. This field adds no runtime bounds check.
+    public uint rayType;
 
     /// Selects the miss record used when traversal finds no accepted hit.
     ///
