@@ -806,15 +806,13 @@ IRType* lowerTraceProgramDescriptorType(
     auto layoutLiteral = as<IRIntLit>(layout);
 
     // The declaration fixes the enum values: PerGeometry = 0, SharedAcrossGeometries = 1.
-    // Both selectors have four portable bits; the shared layout uses multiplier zero, so its
-    // count may reach 16 while PerGeometry's multiplier itself must fit in those four bits.
+    // These are source-type invariants. Native tracing limits are checked by the target's
+    // trace overload; classic Metal IFT indexing does not have the IFB four-bit limit.
     if (countLiteral && layoutLiteral)
     {
         auto countValue = countLiteral->getValue();
         auto layoutValue = layoutLiteral->getValue();
-        bool validLayoutAndCount =
-            (layoutValue == 0 && countValue <= 15) || (layoutValue == 1 && countValue <= 16);
-        if (countValue < 1 || !validLayoutAndCount)
+        if (countValue < 1 || (layoutValue != 0 && layoutValue != 1))
         {
             auto loc = builder->getSourceLocInfo();
             sink->diagnose(Diagnostics::InvalidTraceProgramDescriptorIndexing{
@@ -842,23 +840,12 @@ IRType* lowerTraceProgramDescriptorType(
         boolType,
         checkBuilder.getIntValue(count->getDataType(), 1),
         count);
-    auto perGeometryBound = checkBuilder.emitConstexprLeq(
-        boolType,
-        count,
-        checkBuilder.getIntValue(count->getDataType(), 15));
-    auto sharedBound = checkBuilder.emitConstexprLeq(
-        boolType,
-        count,
-        checkBuilder.getIntValue(count->getDataType(), 16));
-    auto validLayout = checkBuilder.emitConstexprOr(
-        boolType,
-        checkBuilder.emitConstexprAnd(boolType, perGeometry, perGeometryBound),
-        checkBuilder.emitConstexprAnd(boolType, shared, sharedBound));
+    auto validLayout = checkBuilder.emitConstexprOr(boolType, perGeometry, shared);
     IRInst* checkOperands[] = {
         checkBuilder.emitConstexprAnd(boolType, positive, validLayout),
         checkBuilder.getStringValue(
-            toSlice("TraceProgramDescriptor requires rayTypeCount in [1, 15] for PerGeometry or "
-                    "[1, 16] for SharedAcrossGeometries"))};
+            toSlice("TraceProgramDescriptor requires a positive rayTypeCount and a hitRecordLayout "
+                    "of PerGeometry or SharedAcrossGeometries"))};
     checkBuilder.emitIntrinsicInst(
         checkBuilder.getVoidType(),
         kIROp_StaticAssert,

@@ -4720,7 +4720,7 @@ err(
 err(
     "invalid-trace-program-descriptor-indexing",
     38115,
-    "TraceProgramDescriptor requires rayTypeCount in [1, 15] for PerGeometry or [1, 16] for SharedAcrossGeometries",
+    "TraceProgramDescriptor requires a positive rayTypeCount and a hitRecordLayout of PerGeometry or SharedAcrossGeometries",
     span { loc = "location", message = "use a supported fixed count and hit-record layout" }
 )
 

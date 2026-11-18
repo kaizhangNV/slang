@@ -28,9 +28,12 @@ public enum HitRecordLayout
 /// D3D, Vulkan, and OptiX bind the native pipeline and SBT; this descriptor consumes no shader
 /// resource binding. Metal binds one argument buffer containing function tables and records.
 /// Record byte stride is determined separately from the schema's Record layouts.
+/// D3D, Vulkan, and OptiX traces require at most 15 ray types for PerGeometry or 16 for shared
+/// records because their native selectors use four bits. Classic Metal IFT tracing has no such
+/// four-bit restriction. These target limits do not restrict a descriptor's source declaration.
 ///
 /// @tparam Schema The trace context and shader lists describing the bound program.
-/// @tparam rayTypeCount Number of ray types: 1..15 for PerGeometry, or 1..16 for shared records.
+/// @tparam rayTypeCount Positive number of ray types.
 /// @tparam hitRecordLayout Whether each geometry has a distinct row or shares its instance's row.
 /// @category raytracing
 __magic_type(TraceProgramDescriptorType)

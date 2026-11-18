@@ -13,6 +13,20 @@ namespace rt
 internal struct EmptyTracePayload
 {}
 
+/// Checks the count's upper bound for D3D, Vulkan, and OptiX trace operations. The descriptor type
+/// already requires a positive count and valid layout.
+/// For example, 16 per-geometry ray types would truncate the native multiplier to zero. Shared
+/// records use multiplier zero and can select 16 offsets. Classic Metal IFT traces skip this check;
+/// their record indexing is shader code and does not use the Metal IFB selectors.
+[ForceInline]
+internal void __validateNativeTraceIndexing<
+    let rayTypeCount : int, let hitRecordLayout : HitRecordLayout>()
+{
+    static_assert(
+        rayTypeCount <= (hitRecordLayout == HitRecordLayout.PerGeometry ? 15 : 16),
+        "Native trace indexing requires rayTypeCount <= 15 for PerGeometry or <= 16 for SharedAcrossGeometries");
+}
+
 /// Uses the portable handle as the core acceleration structure on native ray-tracing targets.
 ///
 /// Consider `RayTracer.trace` passing an `AccelerationStructure` to the core `TraceRay` function.
@@ -203,6 +217,7 @@ public extension<Schema> RayTracer<Schema>
                 payload);
             break;
         default:
+            __validateNativeTraceIndexing<rayTypeCount, hitRecordLayout>();
             // Both AS types represent the same native resource. The conversion only supplies
             // the core type expected by TraceRay; emission uses accelerationStructure directly.
             TraceRay(
@@ -295,6 +310,7 @@ public extension<Schema> RayTracer<Schema>
             break;
         case glsl:
         case spirv:
+            __validateNativeTraceIndexing<rayTypeCount, hitRecordLayout>();
             // As for TraceRay, the conversion emits the same native handle directly.
             TraceMotionRay(
                 __asNativeAccelerationStructure(accelerationStructure),

@@ -136,8 +136,9 @@ void appendTraceProgramDescriptorOperands(
     IRType* (*lowerType)(Type*, void*),
     void* userData);
 
-/// Constructs the fixed descriptor type and validates its indexing arguments. Symbolic arguments
-/// retain a static assertion beside the type so ordinary specialization checks their final values.
+/// Constructs the fixed descriptor type and requires a positive count and valid layout. Symbolic
+/// arguments retain a static assertion beside the type for specialization. Native trace overloads
+/// separately check the target's indexing limits.
 IRType* lowerTraceProgramDescriptorType(
     IRBuilder* builder,
     TraceProgramDescriptorType* sourceType,

@@ -1,33 +1,42 @@
 //DIAGNOSTIC_TEST:SIMPLE(filecheck=INVALID): -experimental-feature -no-codegen -DCOUNT=0
 //DIAGNOSTIC_TEST:SIMPLE(filecheck=INVALID): -experimental-feature -no-codegen -DCOUNT=-1
-//DIAGNOSTIC_TEST:SIMPLE(filecheck=INVALID): -experimental-feature -no-codegen -DCOUNT=16
-//DIAGNOSTIC_TEST:SIMPLE(filecheck=INVALID): -experimental-feature -no-codegen -DCOUNT=17 -DSHARED
+//TEST:SIMPLE: -experimental-feature -no-codegen -DCOUNT=16
+//TEST:SIMPLE: -experimental-feature -no-codegen -DCOUNT=32 -DSHARED
 //TEST:SIMPLE: -experimental-feature -no-codegen -DCOUNT=15
 //TEST:SIMPLE: -experimental-feature -no-codegen -DCOUNT=16 -DSHARED
 //DIAGNOSTIC_TEST:SIMPLE(filecheck=INVALID): -experimental-feature -entry main -target hlsl -DHOLDER -DCOUNT=0
 //DIAGNOSTIC_TEST:SIMPLE(filecheck=INVALID): -experimental-feature -entry main -target spirv -emit-spirv-directly -DHOLDER -DCOUNT=0
 //DIAGNOSTIC_TEST:SIMPLE(filecheck=INVALID): -experimental-feature -entry main -target cuda -DHOLDER -DCOUNT=0
 //DIAGNOSTIC_TEST:SIMPLE(filecheck=INVALID): -experimental-feature -entry main -target metal -DHOLDER -DCOUNT=0
-//DIAGNOSTIC_TEST:SIMPLE(filecheck=INVALID): -experimental-feature -entry main -target hlsl -DHOLDER -DCOUNT=16
-//DIAGNOSTIC_TEST:SIMPLE(filecheck=INVALID): -experimental-feature -entry main -target spirv -emit-spirv-directly -DHOLDER -DCOUNT=16
-//DIAGNOSTIC_TEST:SIMPLE(filecheck=INVALID): -experimental-feature -entry main -target cuda -DHOLDER -DCOUNT=16
-//DIAGNOSTIC_TEST:SIMPLE(filecheck=INVALID): -experimental-feature -entry main -target metal -DHOLDER -DCOUNT=16
-//DIAGNOSTIC_TEST:SIMPLE(filecheck=INVALID): -experimental-feature -entry main -target hlsl -DHOLDER -DCOUNT=17 -DSHARED
-//DIAGNOSTIC_TEST:SIMPLE(filecheck=INVALID): -experimental-feature -entry main -target spirv -emit-spirv-directly -DHOLDER -DCOUNT=17 -DSHARED
-//DIAGNOSTIC_TEST:SIMPLE(filecheck=INVALID): -experimental-feature -entry main -target cuda -DHOLDER -DCOUNT=17 -DSHARED
-//DIAGNOSTIC_TEST:SIMPLE(filecheck=INVALID): -experimental-feature -entry main -target metal -DHOLDER -DCOUNT=17 -DSHARED
+//DIAGNOSTIC_TEST:SIMPLE(filecheck=INVALID): -experimental-feature -entry main -target hlsl -DHOLDER -DCOUNT=-1
+//DIAGNOSTIC_TEST:SIMPLE(filecheck=INVALID): -experimental-feature -entry main -target metal -DHOLDER -DCOUNT=-1
+//DIAGNOSTIC_TEST:SIMPLE(filecheck=NATIVE_LIMIT): -experimental-feature -entry main -target hlsl -DHOLDER -DCOUNT=16
+//DIAGNOSTIC_TEST:SIMPLE(filecheck=NATIVE_LIMIT): -experimental-feature -entry main -target spirv -emit-spirv-directly -DHOLDER -DCOUNT=16
+//DIAGNOSTIC_TEST:SIMPLE(filecheck=NATIVE_LIMIT): -experimental-feature -entry main -target cuda -DHOLDER -DCOUNT=16
+//DIAGNOSTIC_TEST:SIMPLE(filecheck=NATIVE_LIMIT): -experimental-feature -entry main -target spirv -emit-spirv-directly -capability raytracing_motionblur -DHOLDER -DCOUNT=16 -DMOTION
+//TEST:SIMPLE(filecheck=VALID): -experimental-feature -entry main -target metal -DHOLDER -DCOUNT=16
+//DIAGNOSTIC_TEST:SIMPLE(filecheck=NATIVE_LIMIT): -experimental-feature -entry main -target hlsl -DHOLDER -DCOUNT=17 -DSHARED
+//DIAGNOSTIC_TEST:SIMPLE(filecheck=NATIVE_LIMIT): -experimental-feature -entry main -target spirv -emit-spirv-directly -DHOLDER -DCOUNT=17 -DSHARED
+//DIAGNOSTIC_TEST:SIMPLE(filecheck=NATIVE_LIMIT): -experimental-feature -entry main -target cuda -DHOLDER -DCOUNT=17 -DSHARED
+//TEST:SIMPLE(filecheck=VALID): -experimental-feature -entry main -target metal -DHOLDER -DCOUNT=32 -DSHARED
 //TEST:SIMPLE(filecheck=VALID): -experimental-feature -entry main -target hlsl -DHOLDER -DCOUNT=16 -DSHARED
 //TEST:SIMPLE(filecheck=VALID): -experimental-feature -entry main -target spirv -emit-spirv-directly -DHOLDER -DCOUNT=16 -DSHARED
 //TEST:SIMPLE(filecheck=VALID): -experimental-feature -entry main -target cuda -DHOLDER -DCOUNT=16 -DSHARED
 //TEST:SIMPLE(filecheck=VALID): -experimental-feature -entry main -target metal -DHOLDER -DCOUNT=16 -DSHARED
 //DIAGNOSTIC_TEST:SIMPLE(filecheck=INVALID): -experimental-feature -entry main -target metal -DHOLDER -DCOUNT=0 -DUNUSED
+//TEST:SIMPLE(filecheck=VALID): -experimental-feature -entry main -target metal -profile metallib_2_4 -DHOLDER -DCOUNT=32 -DPAYLOAD_FREE
+//TEST:SIMPLE(filecheck=VALID): -experimental-feature -entry main -target metal -profile metallib_2_4 -DHOLDER -DCOUNT=32 -DPAYLOAD_FREE -DMOTION
 
 import slang.raytracing.portable;
 
 struct TraceContext : rt::ITraceContext
 {
     typealias AccelerationStructure = rt::AccelerationStructure;
+#ifdef MOTION
+    typealias Motion = rt::InstanceMotion;
+#else
     typealias Motion = rt::NoMotion;
+#endif
 }
 
 struct Schema : rt::ITraceProgramSchema
@@ -40,7 +49,8 @@ struct Schema : rt::ITraceProgramSchema
 
 #ifdef HOLDER
 // This field starts with symbolic count and layout. A trace using the specialized containing type
-// must validate the descriptor. Metal also retains and validates an unused bound descriptor.
+// must enforce its target's limits. Classic Metal IFT traversal has no four-bit count limit.
+// An unused bound descriptor still requires a positive count on Metal.
 struct Holder<let N : int, let Layout : rt::HitRecordLayout>
 {
     rt::TraceProgramDescriptor<Schema, N, Layout> program;
@@ -58,7 +68,11 @@ void main()
 #ifndef UNUSED
     uint payload = 0;
     rt::RayTracer<Schema> tracer;
+#ifdef PAYLOAD_FREE
+    tracer.trace({}, scene, holder.program);
+#else
     tracer.trace({}, scene, holder.program, payload);
+#endif
     output[0] = payload;
 #endif
 }
@@ -73,6 +87,7 @@ typealias Program<let N : int> = rt::TraceProgramDescriptor<Schema, N>;
 Program<COUNT> program;
 #endif
 
-// INVALID: TraceProgramDescriptor requires rayTypeCount in [1, 15] for PerGeometry or [1, 16] for SharedAcrossGeometries
+// INVALID: TraceProgramDescriptor requires a positive rayTypeCount
+// NATIVE_LIMIT: Native trace indexing requires rayTypeCount <= 15 for PerGeometry or <= 16 for SharedAcrossGeometries
 
 // VALID: result code = 0
