@@ -116,7 +116,7 @@ struct Schema : rt::ITraceProgramSchema
 }
 
 rt::AccelerationStructure scene;
-rt::TraceProgramDescriptor<Schema> program;
+rt::TraceProgramDescriptor<Schema, 1> program;
 uniform uint rayFlags;
 
 [shader("raygeneration")]
@@ -127,7 +127,6 @@ void RayGeneration()
     ray.ray.TMax = 10;
     ray.rayFlags = rayFlags;
     ray.instanceMask = 255;
-    ray.sbtStride = 1;
     uint payload = 0;
     rt::RayTracer<Schema> tracer;
     tracer.trace(ray, scene, program, payload);

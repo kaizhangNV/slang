@@ -45,7 +45,7 @@ struct Schema : rt::ITraceProgramSchema
     typealias CallableShaders = rt::CallableShaderList<Callable>;
 }
 
-rt::TraceProgramDescriptor<Schema> program;
+rt::TraceProgramDescriptor<Schema, 1> program;
 RWStructuredBuffer<uint> output;
 uniform uint callableRecordIndex;
 

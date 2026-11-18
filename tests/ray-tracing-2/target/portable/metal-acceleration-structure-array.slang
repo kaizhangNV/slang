@@ -23,7 +23,7 @@ struct Parameters
 }
 
 ParameterBlock<Parameters> parameters;
-rt::TraceProgramDescriptor<Schema> program;
+rt::TraceProgramDescriptor<Schema, 1> program;
 RWStructuredBuffer<uint> output;
 
 // Each array element is one argument-buffer pointer containing the native structure and its

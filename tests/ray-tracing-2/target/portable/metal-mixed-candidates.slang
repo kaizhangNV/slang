@@ -73,7 +73,7 @@ struct Schema : rt::ITraceProgramSchema
 }
 
 rt::AccelerationStructure scene;
-rt::TraceProgramDescriptor<Schema> program;
+rt::TraceProgramDescriptor<Schema, 1> program;
 RWStructuredBuffer<uint> output;
 
 // Only the procedural source reads hitKind. A shared candidate requirement can nevertheless
@@ -85,7 +85,6 @@ void RayGeneration()
     ray.ray.Direction = float3(0, 0, 1);
     ray.ray.TMax = 10;
     ray.instanceMask = 255;
-    ray.sbtStride = 1;
     uint payload = 0;
     rt::RayTracer<Schema> tracer;
     tracer.trace(ray, scene, program, payload);

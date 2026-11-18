@@ -981,7 +981,7 @@ DeclRef<FuncDecl> findFunctionDeclByName(
 // Is a entry pointer parmaeter of `type` always a uniform parameter?
 bool isUniformParameterType(Type* type)
 {
-    if (as<TraceProgramDescriptorType>(type))
+    if (as<TraceProgramDescriptorTypeBase>(type))
         return true;
     if (as<ResourceType>(type))
         return true;

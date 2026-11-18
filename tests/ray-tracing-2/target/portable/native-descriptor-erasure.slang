@@ -22,7 +22,7 @@ struct Schema : rt::ITraceProgramSchema
 
 struct Parameters
 {
-    rt::TraceProgramDescriptor<Schema> program;
+    rt::TraceProgramDescriptor<Schema, 1> program;
     float scale;
 }
 

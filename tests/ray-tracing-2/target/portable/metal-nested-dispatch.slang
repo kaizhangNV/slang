@@ -35,7 +35,7 @@ struct CallableSchema : rt::ITraceProgramSchema
     typealias CallableShaders = rt::CallableShaderList<Callable>;
 }
 
-rt::TraceProgramDescriptor<CallableSchema> callableProgram;
+rt::TraceProgramDescriptor<CallableSchema, 1> callableProgram;
 
 [noinline]
 void callHelper(inout uint value)
@@ -68,7 +68,7 @@ struct InnerSchema : rt::ITraceProgramSchema
     typealias CallableShaders = rt::EmptyCallableShaderList;
 }
 
-rt::TraceProgramDescriptor<InnerSchema> innerProgram;
+rt::TraceProgramDescriptor<InnerSchema, 1> innerProgram;
 rt::AccelerationStructure scene;
 
 [noinline]
@@ -115,7 +115,7 @@ struct OuterSchema : rt::ITraceProgramSchema
     typealias CallableShaders = rt::EmptyCallableShaderList;
 }
 
-rt::TraceProgramDescriptor<OuterSchema> outerProgram;
+rt::TraceProgramDescriptor<OuterSchema, 1> outerProgram;
 RWStructuredBuffer<uint> output;
 
 // Only the innermost callable reads launch builtins. Each independently compiled stage uses
@@ -128,7 +128,6 @@ void RayGeneration()
     ray.ray.Direction = float3(0, 0, 1);
     ray.ray.TMax = 10;
     ray.instanceMask = 255;
-    ray.sbtStride = 1;
     uint payload = 1;
     rt::RayTracer<OuterSchema> tracer;
     tracer.trace(ray, scene, outerProgram, payload);

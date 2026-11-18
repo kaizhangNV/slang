@@ -2958,6 +2958,11 @@ struct ValLoweringVisitor : ValVisitor<ValLoweringVisitor, LoweredValInfo, Lower
                 [](Type* associatedType, void* userData)
                 { return lowerType(static_cast<IRGenContext*>(userData), associatedType); },
                 context);
+            return PortableRT::lowerTraceProgramDescriptorType(
+                getBuilder(),
+                descriptorType,
+                operands,
+                context->getSink());
         }
         return getBuilder()->getType(
             op,

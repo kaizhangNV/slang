@@ -72,4 +72,4 @@ struct Schema : rt::ITraceProgramSchema
     typealias CallableShaders = rt::EmptyCallableShaderList;
 }
 
-rt::TraceProgramDescriptor<Schema> program;
+rt::TraceProgramDescriptor<Schema, 1> program;

@@ -19,9 +19,10 @@ namespace
 using namespace PortableRT;
 using namespace PortableRT::Metal;
 
-/// Stores compiler-side data for lowering one concrete TraceProgramDescriptor<Schema> to Metal.
+/// Stores compiler-side data for lowering one concrete TraceProgramDescriptor to Metal.
 /// Includes the resolved schema, derived settings, and generated IR types and helpers.
 /// All uses of that descriptor type share resource types, traversal settings, and record strides.
+/// The schema, ray-type count, and hit-record layout all participate in the source type's identity.
 /// Each Payload type gets its own ray-data storage; all of them start with the same header.
 ///
 /// Consider a schema with two procedural hit groups using PayloadA/AttributesA and
@@ -109,7 +110,9 @@ using namespace PortableRT::Metal;
 ///
 /// lowerTrace creates one of these per-ray values, copies the caller's Payload into it, and
 /// fills its header from the trace's descriptor, AS and arguments. The records pointer identifies
-/// this trace's records buffer; sbtOffset and sbtStride select hit records within that buffer:
+/// this trace's records buffer; sbtOffset and sbtStride select hit records within that buffer.
+/// The source rayType supplies sbtOffset. The descriptor supplies the constant sbtStride: its
+/// ray-type count for PerGeometry, or zero for SharedAcrossGeometries.
 ///
 ///     hitSlot = instanceContribution + geometryIndex * sbtStride + sbtOffset
 ///     record = byteBase(records) + records[0] + hitSlot * hitStride

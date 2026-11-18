@@ -941,4 +941,5 @@ return {
 	["Layout.TypeLayout.traceProgramDescriptorTypeLayout"] = 981,
 	["Type.UntypedBufferResourceType.MetalAccelerationStructure"] = 982,
 	["castToNativeAccelerationStructure"] = 983,
+	["Type.FlexibleTraceProgramDescriptor"] = 984,
 }

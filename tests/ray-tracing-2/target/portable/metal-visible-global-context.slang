@@ -61,7 +61,7 @@ struct Schema : rt::ITraceProgramSchema
 uint traceIndirect(
     rt::RayTraversalDesc desc,
     rt::AccelerationStructure scene,
-    rt::TraceProgramDescriptor<Schema> descriptor)
+    rt::TraceProgramDescriptor<Schema, 1> descriptor)
 {
     uint payload = 0;
     rt::RayTracer<Schema> tracer;
@@ -70,7 +70,7 @@ uint traceIndirect(
 }
 
 rt::AccelerationStructure scene;
-rt::TraceProgramDescriptor<Schema> descriptor;
+rt::TraceProgramDescriptor<Schema, 1> descriptor;
 RWStructuredBuffer<uint> output;
 uint selectedMiss;
 

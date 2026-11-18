@@ -124,9 +124,10 @@ void addShaderListDecoration(
     void* userData);
 
 /// Appends the descriptor schema's acceleration-structure, motion, and three list types to
-/// operands, which already contains the lowered schema and its conformance witness. The callback
-/// lowers each checked associated type in the descriptor's generic environment. Construct the IR
-/// descriptor after this call so its ordinary operands retain all seven values from the start.
+/// operands, which already contains the schema, count, layout, and conformance witness. The
+/// callback lowers each checked associated type in the descriptor's generic environment. Construct
+/// the IR descriptor after this call so its ordinary operands retain all nine values from the
+/// start.
 void appendTraceProgramDescriptorOperands(
     Linkage* linkage,
     ASTBuilder* astBuilder,
@@ -134,6 +135,14 @@ void appendTraceProgramDescriptorOperands(
     List<IRInst*>& operands,
     IRType* (*lowerType)(Type*, void*),
     void* userData);
+
+/// Constructs the fixed descriptor type and validates its indexing arguments. Symbolic arguments
+/// retain a static assertion beside the type so ordinary specialization checks their final values.
+IRType* lowerTraceProgramDescriptorType(
+    IRBuilder* builder,
+    TraceProgramDescriptorType* sourceType,
+    const List<IRInst*>& operands,
+    DiagnosticSink* sink);
 
 /// Returns this executable interface's `invoke` requirement, or null for other interfaces.
 FunctionDeclBase* getStageInvokeRequirement(InterfaceDecl* interfaceDecl);

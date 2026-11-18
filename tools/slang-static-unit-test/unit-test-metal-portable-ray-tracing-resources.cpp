@@ -19,6 +19,8 @@ static IRTraceProgramDescriptorType* createDescriptorType(IRBuilder& builder)
     auto unusedSchemaType = builder.getVoidType();
     IRInst* operands[] = {
         schema,
+        builder.getIntValue(builder.getIntType(), 1),
+        builder.getIntValue(builder.getIntType(), 0),
         witness,
         unusedSchemaType,
         unusedSchemaType,

@@ -33,7 +33,7 @@ struct Schema<A : rt::IAccelerationStructure> : rt::ITraceProgramSchema
 
 void traceRays<A : rt::IAccelerationStructure>(
     A scene,
-    rt::TraceProgramDescriptor<Schema<A>> descriptor,
+    rt::TraceProgramDescriptor<Schema<A>, 1> descriptor,
     inout Payload payload)
 {
     rt::RayTracer<Schema<A>> tracer;
@@ -55,7 +55,7 @@ struct MissContext : rt::IPayloadContext
 }
 
 Scene scene;
-rt::TraceProgramDescriptor<Schema<Scene>> descriptor;
+rt::TraceProgramDescriptor<Schema<Scene>, 1> descriptor;
 
 struct TestMiss : rt::IMissShader
 {

@@ -38,7 +38,7 @@ struct TestSchema : rt::ITraceProgramSchema
     typealias CallableShaders = rt::EmptyCallableShaderList;
 }
 
-rt::TraceProgramDescriptor<TestSchema> program;
+rt::TraceProgramDescriptor<TestSchema, 1> program;
 
 void callCallableFromHelper()
 {

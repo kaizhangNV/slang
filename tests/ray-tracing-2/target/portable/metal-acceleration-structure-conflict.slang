@@ -19,8 +19,8 @@ struct Schema<M : rt::IRayMotion> : rt::ITraceProgramSchema
 
 rt::AccelerationStructure staticScene;
 rt::AccelerationStructure movingScene;
-rt::TraceProgramDescriptor<Schema<rt::NoMotion>> staticProgram;
-rt::TraceProgramDescriptor<Schema<rt::PrimitiveMotion>> movingProgram;
+rt::TraceProgramDescriptor<Schema<rt::NoMotion>, 1> staticProgram;
+rt::TraceProgramDescriptor<Schema<rt::PrimitiveMotion>, 1> movingProgram;
 RWStructuredBuffer<uint> output;
 
 [shader("raygeneration")]
@@ -30,7 +30,6 @@ void RayGeneration()
     ray.ray.Direction = float3(0, 0, 1);
     ray.ray.TMax = 10;
     ray.instanceMask = 255;
-    ray.sbtStride = 1;
     ray.time = 0.5;
     uint payload = 17;
     rt::RayTracer<Schema<rt::NoMotion>> staticTracer;

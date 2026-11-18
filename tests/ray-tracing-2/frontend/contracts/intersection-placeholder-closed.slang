@@ -47,7 +47,7 @@ struct Schema : rt::ITraceProgramSchema
 }
 
 rt::AccelerationStructure scene;
-rt::TraceProgramDescriptor<Schema> descriptor;
+rt::TraceProgramDescriptor<Schema, 1> descriptor;
 
 [shader("raygeneration")]
 void main()

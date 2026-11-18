@@ -79,7 +79,7 @@ struct Schema : rt::ITraceProgramSchema
         rt::CallableShaderList<UintCallable, FloatCallable, EmptyCallable, VoidCallable>;
 }
 
-rt::TraceProgramDescriptor<Schema> program;
+rt::TraceProgramDescriptor<Schema, 1> program;
 
 interface IDispatch
 {

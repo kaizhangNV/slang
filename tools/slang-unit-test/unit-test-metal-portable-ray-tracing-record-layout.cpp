@@ -62,7 +62,7 @@ SLANG_UNIT_TEST(metalPortableRayTracingRecordLayoutAndNestedDescriptors)
             typealias MissShaders = rt::MissShaderList<Miss<N>, BufferOnlyMiss>;
             typealias CallableShaders = rt::EmptyCallableShaderList;
         }
-        struct Holder<let N : int> { rt::TraceProgramDescriptor<Schema<N>> descriptor; }
+        struct Holder<let N : int> { rt::TraceProgramDescriptor<Schema<N>, 1> descriptor; }
         struct Resources { Holder<1> first[2]; Holder<2> second; }
         ParameterBlock<Resources> resources;
         rt::AccelerationStructure scene;

@@ -770,19 +770,32 @@ local insts = {
 			},
 			{
 				TraceProgramDescriptor = {
-					-- An opaque structural ray-tracing program descriptor. The schema and its
-					-- conformance identify the program; the remaining operands retain the types
+					-- An opaque structural ray-tracing program descriptor. The schema, fixed
+					-- count/layout, and conformance identify it; the remaining operands retain types
 					-- needed for backend synthesis. These may begin as associated-type lookups
 					-- and become concrete types after specialization. They add no runtime fields.
 					struct_name = "TraceProgramDescriptorType",
 					operands = {
 						{ "schema", "IRType" },
+						{ "rayTypeCount" },
+						{ "hitRecordLayout" },
 						{ "schemaWitness" },
 						{ "accelerationStructureType", "IRType" },
 						{ "motionType", "IRType" },
 						{ "hitGroupsType", "IRType" },
 						{ "missShadersType", "IRType" },
 						{ "callableShadersType", "IRType" },
+					},
+					hoistable = true,
+				},
+			},
+			{
+				FlexibleTraceProgramDescriptor = {
+					-- Declaration-only resource; executable lowering is not implemented yet.
+					struct_name = "FlexibleTraceProgramDescriptorType",
+					operands = {
+						{ "schema", "IRType" },
+						{ "schemaWitness" },
 					},
 					hoistable = true,
 				},

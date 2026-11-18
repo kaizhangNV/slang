@@ -54,7 +54,7 @@ struct Parameters
 }
 
 ParameterBlock<Parameters> parameters;
-rt::TraceProgramDescriptor<Schema> program;
+rt::TraceProgramDescriptor<Schema, 1> program;
 RWStructuredBuffer<uint> output;
 
 // The trace operand is not the resource declaration: it crosses a nested ParameterBlock,
@@ -81,7 +81,6 @@ void RayGeneration()
     ray.ray.Direction = float3(0, 0, 1);
     ray.ray.TMax = 10;
     ray.instanceMask = 255;
-    ray.sbtStride = 1;
     ray.time = 0.5;
     uint payload = 17;
     rt::RayTracer<Schema> tracer;

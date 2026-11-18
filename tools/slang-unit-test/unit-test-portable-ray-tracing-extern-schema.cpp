@@ -20,7 +20,7 @@ SLANG_UNIT_TEST(portableRayTracingExternSchemaProjections)
             typealias CallableData = uint;
             typealias Record = void;
         }
-        rt::TraceProgramDescriptor<ExternalSchema> program;
+        rt::TraceProgramDescriptor<ExternalSchema, 1> program;
         uniform uint callableIndex;
         RWStructuredBuffer<uint> output;
 
