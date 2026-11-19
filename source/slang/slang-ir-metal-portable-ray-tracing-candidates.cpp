@@ -721,7 +721,7 @@ void collectBindings(
                 IRInst* value = nullptr;
                 if (op == kIROp_PortableRTGetPayload)
                 {
-                    value = getStageDataReference(
+                    value = recoverStageDataPointer(
                         builder,
                         loadField(builder, context, state.payload),
                         cast<IRPtrTypeBase>(type)->getValueType());

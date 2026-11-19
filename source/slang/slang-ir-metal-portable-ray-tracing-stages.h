@@ -95,7 +95,7 @@ IRInst* getRayPayloadReference(
 /// Builds a pointer to dataType from the thread void* passed through a Metal function table.
 /// Nonempty data keeps its existing address and storage. Void returns a typed null pointer;
 /// an empty struct gets a typed local that later empty-type legalization removes.
-IRInst* getStageDataReference(IRBuilder& builder, IRInst* erasedAddress, IRType* dataType);
+IRInst* recoverStageDataPointer(IRBuilder& builder, IRInst* untypedDataPointer, IRType* dataType);
 
 /// Records which wrapper value supplies an input-read instruction with a given opcode and type.
 /// For example, {MetalRTGetCurrentDistance, float, distanceValue} tells lowerVisibleStageInputs

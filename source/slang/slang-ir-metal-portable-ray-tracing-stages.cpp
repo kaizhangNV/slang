@@ -95,12 +95,13 @@ IRType* getRayPayloadStorageType(IRBuilder& builder, IRType* payloadType)
 ///     // Selected miss adapter receives &context as invocation and restores the payload type.
 ///     thread Payload* typedPayload = (thread Payload*)invocation->payload;
 ///
-/// `erasedAddress` is the loaded invocation->payload field, and `dataType` is Payload. The returned
-/// pointer lets later input lowering pass the same payload storage to invoke and its helpers.
+/// `untypedDataPointer` is the loaded invocation->payload field, and `dataType` is Payload.
+/// The returned pointer lets later input lowering pass the same payload storage to invoke and
+/// its helpers.
 /// For nonempty data, the caller must supply storage of the matching type in the thread address
 /// space; this function does not discover or validate the storage's type at runtime.
-/// Void and empty structs need no transported bytes, so those cases ignore erasedAddress.
-IRInst* getStageDataReference(IRBuilder& builder, IRInst* erasedAddress, IRType* dataType)
+/// Void and empty structs need no transported bytes, so those cases ignore untypedDataPointer.
+IRInst* recoverStageDataPointer(IRBuilder& builder, IRInst* untypedDataPointer, IRType* dataType)
 {
     if (as<IRVoidType>(dataType))
     {
@@ -113,7 +114,7 @@ IRInst* getStageDataReference(IRBuilder& builder, IRInst* erasedAddress, IRType*
     {
         // Consider Payload = ApplicationEmpty, where `struct ApplicationEmpty {}` has no fields.
         // Helpers still expect a reference to that specific struct, so supply an initialized
-        // local of the correct type. There are no payload bytes to recover from erasedAddress.
+        // local of the correct type. There are no payload bytes to recover from untypedDataPointer.
         // Later empty-type legalization removes this local and the empty arguments using it.
         auto value = builder.emitVar(dataType);
         builder.emitStore(value, builder.emitDefaultConstruct(dataType));
@@ -121,13 +122,13 @@ IRInst* getStageDataReference(IRBuilder& builder, IRInst* erasedAddress, IRType*
     }
     // Nonempty data needs an address operand. This checks the presence of the IR instruction,
     // not whether the pointer it represents is non-null at runtime.
-    SLANG_RELEASE_ASSERT(erasedAddress);
+    SLANG_RELEASE_ASSERT(untypedDataPointer);
     // Cast thread void* to thread dataType*. Only the pointer's pointee type changes; its
     // address and address space stay the same. This emits no load, store, or copy of the data.
     // For example, writes through the recovered Payload* update the caller's original payload.
     return builder.emitBitCast(
         builder.getPtrType(dataType, AddressSpace::ThreadLocal),
-        erasedAddress);
+        untypedDataPointer);
 }
 
 IRInst* getRayPayloadReference(
@@ -140,7 +141,7 @@ IRInst* getRayPayloadReference(
         return builder.emitFieldAddress(rayData, carrier.payloadKey);
 
     SLANG_RELEASE_ASSERT(isEmptyType(payloadType));
-    return getStageDataReference(builder, nullptr, payloadType);
+    return recoverStageDataPointer(builder, nullptr, payloadType);
 }
 
 namespace
@@ -544,9 +545,24 @@ IRFuncType* getInvocationFunctionSignature(IRBuilder& builder, IRStructType* con
     return builder.getFuncType(1, &parameter, builder.getVoidType());
 }
 
-/// Loads invocation fields on demand. The field's role handles compound properties such as
-/// objectSpaceRay; its getter opcode handles direct properties such as distance. Both identify
-/// the same canonical field key, so constructing a wrapper needs no parallel parameter maps.
+/// Emits IR loads from the invocation context passed to a Metal visible-function wrapper.
+/// An invocation context is a compiler-generated per-thread struct containing payload/Record
+/// addresses, built-in values, and resource pointers for the current shader invocation. Its
+/// layout is fixed for each stage so separately compiled callers and wrappers agree.
+///
+/// Consider a Miss::invoke that reads input.distance. The generated code is conceptually:
+///     // Caller: fill the context and pass its address through the visible-function table.
+///     MissInvocationContext context = { payloadAddress, rayTMax, ... };
+///     missFunctions[index](&context);
+///     // Selected wrapper: read the field needed by the source shader.
+///     void miss(thread MissInvocationContext* invocation)
+///     {
+///         Miss_invoke(invocation->distance, ...);
+///     }
+///
+/// This helper emits the field-address/load instructions for those wrapper reads. A getter
+/// opcode selects a directly mapped field such as distance; a field role selects components
+/// used to build values such as objectSpaceRay.
 struct InvocationContextReader
 {
     IRBuilder& builder;
@@ -616,6 +632,7 @@ VisibleAdapter createVisibleAdapter(
     builder.addExportDecoration(result.function, symbolName);
     builder.addExternCppDecoration(result.function, symbolName);
     builder.addKeepAliveDecoration(result.function);
+    // Mark the wrapper [[visible]] and record its stage and function-table signature.
     IRInst* tableOperands[] = {
         functionType,
         builder.getIntValue(builder.getIntType(), IRIntegerValue(stage.stage))};
@@ -634,8 +651,9 @@ VisibleAdapter createVisibleAdapter(
     InvocationContextReader inputs{builder, context, contextType};
     HashSet<KeyValuePair<IROp, IRType*>> seen;
 
-    // Nested TraceRay/CallShader lowering can introduce launch getters after this body scan.
-    // Bind those two fields now so later helper forwarding still uses this invocation's launch.
+    // Lowering trace/callShader later will require us to pass the dispatch index and dimensions,
+    // even though the current invoke doesn't read them explicitly, so we also need to save those
+    // values now.
     IROp launchOps[] = {kIROp_MetalRTGetDispatchRaysIndex, kIROp_MetalRTGetDispatchRaysDimensions};
     for (auto op : launchOps)
     {
@@ -661,9 +679,9 @@ VisibleAdapter createVisibleAdapter(
         if (!seen.add({op, type}))
             continue;
         IRInst* value = nullptr;
-        // Recover a typed pointer to the caller's payload so writes update the same storage.
+        // The caller passes payload/callable data as void*. Recover the pointer's concrete type.
         if (op == kIROp_PortableRTGetPayload || op == kIROp_PortableRTGetCallableData)
-            value = getStageDataReference(
+            value = recoverStageDataPointer(
                 builder,
                 inputs.load(MetalRTInvocationField::Data),
                 cast<IRPtrTypeBase>(type)->getValueType());
