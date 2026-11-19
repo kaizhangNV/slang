@@ -32,19 +32,40 @@ struct CandidateResult
     bool hasDistance = false;
 };
 
-/// This layout is a compiler ABI shared by independently compiled stages. Schema-specific
-/// payload and attribute types are represented only by pointers into the glue's thread storage.
-/// In particular, these pointers are never stored in Metal's ray_data address space.
-struct CandidateState
+/// Describes the generated struct holding shader inputs and mutable hit results during one
+/// native Metal intersection callback. A candidate is a potential ray/geometry hit: Metal
+/// supplies it for triangles/curves, while an Intersection shader proposes it with reportHit.
+///
+/// The native callback allocates this struct in thread-local storage and passes its address to
+/// the stage implementation. A procedural Intersection shares that same instance with all its
+/// reportHit calls and the AnyHit shaders they invoke. It carries payload/Record addresses,
+/// built-in input values, the hit currently being considered, and the last accepted report.
+///
+/// For example, suppose Intersection reports a hit at distance 5 that AnyHit accepts, then a hit
+/// at distance 3 that AnyHit rejects. The candidate fields describe the second report, but
+/// currentMax and the committed attributes/hit kind still describe the accepted hit at 5.
+/// The callback uses those committed values when returning its result to Metal.
+///
+/// These C++ members hold the IR type and field keys used to generate accesses to that struct.
+/// Its fixed layout lets separately compiled Intersection and AnyHit functions share the data.
+/// Payload and attribute pointers refer to callback-owned thread storage; the Record pointer
+/// refers to device storage. The struct containing these pointers stays in thread storage.
+struct CandidateStateLayout
 {
     IRStructType* type = nullptr;
     IRStructKey* payload = nullptr;
     IRStructKey* record = nullptr;
+
+    // Procedural reports accepted by this callback; currentMax starts at Metal's max_distance.
     IRStructKey* accepted = nullptr;
     IRStructKey* currentMax = nullptr;
+
+    // The proposed hit exposed to AnyHit, which may still reject it.
     IRStructKey* distance = nullptr;
     IRStructKey* hitKind = nullptr;
     IRStructKey* attributes = nullptr;
+
+    // Storage for the last accepted procedural report, preserved when a later report is rejected.
     IRStructKey* committedAttributes = nullptr;
     IRStructKey* committedHitKind = nullptr;
     IRStructKey* minDistance = nullptr;
@@ -54,6 +75,8 @@ struct CandidateState
     IRStructKey* instanceIndices = nullptr;
     IRStructKey* instanceIDs = nullptr;
     IRStructKey* instanceCount = nullptr;
+
+    // Maps an input getter opcode to the struct field that supplies its value.
     Dictionary<IROp, IRStructKey*> inputs;
 };
 
@@ -203,11 +226,14 @@ void storeField(IRBuilder& builder, IRInst* state, IRStructKey* key, IRInst* val
     builder.emitStore(builder.emitFieldAddress(state, key), value);
 }
 
-CandidateState createState(IRModule* module)
+/// Defines the IR struct layout shared by native callbacks and stage implementations.
+/// This creates the type and field declarations; createNativeCandidateCallback emits the
+/// thread-local runtime instance and passes its address through the generated call chain.
+CandidateStateLayout createCandidateStateLayout(IRModule* module)
 {
     IRBuilder builder(module);
     builder.setInsertInto(module->getModuleInst());
-    CandidateState state;
+    CandidateStateLayout state;
     state.type = builder.createStructType();
     builder.addNameHintDecoration(state.type, toSlice("PortableRTCandidateState"));
     auto pointer = builder.getPtrType(builder.getVoidType(), AddressSpace::ThreadLocal);
@@ -355,7 +381,7 @@ void lowerMutableInputs(
     IRModule* module,
     const List<IRFunc*>& functions,
     PortableRTInvocationParameter& parameter,
-    const CandidateState& state,
+    const CandidateStateLayout& state,
     bool intersection)
 {
     List<IRInst*> operations;
@@ -567,7 +593,7 @@ IRFuncType* getIntersectionBodySignature(IRBuilder& builder)
 /// shader but using different any-hit filters: the caller supplies the table and index, so the
 /// same compiled ReportHit calls either filter. Rejection preserves payload writes but leaves
 /// committed attributes and the accepted distance unchanged.
-IRFunc* createReportHit(IRModule* module, const CandidateState& state, IRType* attributesType)
+IRFunc* createReportHit(IRModule* module, const CandidateStateLayout& state, IRType* attributesType)
 {
     IRBuilder builder(module);
     builder.setInsertInto(module->getModuleInst());
@@ -694,7 +720,7 @@ void collectBindings(
     IRModule* module,
     VisibleAdapter& adapter,
     IRInst* context,
-    const CandidateState& state)
+    const CandidateStateLayout& state)
 {
     IRBuilder builder(module);
     builder.setInsertAfter(context);
@@ -749,7 +775,7 @@ void initializeInstancePath(
     IRBuilder& builder,
     IRModule* module,
     IRInst* context,
-    const CandidateState& state,
+    const CandidateStateLayout& state,
     IRInst* indices,
     IRInst* ids,
     IRIntegerValue maxLevels)
@@ -869,10 +895,10 @@ static VisibleAdapter createCandidateImplementation(
     SLANG_RELEASE_ASSERT(stage.invoke && stage.input);
     SLANG_RELEASE_ASSERT(stage.stage == Stage::AnyHit || stage.stage == Stage::Intersection);
 
-    // Define the shared candidate-state layout and the callable signature. The native callback
+    // Define the shared candidate-state layout and the function signature. The native callback
     // supplies the state at runtime; this function returns a CandidateExit decision to its caller.
     bool intersection = stage.stage == Stage::Intersection;
-    auto state = createState(module);
+    auto state = createCandidateStateLayout(module);
     IRBuilder builder(module);
     builder.setInsertInto(module->getModuleInst());
     VisibleAdapter result;
@@ -1040,7 +1066,7 @@ static void createNativeCandidateCallback(
     IRFunc* contribution = nullptr;
     if (requirements.tags & UInt(MetalRTTag::Instancing))
         contribution = createInstanceContribution(module, instancePathType);
-    auto state = createState(module);
+    auto state = createCandidateStateLayout(module);
     builder.setInsertInto(module);
     auto function = builder.createFunc();
     builder.addNameHintDecoration(function, symbolName);
@@ -1078,6 +1104,7 @@ static void createNativeCandidateCallback(
     auto local = builder.emitVar(carrier.type);
     builder.emitStore(local, builder.emitLoad(rayData));
     auto localHeader = builder.emitFieldAddress(local, carrier.headerKey);
+    // Allocate the runtime state shared by this callback, its stage body and nested AnyHit calls.
     auto context = builder.emitVar(state.type);
     builder.emitStore(context, builder.emitDefaultConstruct(state.type));
     auto erasedPointer = getAnyHitFunctionSignature(builder)->getParamType(0);
