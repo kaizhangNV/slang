@@ -5,6 +5,7 @@
 #include "slang-ir-clone.h"
 #include "slang-ir-insts.h"
 #include "slang-ir-metal-portable-ray-tracing-context.h"
+#include "slang-ir-metal-portable-ray-tracing-target.h"
 #include "slang-ir-util.h"
 #include "slang-rich-diagnostics.h"
 #include "slang-target.h"
@@ -462,7 +463,7 @@ struct IntroduceExplicitGlobalContextPass
         {
             builder.setInsertBefore(dispatch);
             auto resources = getResourceContextForInst(builder, dispatch);
-            setDispatchResourceContext(builder, dispatch, resources);
+            setDispatchResourceContext(dispatch, resources);
         }
         for (auto request : m_resourceContextRequests)
         {
@@ -664,19 +665,16 @@ struct IntroduceExplicitGlobalContextPass
         return builder.emitBitCast(erasedType, resources);
     }
 
-    void setDispatchResourceContext(IRBuilder& builder, IRInst* dispatch, IRInst* resources)
+    void setDispatchResourceContext(IRInst* dispatch, IRInst* resources)
     {
         if (auto trace = as<IRMetalRTTraceDispatch>(dispatch))
         {
-            trace->setOperand(29, resources);
-            trace->setOperand(27, builder.getBoolValue(true));
-            trace->setOperand(28, builder.getBoolValue(true));
+            trace->setOperand(25, resources);
         }
         else
         {
             auto call = cast<IRMetalRTCallDispatch>(dispatch);
-            call->setOperand(13, resources);
-            call->setOperand(12, builder.getBoolValue(true));
+            call->setOperand(9, resources);
         }
     }
 
@@ -687,10 +685,7 @@ struct IntroduceExplicitGlobalContextPass
         for (auto dispatch : m_metalTableDispatches)
         {
             builder.setInsertBefore(dispatch);
-            setDispatchResourceContext(
-                builder,
-                dispatch,
-                builder.emitDefaultConstruct(pointerType));
+            setDispatchResourceContext(dispatch, builder.emitDefaultConstruct(pointerType));
         }
         for (auto request : m_resourceContextRequests)
         {
@@ -704,20 +699,45 @@ struct IntroduceExplicitGlobalContextPass
     // initializer pass has already placed the selected shader's initialization in this body.
     void createContextForVisibleFunction(IRFunc* function)
     {
-        IRParam* resourceParameter = nullptr;
-        for (auto parameter : function->getParams())
-            if (parameter->findDecoration<IRMetalRTGlobalResourceContextDecoration>())
-                resourceParameter = parameter;
-        SLANG_RELEASE_ASSERT(resourceParameter);
-
         IRBuilder builder(m_module);
         builder.setInsertBefore(function->getFirstBlock()->getFirstOrdinaryInst());
+        IRInst* resourcePointer = nullptr;
+        for (auto parameter : function->getParams())
+        {
+            // Candidate AnyHit receives the resource pointer directly. Post-traversal and
+            // callable stages receive it as a field of their fixed invocation context.
+            if (parameter->findDecoration<IRMetalRTGlobalResourceContextDecoration>())
+            {
+                resourcePointer = parameter;
+                break;
+            }
+            auto pointerType = as<IRPtrTypeBase>(parameter->getDataType());
+            auto contextType =
+                pointerType ? as<IRStructType>(pointerType->getValueType()) : nullptr;
+            if (!contextType)
+                continue;
+            for (auto field : contextType->getFields())
+            {
+                auto role = field->getKey()->findDecoration<IRMetalRTInvocationFieldDecoration>();
+                if (role && getIntVal(role->getRole()) ==
+                                IRIntegerValue(MetalRTInvocationField::GlobalResources))
+                {
+                    resourcePointer = builder.emitLoad(builder.emitFieldAddress(
+                        builder.getPtrType(field->getFieldType(), AddressSpace::ThreadLocal),
+                        parameter,
+                        field->getKey()));
+                    break;
+                }
+            }
+        }
+        SLANG_RELEASE_ASSERT(resourcePointer);
+
         auto privateContext = builder.emitVar(m_contextStructType);
         addKernelContextNameHint(privateContext);
         m_mapFuncToContextPtr.add(function, privateContext);
         if (m_resourceContextType)
         {
-            auto resources = builder.emitBitCast(m_resourceContextPtrType, resourceParameter);
+            auto resources = builder.emitBitCast(m_resourceContextPtrType, resourcePointer);
             auto field = builder.emitFieldAddress(
                 builder.getPtrType(m_resourceContextPtrType),
                 privateContext,

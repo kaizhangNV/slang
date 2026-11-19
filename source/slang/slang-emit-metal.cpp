@@ -467,8 +467,25 @@ void MetalSourceEmitter::emitAtomicSrcOperand(bool isImage, IRInst* inst)
     m_writer->emit(")");
 }
 
-// Emits a callable dispatch after lowering has fixed its table signature and record stride.
-// The runtime record chooses the function index independently from its application data.
+// Gets the context layout shared by a visible-function table and its separately compiled
+// receivers. Field roles, rather than positions, tell emission which invocation values to supply.
+static IRStructType* getMetalRTInvocationContextType(IRType* tableType)
+{
+    auto functionType =
+        cast<IRMetalVisibleFunctionTable>(unwrapDescriptorHandle(tableType))->getFunctionType();
+    SLANG_RELEASE_ASSERT(functionType->getParamCount() == 1);
+    return cast<IRStructType>(cast<IRPtrTypeBase>(functionType->getParamType(0))->getValueType());
+}
+
+static MetalRTInvocationField getMetalRTInvocationField(IRStructField* field)
+{
+    auto decoration = field->getKey()->findDecoration<IRMetalRTInvocationFieldDecoration>();
+    SLANG_RELEASE_ASSERT(decoration);
+    return MetalRTInvocationField(getIntVal(decoration->getRole()));
+}
+
+// Emits a callable dispatch after lowering has fixed its context layout and record stride.
+// The local context stays alive for the synchronous VFT call, including any nested dispatch.
 void MetalSourceEmitter::emitMetalRTCallDispatch(IRMetalRTCallDispatch* callShader)
 {
     auto descriptorResourcesType =
@@ -476,6 +493,7 @@ void MetalSourceEmitter::emitMetalRTCallDispatch(IRMetalRTCallDispatch* callShad
     auto callableFunctionsField = findStructField(
         cast<IRStructType>(descriptorResourcesType->getElementType()),
         callShader->getCallableFunctionsKey());
+    auto contextType = getMetalRTInvocationContextType(callableFunctionsField->getFieldType());
     m_writer->emit("{\n");
     m_writer->indent();
     m_writer->emit("device uchar* _slang_callable_record = (device uchar*)(");
@@ -492,45 +510,232 @@ void MetalSourceEmitter::emitMetalRTCallDispatch(IRMetalRTCallDispatch* callShad
                    "_slang_callable_record);\n");
     m_writer->emit("if (_slang_callable_function_index != 0xffffffffU)\n{\n");
     m_writer->indent();
+    emitType(contextType);
+    m_writer->emit(" _slang_invocation;\n");
+    for (auto field : contextType->getFields())
+    {
+        m_writer->emit("_slang_invocation.");
+        m_writer->emit(getName(field->getKey()));
+        m_writer->emit(" = ");
+        IRInst* argument = nullptr;
+        switch (getMetalRTInvocationField(field))
+        {
+        case MetalRTInvocationField::Data:
+            argument = callShader->getData();
+            break;
+        case MetalRTInvocationField::DispatchIndex:
+            argument = callShader->getDispatchRaysIndex();
+            break;
+        case MetalRTInvocationField::DispatchDimensions:
+            argument = callShader->getDispatchRaysDimensions();
+            break;
+        case MetalRTInvocationField::Record:
+            m_writer->emit("_slang_callable_record + ");
+            m_writer->emit(kMetalRTRecordHeaderSize);
+            break;
+        case MetalRTInvocationField::Descriptor:
+            m_writer->emit("(constant uint*)");
+            argument = callShader->getDescriptorResources();
+            break;
+        case MetalRTInvocationField::Records:
+            argument = callShader->getRecords();
+            break;
+        case MetalRTInvocationField::GlobalResources:
+            m_writer->emit("(thread uchar*)");
+            argument = callShader->getGlobalContext();
+            break;
+        default:
+            SLANG_UNEXPECTED("unexpected callable invocation field");
+        }
+        if (argument)
+            emitOperand(argument, getInfo(EmitOp::General));
+        m_writer->emit(";\n");
+    }
     m_writer->emit("((");
     emitType(descriptorResourcesType->getElementType());
     m_writer->emit(" constant*)(");
     emitOperand(callShader->getDescriptorResources(), getInfo(EmitOp::General));
     m_writer->emit("))->");
     m_writer->emit(getName(callableFunctionsField->getKey()));
-    m_writer->emit("[_slang_callable_function_index](");
-    emitOperand(callShader->getData(), getInfo(EmitOp::General));
-    if (cast<IRBoolLit>(callShader->getHasDispatchRaysIndex())->getValue())
-    {
-        m_writer->emit(", ");
-        emitOperand(callShader->getDispatchRaysIndex(), getInfo(EmitOp::General));
-    }
-    if (cast<IRBoolLit>(callShader->getHasDispatchRaysDimensions())->getValue())
-    {
-        m_writer->emit(", ");
-        emitOperand(callShader->getDispatchRaysDimensions(), getInfo(EmitOp::General));
-    }
-    if (callShader->getHasRecord()->getValue())
-    {
-        m_writer->emit(", _slang_callable_record + ");
-        m_writer->emit(kMetalRTRecordHeaderSize);
-    }
-    m_writer->emit(", ");
-    m_writer->emit("(constant uint*)(");
-    emitOperand(callShader->getDescriptorResources(), getInfo(EmitOp::General));
-    m_writer->emit(")");
-    m_writer->emit(", ");
-    emitOperand(callShader->getRecords(), getInfo(EmitOp::General));
-    if (cast<IRBoolLit>(callShader->getHasGlobalContext())->getValue())
-    {
-        m_writer->emit(", (thread uchar*)");
-        emitOperand(callShader->getGlobalContext(), getInfo(EmitOp::General));
-    }
-    m_writer->emit(");\n");
+    m_writer->emit("[_slang_callable_function_index](&_slang_invocation);\n");
     m_writer->dedent();
     m_writer->emit("}\n");
     m_writer->dedent();
     m_writer->emit("}\n");
+}
+
+// Fills the context agreed on by the table and receiver. Miss values come from the original
+// ray; closest-hit values also use the committed result and attributes saved during traversal.
+void MetalSourceEmitter::emitMetalRTTraceInvocationContext(
+    IRMetalRTTraceDispatch* trace,
+    IRStructType* contextType,
+    bool isHit)
+{
+    auto tagMask = IRIntegerValue(getIntVal(trace->getTagMask()));
+    auto maxLevels = IRIntegerValue(getIntVal(trace->getMaxLevels()));
+    bool hasInstancing = (tagMask & IRIntegerValue(MetalRTTag::Instancing)) != 0;
+    emitType(contextType);
+    m_writer->emit(" _slang_invocation;\n");
+    for (auto field : contextType->getFields())
+    {
+        m_writer->emit("_slang_invocation.");
+        m_writer->emit(getName(field->getKey()));
+        m_writer->emit(" = ");
+        IRInst* argument = nullptr;
+        switch (getMetalRTInvocationField(field))
+        {
+        case MetalRTInvocationField::Data:
+            argument = trace->getPayload();
+            break;
+        case MetalRTInvocationField::HitAttributes:
+            argument = trace->getCommittedAttributes();
+            break;
+        case MetalRTInvocationField::Distance:
+            if (isHit)
+                m_writer->emit("_slang_result.distance");
+            else
+                argument = trace->getMaxDistance();
+            break;
+        case MetalRTInvocationField::HitKind:
+            {
+                bool triangle = (tagMask & IRIntegerValue(MetalRTTag::TriangleData)) != 0;
+                if (triangle)
+                    m_writer->emit(
+                        "(_slang_result.type == metal::raytracing::intersection_type::triangle "
+                        "? (_slang_result.triangle_front_facing ? 254U : 255U) : ");
+                if (as<IRPtrLit>(trace->getCustomHitKindAddress()))
+                    m_writer->emit("0U");
+                else
+                {
+                    m_writer->emit("(_slang_result.type == "
+                                   "metal::raytracing::intersection_type::bounding_box ? "
+                                   "(*(");
+                    emitOperand(trace->getCustomHitKindAddress(), getInfo(EmitOp::General));
+                    m_writer->emit(")) : 0U)");
+                }
+                if (triangle)
+                    m_writer->emit(")");
+                break;
+            }
+        case MetalRTInvocationField::Barycentrics:
+            m_writer->emit(
+                (tagMask & IRIntegerValue(MetalRTTag::TriangleData))
+                    ? "(_slang_result.type == metal::raytracing::intersection_type::triangle "
+                      "? _slang_result.triangle_barycentric_coord : float2(0.0f))"
+                    : "float2(0.0f)");
+            break;
+        case MetalRTInvocationField::FrontFacing:
+            m_writer->emit(
+                (tagMask & IRIntegerValue(MetalRTTag::TriangleData))
+                    ? "(_slang_result.type == metal::raytracing::intersection_type::triangle "
+                      "? _slang_result.triangle_front_facing : false)"
+                    : "false");
+            break;
+        case MetalRTInvocationField::CurveParameter:
+            m_writer->emit(
+                (tagMask & IRIntegerValue(MetalRTTag::CurveData))
+                    ? "(_slang_result.type == metal::raytracing::intersection_type::curve "
+                      "? _slang_result.curve_parameter : 0.0f)"
+                    : "0.0f");
+            break;
+        case MetalRTInvocationField::WorldOrigin:
+            argument = trace->getOrigin();
+            break;
+        case MetalRTInvocationField::WorldDirection:
+            argument = trace->getDirection();
+            break;
+        case MetalRTInvocationField::PrimitiveIndex:
+            m_writer->emit("_slang_result.primitive_id");
+            break;
+        case MetalRTInvocationField::GeometryIndex:
+            m_writer->emit("_slang_result.geometry_id");
+            break;
+        case MetalRTInvocationField::InstanceCount:
+            m_writer->emit(
+                !hasInstancing  ? "0u"
+                : maxLevels > 0 ? "_slang_result.instance_count"
+                                : "1u");
+            break;
+        case MetalRTInvocationField::InstanceIndices:
+            // A scalar instance ID is a one-element path, matching the multi-level ABI.
+            m_writer->emit(
+                !hasInstancing  ? "(thread uint*)nullptr"
+                : maxLevels > 0 ? "(thread uint*)_slang_result.instance_id"
+                                : "&_slang_result.instance_id");
+            break;
+        case MetalRTInvocationField::InstanceIDs:
+            m_writer->emit(
+                !hasInstancing  ? "(thread uint*)nullptr"
+                : maxLevels > 0 ? "(thread uint*)_slang_result.user_instance_id"
+                                : "&_slang_result.user_instance_id");
+            break;
+        case MetalRTInvocationField::ObjectOrigin:
+            if (hasInstancing)
+            {
+                m_writer->emit("(_slang_result.world_to_object_transform * metal::float4(");
+                emitOperand(trace->getOrigin(), getInfo(EmitOp::General));
+                m_writer->emit(", 1.0f))");
+            }
+            else
+                argument = trace->getOrigin();
+            break;
+        case MetalRTInvocationField::ObjectDirection:
+            if (hasInstancing)
+            {
+                m_writer->emit("(_slang_result.world_to_object_transform * metal::float4(");
+                emitOperand(trace->getDirection(), getInfo(EmitOp::General));
+                m_writer->emit(", 0.0f))");
+            }
+            else
+                argument = trace->getDirection();
+            break;
+        case MetalRTInvocationField::ObjectToWorld:
+            m_writer->emit(
+                hasInstancing ? "_slang_result.object_to_world_transform"
+                              : "metal::float4x3(1.0f)");
+            break;
+        case MetalRTInvocationField::WorldToObject:
+            m_writer->emit(
+                hasInstancing ? "_slang_result.world_to_object_transform"
+                              : "metal::float4x3(1.0f)");
+            break;
+        case MetalRTInvocationField::Record:
+            m_writer->emit(isHit ? "_slang_hit_record + " : "_slang_miss_record + ");
+            m_writer->emit(kMetalRTRecordHeaderSize);
+            break;
+        case MetalRTInvocationField::Descriptor:
+            m_writer->emit("(constant uint*)");
+            argument = trace->getDescriptorResources();
+            break;
+        case MetalRTInvocationField::Records:
+            argument = trace->getRecords();
+            break;
+        case MetalRTInvocationField::MinDistance:
+            argument = trace->getMinDistance();
+            break;
+        case MetalRTInvocationField::RayTime:
+            argument = trace->getTime();
+            break;
+        case MetalRTInvocationField::RayFlags:
+            argument = trace->getRayFlags();
+            break;
+        case MetalRTInvocationField::DispatchIndex:
+            argument = trace->getDispatchRaysIndex();
+            break;
+        case MetalRTInvocationField::DispatchDimensions:
+            argument = trace->getDispatchRaysDimensions();
+            break;
+        case MetalRTInvocationField::GlobalResources:
+            m_writer->emit("(thread uchar*)");
+            argument = trace->getGlobalContext();
+            break;
+        default:
+            SLANG_UNEXPECTED("unexpected trace invocation field");
+        }
+        if (argument)
+            emitOperand(argument, getInfo(EmitOp::General));
+        m_writer->emit(";\n");
+    }
 }
 
 // Emits traversal and the post-traversal stage choice. All schema selection and requirement
@@ -540,29 +745,6 @@ void MetalSourceEmitter::emitMetalRTTraceDispatch(IRMetalRTTraceDispatch* trace)
 {
     auto tagMask = IRIntegerValue(getIntVal(trace->getTagMask()));
     auto maxLevels = IRIntegerValue(getIntVal(trace->getMaxLevels()));
-    auto missRequirements = IRIntegerValue(getIntVal(trace->getMissRequirements()));
-    auto closestHitRequirements = IRIntegerValue(getIntVal(trace->getClosestHitRequirements()));
-    const auto hasRequirement = [](IRIntegerValue mask, MetalRTStageRequirement requirement)
-    { return (mask & IRIntegerValue(requirement)) != 0; };
-
-    const auto emitInvocationArguments = [&]()
-    {
-        IRInst* arguments[] = {
-            trace->getMinDistance(),
-            trace->getTime(),
-            trace->getRayFlags(),
-            trace->getDispatchRaysIndex(),
-            trace->getDispatchRaysDimensions(),
-            trace->getRecords()};
-        for (auto argument : arguments)
-        {
-            m_writer->emit(", ");
-            emitOperand(argument, getInfo(EmitOp::General));
-        }
-        m_writer->emit(", (thread uchar*)");
-        emitOperand(trace->getGlobalContext(), getInfo(EmitOp::General));
-    };
-
     m_writer->emit("{\n");
     m_writer->indent();
     // The actual allocation includes schema-sized attribute storage after the common prefix.
@@ -695,38 +877,12 @@ void MetalSourceEmitter::emitMetalRTTraceDispatch(IRMetalRTTraceDispatch* trace)
                        "_slang_miss_record);\n");
         m_writer->emit("if (_slang_miss_function_index != 0xffffffffU)\n{\n");
         m_writer->indent();
+        emitMetalRTTraceInvocationContext(
+            trace,
+            getMetalRTInvocationContextType(trace->getMissFunctions()->getDataType()),
+            false);
         emitOperand(trace->getMissFunctions(), getInfo(EmitOp::Postfix));
-        m_writer->emit("[_slang_miss_function_index](");
-        emitOperand(trace->getPayload(), getInfo(EmitOp::General));
-        if (hasRequirement(missRequirements, MetalRTStageRequirement::Distance))
-        {
-            m_writer->emit(", ");
-            emitOperand(trace->getMaxDistance(), getInfo(EmitOp::General));
-        }
-        if (hasRequirement(missRequirements, MetalRTStageRequirement::WorldSpaceOrigin))
-        {
-            m_writer->emit(", ");
-            emitOperand(trace->getOrigin(), getInfo(EmitOp::General));
-        }
-        if (hasRequirement(missRequirements, MetalRTStageRequirement::WorldSpaceDirection))
-        {
-            m_writer->emit(", ");
-            emitOperand(trace->getDirection(), getInfo(EmitOp::General));
-        }
-        if (hasRequirement(missRequirements, MetalRTStageRequirement::Record))
-        {
-            m_writer->emit(", _slang_miss_record + ");
-            m_writer->emit(kMetalRTRecordHeaderSize);
-        }
-        if (hasRequirement(missRequirements, MetalRTStageRequirement::CallableDispatch))
-        {
-            m_writer->emit(", ");
-            m_writer->emit("(constant uint*)(");
-            emitOperand(trace->getDescriptorResources(), getInfo(EmitOp::General));
-            m_writer->emit(")");
-        }
-        emitInvocationArguments();
-        m_writer->emit(");\n");
+        m_writer->emit("[_slang_miss_function_index](&_slang_invocation);\n");
         m_writer->dedent();
         m_writer->emit("}\n");
     }
@@ -784,146 +940,12 @@ void MetalSourceEmitter::emitMetalRTTraceDispatch(IRMetalRTTraceDispatch* trace)
                        "_slang_hit_record);\n");
         m_writer->emit("if (_slang_hit_function_index != 0xffffffffU)\n{\n");
         m_writer->indent();
+        emitMetalRTTraceInvocationContext(
+            trace,
+            getMetalRTInvocationContextType(trace->getClosestHitFunctions()->getDataType()),
+            true);
         emitOperand(trace->getClosestHitFunctions(), getInfo(EmitOp::Postfix));
-        m_writer->emit("[_slang_hit_function_index](");
-        emitOperand(trace->getPayload(), getInfo(EmitOp::General));
-        if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::HitAttributes))
-        {
-            m_writer->emit(", ");
-            emitOperand(trace->getCommittedAttributes(), getInfo(EmitOp::General));
-        }
-        if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::Distance) ||
-            hasRequirement(closestHitRequirements, MetalRTStageRequirement::ObjectSpaceRay))
-        {
-            m_writer->emit(", _slang_result.distance");
-        }
-        if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::HitKind))
-        {
-            m_writer->emit(", ");
-            bool triangle = (tagMask & IRIntegerValue(MetalRTTag::TriangleData)) != 0;
-            if (triangle)
-                m_writer->emit(
-                    "(_slang_result.type == metal::raytracing::intersection_type::triangle "
-                    "? (_slang_result.triangle_front_facing ? 254U : 255U) : ");
-            if (as<IRPtrLit>(trace->getCustomHitKindAddress()))
-                m_writer->emit("0U");
-            else
-            {
-                m_writer->emit(
-                    "(_slang_result.type == metal::raytracing::intersection_type::bounding_box ? "
-                    "(*(");
-                emitOperand(trace->getCustomHitKindAddress(), getInfo(EmitOp::General));
-                m_writer->emit(")) : 0U)");
-            }
-            if (triangle)
-                m_writer->emit(")");
-        }
-        if (hasRequirement(
-                closestHitRequirements,
-                MetalRTStageRequirement::TriangleBarycentricCoord))
-            m_writer->emit(
-                (tagMask & IRIntegerValue(MetalRTTag::TriangleData))
-                    ? ", (_slang_result.type == metal::raytracing::intersection_type::triangle "
-                      "? _slang_result.triangle_barycentric_coord : float2(0.0f))"
-                    : ", float2(0.0f)");
-        if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::TriangleFrontFacing))
-            m_writer->emit(
-                (tagMask & IRIntegerValue(MetalRTTag::TriangleData))
-                    ? ", (_slang_result.type == metal::raytracing::intersection_type::triangle "
-                      "? _slang_result.triangle_front_facing : false)"
-                    : ", false");
-        if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::CurveParameter))
-            m_writer->emit(
-                (tagMask & IRIntegerValue(MetalRTTag::CurveData))
-                    ? ", (_slang_result.type == metal::raytracing::intersection_type::curve "
-                      "? _slang_result.curve_parameter : 0.0f)"
-                    : ", 0.0f");
-        if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::WorldSpaceOrigin))
-        {
-            m_writer->emit(", ");
-            emitOperand(trace->getOrigin(), getInfo(EmitOp::General));
-        }
-        if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::WorldSpaceDirection))
-        {
-            m_writer->emit(", ");
-            emitOperand(trace->getDirection(), getInfo(EmitOp::General));
-        }
-        if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::PrimitiveIndex))
-        {
-            m_writer->emit(", _slang_result.primitive_id");
-        }
-        if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::GeometryIndex))
-        {
-            m_writer->emit(", _slang_result.geometry_id");
-        }
-        if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::InstanceCount))
-        {
-            m_writer->emit(
-                !hasInstancing  ? ", 0u"
-                : maxLevels > 0 ? ", _slang_result.instance_count"
-                                : ", 1u");
-        }
-        if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::InstanceIndexAtLevel))
-        {
-            // Ordinary instancing has a scalar builtin. Its address is a one-element path,
-            // matching the same visible-function signature used by MultiLevel<2> providers.
-            m_writer->emit(
-                !hasInstancing  ? ", (thread uint*)nullptr"
-                : maxLevels > 0 ? ", (thread uint*)_slang_result.instance_id"
-                                : ", &_slang_result.instance_id");
-        }
-        if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::InstanceIDAtLevel))
-        {
-            m_writer->emit(
-                !hasInstancing  ? ", (thread uint*)nullptr"
-                : maxLevels > 0 ? ", (thread uint*)_slang_result.user_instance_id"
-                                : ", &_slang_result.user_instance_id");
-        }
-        if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::ObjectSpaceRay))
-        {
-            if (hasInstancing)
-            {
-                m_writer->emit(", (_slang_result.world_to_object_transform * metal::float4(");
-                emitOperand(trace->getOrigin(), getInfo(EmitOp::General));
-                m_writer->emit(", 1.0f))");
-                m_writer->emit(", (_slang_result.world_to_object_transform * metal::float4(");
-                emitOperand(trace->getDirection(), getInfo(EmitOp::General));
-                m_writer->emit(", 0.0f))");
-            }
-            else
-            {
-                m_writer->emit(", ");
-                emitOperand(trace->getOrigin(), getInfo(EmitOp::General));
-                m_writer->emit(", ");
-                emitOperand(trace->getDirection(), getInfo(EmitOp::General));
-            }
-        }
-        if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::ObjectToWorld))
-        {
-            m_writer->emit(
-                hasInstancing ? ", _slang_result.object_to_world_transform"
-                              : ", metal::float4x3(1.0f)");
-        }
-        if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::WorldToObject))
-        {
-            m_writer->emit(
-                hasInstancing ? ", _slang_result.world_to_object_transform"
-                              : ", metal::float4x3(1.0f)");
-        }
-        if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::Record))
-        {
-            m_writer->emit(", _slang_hit_record + ");
-            m_writer->emit(kMetalRTRecordHeaderSize);
-        }
-        if (hasRequirement(closestHitRequirements, MetalRTStageRequirement::CallableDispatch))
-        {
-            m_writer->emit(", ");
-            m_writer->emit("(constant uint*)(");
-            emitOperand(trace->getDescriptorResources(), getInfo(EmitOp::General));
-            m_writer->emit(")");
-        }
-        emitInvocationArguments();
-        m_writer->emit(");\n");
+        m_writer->emit("[_slang_hit_function_index](&_slang_invocation);\n");
         m_writer->dedent();
         m_writer->emit("}\n");
         m_writer->dedent();

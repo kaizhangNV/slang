@@ -111,18 +111,18 @@ struct Callable : rt::ICallableShader
 // DXIL: call {{.*}} @dx.op.cbufferLoadLegacy
 // DXIL: call {{.*}} @dx.op.reportHit
 
-// METAL: visible]] void Hit_closesthit(
-// METAL: *(Record_{{[0-9]+}} device*)((ulong)(recordData_
+// METAL: visible]] void Hit_closesthit(ClosestHitInvocationContext_{{[0-9]+}} thread* [[CLOSESTHIT_CONTEXT:invocation_[0-9]+]])
+// METAL: *(Record_{{[0-9]+}} device*)((ulong)([[CLOSESTHIT_CONTEXT]]->recordData_
 // METAL: visible]] uint Filter_anyhit(
 // METAL: *(Record_{{[0-9]+}} device*)((ulong)({{.*}}->record_
 // METAL: uint [[INTERSECT:portableRTCandidateImplementation_[0-9]+]](void thread* candidateState_
 // METAL: *(Record_{{[0-9]+}} device*)((ulong)({{.*}}->record_
 // METAL: intersection(bounding_box,{{.*}} Intersect_intersection(
 // METAL: [[INTERSECT]](
-// METAL: visible]] void Miss_miss(
-// METAL: *(Record_{{[0-9]+}} device*)((ulong)(recordData_
-// METAL: visible]] void Callable_callable(
-// METAL: *(Record_{{[0-9]+}} device*)((ulong)(recordData_
+// METAL: visible]] void Miss_miss(MissInvocationContext_{{[0-9]+}} thread* [[MISS_CONTEXT:invocation_[0-9]+]])
+// METAL: *(Record_{{[0-9]+}} device*)((ulong)([[MISS_CONTEXT]]->recordData_
+// METAL: visible]] void Callable_callable(CallableInvocationContext_{{[0-9]+}} thread* [[CALLABLE_CONTEXT:invocation_[0-9]+]])
+// METAL: *(Record_{{[0-9]+}} device*)((ulong)([[CALLABLE_CONTEXT]]->recordData_
 
 // Every OptiX stage obtains its invocation's record through the SBT data pointer.
 // PTX: .visible .entry __closesthit__Hit_closesthit()

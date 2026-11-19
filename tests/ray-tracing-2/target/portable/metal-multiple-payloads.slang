@@ -139,14 +139,14 @@ void RayGeneration()
 
 // RADIANCE: ->color{{.*}} = {{.*}}->color{{.*}} + {{.*}}->normal
 // RADIANCE: ->count{{.*}}rt_ClosestHitInput_hitKind_get
-// RADIANCE: visible]] void RadianceClosestHit_closesthit(void thread* payload{{.*}}, void thread* attributes
-// RADIANCE: (RadiancePayload{{.*}} thread*){{.*}}payload
+// RADIANCE: visible]] void RadianceClosestHit_closesthit(ClosestHitInvocationContext_{{[0-9]+}} thread* [[CONTEXT:invocation_[0-9]+]])
+// RADIANCE: (RadiancePayload{{.*}} thread*){{.*}}[[CONTEXT]]->payload_
 // RADIANCE: unpackAnyValue
 // RADIANCE: RadianceClosestHit_invoke{{.*}}hitKind
 // RADIANCE-NOT: PortableRTRayData
 
 // SHADOW: ->visible{{.*}} = {{.*}}->flags
-// SHADOW: visible]] void ShadowClosestHit_closesthit(void thread* payload{{.*}}, void thread* attributes
-// SHADOW: (ShadowPayload{{.*}} thread*){{.*}}payload
+// SHADOW: visible]] void ShadowClosestHit_closesthit(ClosestHitInvocationContext_{{[0-9]+}} thread* [[CONTEXT:invocation_[0-9]+]])
+// SHADOW: (ShadowPayload{{.*}} thread*){{.*}}[[CONTEXT]]->payload_
 // SHADOW: unpackAnyValue
 // SHADOW-NOT: PortableRTRayData

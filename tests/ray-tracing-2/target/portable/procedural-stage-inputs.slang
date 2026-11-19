@@ -98,12 +98,10 @@ struct ProceduralIntersection : rt::IIntersectionShader
 // Metal's closest-hit adapter forwards custom attributes and the invocation's hit IDs.
 // METALCH: uint rt_ClosestHitInput_instanceID_get_{{[0-9]+}}(uint thread* [[INSTANCE_PATH:invocationValue_[0-9]+]])
 // METALCH: return *([[INSTANCE_PATH]] + 0U);
-// METALCH: visible]] void ProceduralClosestHit_closesthit(void thread* [[P:payload_[0-9]+]], void thread* [[A:attributes_[0-9]+]],
-// METALCH-SAME: uint [[PRIMITIVE:primitiveIndex_[0-9]+]],
-// METALCH-SAME: uint thread* [[INSTANCE:instanceIDs_[0-9]+]],
-// METALCH: AnyValue8 [[PACKED:_S[0-9]+]] = *(AnyValue8 thread*)((ulong)([[A]]));
+// METALCH: visible]] void ProceduralClosestHit_closesthit(ClosestHitInvocationContext_{{[0-9]+}} thread* [[CONTEXT:invocation_[0-9]+]])
+// METALCH: AnyValue8 [[PACKED:_S[0-9]+]] = *(AnyValue8 thread*)((ulong)([[CONTEXT]]->attributes_{{[0-9]+}}));
 // METALCH: Attributes_{{[0-9]+}} {{_S[0-9]+}} = unpackAnyValue8_{{[0-9]+}}(&[[PACKED]]);
-// METALCH: ProceduralClosestHit_invoke_{{[0-9]+}}({{.*}}, [[PRIMITIVE]], [[INSTANCE]]);
+// METALCH: ProceduralClosestHit_invoke_{{[0-9]+}}({{.*}}, [[CONTEXT]]->primitiveIndex_{{[0-9]+}}, [[CONTEXT]]->instanceIDs_{{[0-9]+}});
 // Any-hit reads custom attributes from the candidate and reports IgnoreHit via its result.
 // METALAH: rt_AnyHitInput_ignoreHit_
 // METALAH: {{candidateAttributes_[0-9]+}}))).{{uv_[0-9]+}}.y) < 0.0f

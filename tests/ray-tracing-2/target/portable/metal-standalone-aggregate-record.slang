@@ -44,10 +44,10 @@ struct MatrixMiss : rt::IMissShader
 }
 
 // TUPLE: readTuple
-// TUPLE: visible]] void TupleMiss_miss(
-// TUPLE-SAME: uchar device* recordData
+// TUPLE: visible]] void TupleMiss_miss(MissInvocationContext_{{[0-9]+}} thread* [[CONTEXT:invocation_[0-9]+]])
+// TUPLE: *(Tuple_{{[0-9]+}} device*)((ulong)([[CONTEXT]]->recordData_{{[0-9]+}}))
 // TUPLE-NOT: kernel]]
 // MATRIX: readMatrix
-// MATRIX: visible]] void MatrixMiss_miss(
-// MATRIX-SAME: uchar device* recordData
+// MATRIX: visible]] void MatrixMiss_miss(MissInvocationContext_{{[0-9]+}} thread* [[CONTEXT:invocation_[0-9]+]])
+// MATRIX: [[CONTEXT]]->recordData_{{[0-9]+}}
 // MATRIX-NOT: kernel]]

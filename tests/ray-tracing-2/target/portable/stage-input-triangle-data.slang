@@ -68,10 +68,9 @@ struct AnyHit : rt::IAnyHitShader
 // DXIL: define void @
 
 // The copied triangle view reads Metal's barycentrics and front-facing value from the
-// same invocation, using adapter parameters for closest-hit and candidate state for any-hit.
-// METALCH: visible]] void ClosestHit_closesthit(
-// METALCH-SAME: float2 [[BARY:barycentricCoord_[0-9]+]], bool [[FRONT:frontFacing_[0-9]+]],
-// METALCH: ClosestHit_invoke_{{[0-9]+}}({{.*}}, [[BARY]], [[FRONT]]);
+// same invocation, using context fields for closest-hit and candidate state for any-hit.
+// METALCH: visible]] void ClosestHit_closesthit(ClosestHitInvocationContext_{{[0-9]+}} thread* [[CONTEXT:invocation_[0-9]+]])
+// METALCH: ClosestHit_invoke_{{[0-9]+}}({{.*}}, [[CONTEXT]]->barycentricCoord_{{[0-9]+}}, [[CONTEXT]]->frontFacing_{{[0-9]+}});
 // METALAH: uint [[IMPLEMENTATION:portableRTCandidateImplementation_[0-9]+]](void thread* candidateState_
 // METALAH: AnyHit_invoke_{{[0-9]+}}({{.*}}->payload_{{[0-9]+}})), [[STATE:[A-Za-z0-9_]+]]->barycentrics_{{[0-9]+}}, [[STATE]]->frontFacing_{{[0-9]+}});
 // METALAH: intersection(triangle,{{.*}} AnyHit_anyhit(

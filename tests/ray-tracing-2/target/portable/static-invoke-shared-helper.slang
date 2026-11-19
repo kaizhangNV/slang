@@ -81,10 +81,10 @@ struct CallingMiss : rt::IMissShader
 // METAL: [[CP]]->value{{[_0-9]*}} = [[CP]]->value{{[_0-9]*}} + 2U;
 // METAL: [[SHARED]]([[CP]]);
 // METAL: [[FORWARD]]([[CP]]);
-// METAL: {{\[\[visible\]\]}} void CallingMiss_miss(void thread* [[CE:payload[_0-9]*]],
-// METAL: [[CALLING]](([[PAYLOAD]] thread*)((ulong)([[CE]])));
-// METAL: {{\[\[visible\]\]}} void SharedMiss_miss(void thread* [[SE:payload[_0-9]*]],
-// METAL: [[SHARED]](([[PAYLOAD]] thread*)((ulong)([[SE]])));
+// METAL: {{\[\[visible\]\]}} void CallingMiss_miss(MissInvocationContext_{{[0-9]+}} thread* [[CE:invocation_[0-9]+]])
+// METAL: [[CALLING]](([[PAYLOAD]] thread*)((ulong)([[CE]]->payload_{{[0-9]+}})));
+// METAL: {{\[\[visible\]\]}} void SharedMiss_miss(MissInvocationContext_{{[0-9]+}} thread* [[SE:invocation_[0-9]+]])
+// METAL: [[SHARED]](([[PAYLOAD]] thread*)((ulong)([[SE]]->payload_{{[0-9]+}})));
 // SPIRV-COUNT-2: OpEntryPoint MissKHR
 
 // OptiX wrappers obtain their own payload; ordinary calls keep forwarding that payload's pointer.

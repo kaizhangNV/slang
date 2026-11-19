@@ -45,9 +45,6 @@ struct TraceProgramDescriptor : RefObject
     UInt tags = UInt(MetalRTTag::Instancing);
     IRIntegerValue maxLevels = 0;
     MetalRTGeometryKind geometry = MetalRTGeometryKind::Unknown;
-    StageRequirements missRequirements;
-    StageRequirements hitRequirements;
-    StageRequirements callableRequirements;
     const RayDataHeader* header = nullptr;
     Dictionary<IRType*, RayDataAllocation> carriers;
     TargetRequest* target = nullptr;
@@ -204,13 +201,6 @@ RefPtr<TraceProgramDescriptor> createTraceProgramDescriptor(
         return nullptr;
     programDescriptor.tags = contextRequirements.tags;
     programDescriptor.maxLevels = contextRequirements.maxLevels;
-    // Fix the values passed to each visible shader, such as Record, ray origin and launch index.
-    // Hit stages always receive an instance count and paths. Ordinary instancing supplies one
-    // element, so AccelerationStructure and MultiLevelAccelerationStructure<2> share the same
-    // signature. Inspecting shader bodies would make independently compiled signatures disagree.
-    programDescriptor.hitRequirements = getStageContractRequirements(Stage::ClosestHit);
-    programDescriptor.missRequirements = getStageContractRequirements(Stage::Miss);
-    programDescriptor.callableRequirements = getStageContractRequirements(Stage::Callable);
     bool firstGeometry = true;
     for (auto& group : programDescriptor.schema.hitGroups)
     {
@@ -262,22 +252,19 @@ void createDescriptorResources(
     IRModule* module,
     TraceProgramDescriptor& programDescriptor,
     Dictionary<IRType*, IRFunc*>& instanceContributions,
-    const MetalRTCandidateResources& candidateResources)
+    const MetalRTCandidateResources& candidateResources,
+    const InvocationContexts& invocationContexts)
 {
     IRBuilder builder(module);
-    auto descriptorPointer = builder.getPtrType(builder.getUIntType(), AddressSpace::Uniform);
     auto instancePathType = programDescriptor.instancePathType;
     programDescriptor.resources = createMetalRTDescriptorResources(
         module,
         programDescriptor.sourceType,
         programDescriptor.tags,
         programDescriptor.maxLevels,
-        getVisibleFunctionSignature(builder, programDescriptor.missRequirements, descriptorPointer),
-        getVisibleFunctionSignature(builder, programDescriptor.hitRequirements, descriptorPointer),
-        getCallableFunctionSignature(
-            builder,
-            programDescriptor.callableRequirements,
-            descriptorPointer),
+        getInvocationFunctionSignature(builder, invocationContexts.miss),
+        getInvocationFunctionSignature(builder, invocationContexts.closestHit),
+        getInvocationFunctionSignature(builder, invocationContexts.callable),
         candidateResources);
     if (programDescriptor.tags & UInt(MetalRTTag::Instancing))
     {
@@ -405,8 +392,6 @@ void lowerTrace(
     IRInst* operands[] = {
         integer(programDescriptor.tags),
         integer(programDescriptor.maxLevels),
-        integer(programDescriptor.missRequirements.mask),
-        integer(programDescriptor.hitRequirements.mask),
         integer(IRIntegerValue(programDescriptor.geometry)),
         builder.getBoolValue(programDescriptor.hasCandidates),
         builder.getBoolValue(programDescriptor.schema.missShaders.getCount() != 0),
@@ -430,8 +415,6 @@ void lowerTrace(
         builder.getIntValue(builder.getUIntType(), programDescriptor.hitStride),
         builder.getIntValue(builder.getUIntType(), programDescriptor.missStride),
         rayData,
-        builder.getBoolValue(true),
-        builder.getBoolValue(true),
         builder
             .emitIntrinsicInst(resourcePointer, kIROp_MetalRTGetGlobalResourceContext, 0, nullptr),
         programDescriptor.instanceContribution
@@ -471,16 +454,9 @@ void lowerCallable(
         descriptor,
         programDescriptor.resources.getField(MetalRTDescriptorResource::Records));
     auto uint3 = builder.getVectorType(builder.getUIntType(), 3);
-    auto zero = builder.emitDefaultConstruct(uint3);
-    auto& requirements = programDescriptor.callableRequirements;
-    auto index =
-        requirements.dispatchRaysIndex
-            ? builder.emitIntrinsicInst(uint3, kIROp_MetalRTGetDispatchRaysIndex, 0, nullptr)
-            : zero;
+    auto index = builder.emitIntrinsicInst(uint3, kIROp_MetalRTGetDispatchRaysIndex, 0, nullptr);
     auto dimensions =
-        requirements.dispatchRaysDimensions
-            ? builder.emitIntrinsicInst(uint3, kIROp_MetalRTGetDispatchRaysDimensions, 0, nullptr)
-            : zero;
+        builder.emitIntrinsicInst(uint3, kIROp_MetalRTGetDispatchRaysDimensions, 0, nullptr);
     auto data = call->getData();
     auto dataType = cast<IRPtrTypeBase>(data->getDataType())->getValueType();
     if (isEmptyType(dataType))
@@ -493,17 +469,13 @@ void lowerCallable(
         data,
         index,
         dimensions,
-        builder.getBoolValue(requirements.dispatchRaysIndex),
-        builder.getBoolValue(requirements.dispatchRaysDimensions),
         descriptor,
         records,
         builder.getIntValue(builder.getUIntType(), programDescriptor.callableStride),
-        builder.getBoolValue(requirements.has(MetalRTStageRequirement::Record)),
         descriptor->getDataType(),
         programDescriptor.resources
             .getField(MetalRTDescriptorResource::CallableVisibleFunctionTable)
             ->getKey(),
-        builder.getBoolValue(true),
         builder.emitIntrinsicInst(
             builder.getPtrType(builder.getUInt8Type(), AddressSpace::ThreadLocal),
             kIROp_MetalRTGetGlobalResourceContext,
@@ -634,12 +606,14 @@ void lowerMetalPortableRayTracing(
     auto candidateResources =
         createMetalRTCandidateResources(module, getAnyHitFunctionSignature(builder));
     auto header = createRayDataHeader(module, candidateResources);
+    auto invocationContexts = createInvocationContexts(module);
     auto adapters = createMetalStageAdapters(
         module,
         targetProgram,
         entryPoints,
         header,
         candidateResources,
+        invocationContexts,
         requiresResultTypeLowering,
         sink);
     if (sink->getErrorCount())
@@ -726,7 +700,12 @@ void lowerMetalPortableRayTracing(
         accelerationStructureLayouts.add(resource);
     }
     for (auto& pair : programDescriptors)
-        createDescriptorResources(module, *pair.second, instanceContributions, candidateResources);
+        createDescriptorResources(
+            module,
+            *pair.second,
+            instanceContributions,
+            candidateResources,
+            invocationContexts);
 
     // 3. Replace TraceRay and CallShader with MetalRTTraceDispatch and MetalRTCallDispatch.
     // For TraceRay, prepare per-ray storage and copy Payload in and back out around the call.

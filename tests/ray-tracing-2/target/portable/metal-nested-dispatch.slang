@@ -137,32 +137,36 @@ void RayGeneration()
 // METAL-NOT: visible]]
 // METAL-DAG: thread_position_in_grid
 // METAL-DAG: threads_per_grid
-// METAL-DAG: [_slang_hit_function_index]({{.*}}dispatchIndex{{.*}}dispatchDimensions
+// METAL-DAG: _slang_invocation.dispatchRaysIndex_{{[0-9]+}} = dispatchIndex_{{[0-9]+}};
+// METAL-DAG: _slang_invocation.dispatchRaysDimensions_{{[0-9]+}} = dispatchDimensions_{{[0-9]+}};
+// METAL-DAG: [_slang_hit_function_index](&_slang_invocation);
 // METAL-NOT: visible]]
 // METAL-NOT: traceHelper
 // METAL-NOT: callHelper
 
 // Match the actual arguments across every call boundary. A nested dispatch must reuse the
-// visible entry's fixed launch parameters, not append another pair that its VFT caller omits.
+// visible entry's context fields, not append another pair that its VFT caller omits.
 // HIT: void traceHelper{{[_0-9]*}}(uint thread*{{[^,]*}}, uint3 [[HIT_HELPER_INDEX:[A-Za-z_][A-Za-z0-9_]*]], uint3 [[HIT_HELPER_DIMENSIONS:[A-Za-z_][A-Za-z0-9_]*]]
-// HIT: [_slang_miss_function_index]({{.*}}, [[HIT_HELPER_INDEX]], [[HIT_HELPER_DIMENSIONS]],
+// HIT: _slang_invocation.dispatchRaysIndex_{{[0-9]+}} = [[HIT_HELPER_INDEX]];
+// HIT: _slang_invocation.dispatchRaysDimensions_{{[0-9]+}} = [[HIT_HELPER_DIMENSIONS]];
+// HIT: [_slang_miss_function_index](&_slang_invocation);
 // HIT: void ClosestHit_invoke{{[_0-9]*}}(uint3 [[HIT_INVOKE_INDEX:[A-Za-z_][A-Za-z0-9_]*]], uint3 [[HIT_INVOKE_DIMENSIONS:[A-Za-z_][A-Za-z0-9_]*]], uint thread*
 // HIT: traceHelper{{[_0-9]*}}({{.*}}, [[HIT_INVOKE_INDEX]], [[HIT_INVOKE_DIMENSIONS]],
-// HIT: visible]] void ClosestHit_closesthit({{.*}}, uint3 [[HIT_ENTRY_INDEX:dispatchRaysIndex[_0-9]*]], uint3 [[HIT_ENTRY_DIMENSIONS:dispatchRaysDimensions[_0-9]*]],
-// HIT-SAME: uint device* records{{[_0-9]*}}, uchar thread* globalResources{{[_0-9]*}})
-// HIT: ClosestHit_invoke{{[_0-9]*}}([[HIT_ENTRY_INDEX]], [[HIT_ENTRY_DIMENSIONS]],
+// HIT: visible]] void ClosestHit_closesthit(ClosestHitInvocationContext_{{[0-9]+}} thread* [[CONTEXT:invocation_[0-9]+]])
+// HIT: ClosestHit_invoke{{[_0-9]*}}([[CONTEXT]]->dispatchRaysIndex_{{[0-9]+}}, [[CONTEXT]]->dispatchRaysDimensions_{{[0-9]+}},
 // HIT-NOT: metalRTGetDispatchRays
 
 // MISS: void callHelper{{[_0-9]*}}(uint thread*{{[^,]*}}, uint3 [[MISS_HELPER_INDEX:[A-Za-z_][A-Za-z0-9_]*]], uint3 [[MISS_HELPER_DIMENSIONS:[A-Za-z_][A-Za-z0-9_]*]]
-// MISS: [_slang_callable_function_index]({{.*}}, [[MISS_HELPER_INDEX]], [[MISS_HELPER_DIMENSIONS]],
+// MISS: _slang_invocation.dispatchRaysIndex_{{[0-9]+}} = [[MISS_HELPER_INDEX]];
+// MISS: _slang_invocation.dispatchRaysDimensions_{{[0-9]+}} = [[MISS_HELPER_DIMENSIONS]];
+// MISS: [_slang_callable_function_index](&_slang_invocation);
 // MISS: void Miss_invoke{{[_0-9]*}}(uint3 [[MISS_INVOKE_INDEX:[A-Za-z_][A-Za-z0-9_]*]], uint3 [[MISS_INVOKE_DIMENSIONS:[A-Za-z_][A-Za-z0-9_]*]], uint thread*
 // MISS: callHelper{{[_0-9]*}}({{.*}}, [[MISS_INVOKE_INDEX]], [[MISS_INVOKE_DIMENSIONS]],
-// MISS: visible]] void Miss_miss({{.*}}, uint3 [[MISS_ENTRY_INDEX:dispatchRaysIndex[_0-9]*]], uint3 [[MISS_ENTRY_DIMENSIONS:dispatchRaysDimensions[_0-9]*]],
-// MISS-SAME: uint device* records{{[_0-9]*}}, uchar thread* globalResources{{[_0-9]*}})
-// MISS: Miss_invoke{{[_0-9]*}}([[MISS_ENTRY_INDEX]], [[MISS_ENTRY_DIMENSIONS]],
+// MISS: visible]] void Miss_miss(MissInvocationContext_{{[0-9]+}} thread* [[CONTEXT:invocation_[0-9]+]])
+// MISS: Miss_invoke{{[_0-9]*}}([[CONTEXT]]->dispatchRaysIndex_{{[0-9]+}}, [[CONTEXT]]->dispatchRaysDimensions_{{[0-9]+}},
 // MISS-NOT: metalRTGetDispatchRays
 
 // CALLABLE: rt_CallableInput_dispatchRaysIndex_get{{.*}}rt_CallableInput_dispatchRaysDimensions_get
-// CALLABLE: visible]] void Callable_callable(
-// CALLABLE: Callable_invoke{{.*}}dispatchRaysIndex{{.*}}dispatchRaysDimensions
+// CALLABLE: visible]] void Callable_callable(CallableInvocationContext_{{[0-9]+}} thread* [[CONTEXT:invocation_[0-9]+]])
+// CALLABLE: Callable_invoke{{[_0-9]*}}([[CONTEXT]]->dispatchRaysIndex_{{[0-9]+}}, [[CONTEXT]]->dispatchRaysDimensions_{{[0-9]+}},
 // CALLABLE-NOT: metalRTGetDispatchRays

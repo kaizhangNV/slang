@@ -118,7 +118,7 @@ void RayGeneration()
 }
 
 // METAL-NOT: visible]]
-// METAL-DAG: visible_function_table<void(void thread*, uint3, uint3,
+// METAL-DAG: visible_function_table<void(CallableInvocationContext_{{[0-9]+}} thread*)>
 // METAL-DAG: thread_position_in_grid
 // METAL-DAG: threads_per_grid
 // METAL-DAG: forward
@@ -126,16 +126,25 @@ void RayGeneration()
 // METAL-NOT: metalRTCallShader
 
 // UINT: rt_CallableInput_dispatchRaysIndex_get
-// UINT: visible]] void UintCallable_callable(void thread* [[DATA:[A-Za-z0-9_]+]], uint3 [[INDEX:[A-Za-z0-9_]+]],
-// UINT-SAME: uchar thread* globalResources{{[_0-9]*}})
-// UINT: UintCallable_invoke{{[_0-9]*}}([[INDEX]], (uint thread*)((ulong)([[DATA]])));
+// UINT: visible]] void UintCallable_callable(CallableInvocationContext_{{[0-9]+}} thread* [[CONTEXT:invocation_[0-9]+]])
+// UINT: UintCallable_invoke{{[_0-9]*}}([[CONTEXT]]->dispatchRaysIndex_{{[0-9]+}}, (uint thread*)((ulong)([[CONTEXT]]->data_{{[0-9]+}})));
 // FLOAT: *{{.*}} = *{{.*}} * 2.0f;
-// FLOAT: visible]] void FloatCallable_callable(void thread* data
-// FLOAT: FloatCallable_invoke{{.*}}((float thread*){{.*}}data
+// The receiver's fixed context retains the other fields even though this body only reads data.
+// FLOAT: struct [[CONTEXT_TYPE:CallableInvocationContext_[0-9]+]]
+// FLOAT: void thread* data_{{[0-9]+}};
+// FLOAT: uint3 dispatchRaysIndex_{{[0-9]+}};
+// FLOAT: uint3 dispatchRaysDimensions_{{[0-9]+}};
+// FLOAT: uchar device* recordData_{{[0-9]+}};
+// FLOAT: uint constant* descriptorResources_{{[0-9]+}};
+// FLOAT: const uint device* records_{{[0-9]+}};
+// FLOAT: uchar thread* globalResources_{{[0-9]+}};
+// FLOAT: visible]] void FloatCallable_callable([[CONTEXT_TYPE]] thread* [[CONTEXT:invocation_[0-9]+]])
+// FLOAT: FloatCallable_invoke{{.*}}((float thread*)((ulong)([[CONTEXT]]->data_{{[0-9]+}})));
+// FLOAT-NOT: [[CONTEXT]]->
 // EMPTY: rt_CallableInput_dispatchRaysDimensions_get
-// EMPTY: visible]] void EmptyCallable_callable(void thread* data
-// EMPTY: EmptyCallable_invoke{{.*}}(dispatchRaysDimensions
+// EMPTY: visible]] void EmptyCallable_callable(CallableInvocationContext_{{[0-9]+}} thread* [[CONTEXT:invocation_[0-9]+]])
+// EMPTY: EmptyCallable_invoke{{.*}}([[CONTEXT]]->dispatchRaysDimensions_
 // VOID: void preserveData{{.*}}(void thread*
 // VOID: + 1U;
-// VOID: visible]] void VoidCallable_callable(void thread* data
+// VOID: visible]] void VoidCallable_callable(CallableInvocationContext_{{[0-9]+}} thread* invocation_
 // VOID: VoidCallable_invoke{{.*}}(nullptr,

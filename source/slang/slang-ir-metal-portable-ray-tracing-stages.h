@@ -15,20 +15,32 @@ namespace PortableRT
 namespace Metal
 {
 
-/// Describes the fixed invocation contract shared by independently compiled stages. The mask
-/// selects VFT parameters; the booleans select state carried from the originating trace.
+/// Selects the stage-specific fields in a fixed invocation context. Launch information and
+/// resource pointers are always present, independently of the shader body.
 struct StageRequirements
 {
     UInt mask = 0;
-    bool minDistance = false;
-    bool rayTime = false;
-    bool rayFlags = false;
-    bool dispatchRaysIndex = false;
-    bool dispatchRaysDimensions = false;
 
     bool has(MetalRTStageRequirement requirement) const { return (mask & UInt(requirement)) != 0; }
     void add(MetalRTStageRequirement requirement) { mask |= UInt(requirement); }
 };
+
+/// Holds one canonical context type per VFT stage kind in this module. Caller and provider
+/// compilations build the same fixed layouts, regardless of which properties their bodies use.
+struct InvocationContexts
+{
+    IRStructType* closestHit = nullptr;
+    IRStructType* miss = nullptr;
+    IRStructType* callable = nullptr;
+
+    IRStructType* get(Stage stage) const;
+};
+
+/// Creates the fixed context layouts once, before constructing adapters or descriptor tables.
+InvocationContexts createInvocationContexts(IRModule* module);
+
+/// Builds the VFT signature accepting one pointer to the caller's per-thread context.
+IRFuncType* getInvocationFunctionSignature(IRBuilder& builder, IRStructType* contextType);
 
 /// Defines the schema-independent prefix supplied to every native candidate callback. The
 /// selected stage knows its Payload type; byte offsets describe the remaining traversal storage.
@@ -86,8 +98,8 @@ IRInst* getRayPayloadReference(
 IRInst* getStageDataReference(IRBuilder& builder, IRInst* erasedAddress, IRType* dataType);
 
 /// Records which wrapper value supplies an input-read instruction with a given opcode and type.
-/// For example, {MetalRTGetCurrentDistance, float, distanceParam} tells lowerVisibleStageInputs
-/// to pass the wrapper's distance parameter through source helpers and replace their matching
+/// For example, {MetalRTGetCurrentDistance, float, distanceValue} tells lowerVisibleStageInputs
+/// to pass the loaded distance field through source helpers and replace their matching
 /// reads. The getter's result type can differ from the supplied value's type: an instance-index
 /// getter returns uint, while its wrapper supplies a pointer to the array of instance indices.
 struct StageInputBinding
@@ -122,37 +134,15 @@ bool isStageInputOperation(IROp op);
 /// Distinguishes zero-storage built-in attribute views using the getter's checked primitive.
 bool isBuiltinHitAttributeView(IRInst* operation);
 
-/// Builds the table-wide physical signature used by both VFT resources and their adapters.
-IRFuncType* getVisibleFunctionSignature(
-    IRBuilder& builder,
-    const StageRequirements& requirements,
-    IRType* descriptorPointerType);
-
-/// Builds the callable-table ABI: erased data, fixed launch/record inputs, and the descriptor
-/// resources needed by nested dispatch. The runtime record still determines the concrete data type.
-IRFuncType* getCallableFunctionSignature(
-    IRBuilder& builder,
-    const StageRequirements& requirements,
-    IRType* descriptorPointerType);
-
-/// Creates one closest-hit or miss VFT function without changing its callable source method.
-/// Create every adapter before lowerVisibleStageInputs so a shared method sees all its callers.
+/// Creates one closest-hit, miss, or callable VFT function without changing its callable source
+/// method. Create every adapter before lowerVisibleStageInputs so a shared method sees all its
+/// callers.
 VisibleAdapter createVisibleAdapter(
     IRModule* module,
     TargetRequest* target,
     const SchemaStage& stage,
-    const StageRequirements& tableRequirements,
-    UnownedStringSlice symbolName,
-    IRType* descriptorPointerType);
-
-/// Creates a callable VFT function while retaining the ordinary static source implementation.
-/// Include the returned root in the same immutable-input batch as visible and candidate stages.
-VisibleAdapter createCallableAdapter(
-    IRModule* module,
-    const SchemaStage& stage,
-    const StageRequirements& tableRequirements,
-    UnownedStringSlice symbolName,
-    IRType* descriptorPointerType);
+    IRStructType* contextType,
+    UnownedStringSlice symbolName);
 
 /// Threads adapter-bound values through ordinary helpers and replaces their logical getters.
 /// Candidate-stage mutable/control state is deliberately outside this visible-stage operation.
@@ -173,6 +163,7 @@ List<PortableRT::Metal::VisibleAdapter> createMetalStageAdapters(
     List<IRFunc*>& entryPoints,
     const PortableRT::Metal::RayDataHeader& header,
     const MetalRTCandidateResources& candidateResources,
+    const PortableRT::Metal::InvocationContexts& invocationContexts,
     bool& requiresResultTypeLowering,
     DiagnosticSink* sink);
 

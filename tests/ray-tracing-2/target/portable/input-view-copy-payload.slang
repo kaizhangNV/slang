@@ -63,8 +63,8 @@ struct CopyingMiss : rt::IMissShader
 // METAL: [[CALLER]]->value{{[_0-9]*}} = 3U;
 // METAL: [[OVERWRITE]]([[CALLER]]);
 // METAL: [[CALLER]]->observed{{[_0-9]*}} = [[CALLER]]->value{{[_0-9]*}};
-// METAL: {{\[\[visible\]\]}} void CopyingMiss_miss(void thread* [[ENTRY:payload[_0-9]*]],
-// METAL: [[INVOKE]](([[PAYLOAD]] thread*)((ulong)([[ENTRY]])));
+// METAL: {{\[\[visible\]\]}} void CopyingMiss_miss(MissInvocationContext_{{[0-9]+}} thread* [[ENTRY:invocation_[0-9]+]])
+// METAL: [[INVOKE]](([[PAYLOAD]] thread*)((ulong)([[ENTRY]]->payload_{{[0-9]+}})));
 // SPIRV: OpEntryPoint MissKHR
 // SPIRV: OpVariable {{.*}} IncomingRayPayloadKHR
 // DXIL: define void @

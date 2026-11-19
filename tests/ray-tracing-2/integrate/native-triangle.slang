@@ -102,10 +102,10 @@ void RayGeneration()
 // SPIRV-DAG: OpVariable {{.*}} HitAttributeKHR
 // SPIRV-DAG: OpTraceRayKHR
 
-// METAL: visible]] void TriangleClosestHit_closesthit(
-// METAL: TriangleClosestHit_invoke_{{[0-9]+}}((float4 thread*)((ulong)(payload_{{[0-9]+}})), barycentricCoord_{{[0-9]+}}, distance_
-// METAL: visible]] void BackgroundMiss_miss(
-// METAL: BackgroundMiss_invoke_{{[0-9]+}}((float4 thread*)((ulong)(payload_
+// METAL: visible]] void TriangleClosestHit_closesthit(ClosestHitInvocationContext_{{[0-9]+}} thread* [[HIT_CONTEXT:invocation_[0-9]+]])
+// METAL: TriangleClosestHit_invoke_{{[0-9]+}}((float4 thread*)((ulong)([[HIT_CONTEXT]]->payload_{{[0-9]+}})), [[HIT_CONTEXT]]->barycentricCoord_{{[0-9]+}}, [[HIT_CONTEXT]]->distance_
+// METAL: visible]] void BackgroundMiss_miss(MissInvocationContext_{{[0-9]+}} thread* [[MISS_CONTEXT:invocation_[0-9]+]])
+// METAL: BackgroundMiss_invoke_{{[0-9]+}}((float4 thread*)((ulong)([[MISS_CONTEXT]]->payload_
 
 // METAL_RAYGEN: error[E36107]: unavailable features in entry point
 // METAL_RAYGEN: note: see using of 'DispatchRaysIndex'

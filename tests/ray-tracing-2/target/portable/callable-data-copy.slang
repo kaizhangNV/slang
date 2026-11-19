@@ -55,9 +55,10 @@ struct Callable : rt::ICallableShader
 // METAL: void [[INVOKE:Callable_invoke_[0-9]+]](uint3 [[INVOKE_INDEX:[A-Za-z0-9_]+]], uint thread* [[DATA:[A-Za-z0-9_]+]])
 // METAL: [[INCREMENT]]([[DATA]]);
 // METAL: *[[DATA]] = *[[DATA]] + rt_CallableInput_dispatchRaysIndex_get{{[_0-9]*}}([[INVOKE_INDEX]]).x;
-// METAL: visible]] void Callable_callable(void thread* [[ENTRY_DATA:[A-Za-z0-9_]+]], uint3 [[INDEX:[A-Za-z0-9_]+]],
-// METAL-SAME: uchar thread* globalResources{{[_0-9]*}})
-// METAL: [[INVOKE]]([[INDEX]], (uint thread*)((ulong)([[ENTRY_DATA]])));
+// METAL: struct [[CONTEXT_TYPE:CallableInvocationContext_[0-9]+]]
+// METAL: uchar thread* globalResources_{{[0-9]+}};
+// METAL: visible]] void Callable_callable([[CONTEXT_TYPE]] thread* [[CONTEXT:invocation_[0-9]+]])
+// METAL: [[INVOKE]]([[CONTEXT]]->dispatchRaysIndex_{{[0-9]+}}, (uint thread*)((ulong)([[CONTEXT]]->data_{{[0-9]+}})));
 
 // OptiX direct-callable functions pass the same data pointer through ordinary helpers.
 // CUDA: void [[INCREMENT:increment_[0-9]+]](uint * [[HELPER_DATA:[A-Za-z0-9_]+]])

@@ -127,28 +127,24 @@ struct TriangleHit : rt::IClosestHitShader
 // METAL: void [[OTHER:OtherHit_invoke_[0-9]+]](float thread* {{[A-Za-z0-9_]+}}, const [[OTHER_ATTR:OtherAttributes_[0-9]+]] thread* {{[A-Za-z0-9_]+}}, const [[OTHER_RECORD:OtherRecord_[0-9]+]] thread*
 // METAL: void [[TRIANGLE:TriangleHit_invoke_[0-9]+]](float thread* {{[A-Za-z0-9_]+}}, const [[OTHER_RECORD]] thread* {{[A-Za-z0-9_]+}}, float2
 // Each adapter unpacks custom attributes separately from loading its own record data.
-// METAL: visible]] void SharedHit_closesthit(void thread* payload_{{[0-9]+}}, void thread* [[SA:attributes_[0-9]+]],
-// METAL-SAME: uchar device* [[SR:recordData_[0-9]+]],
-// METAL: AnyValue4 [[SA_PACKED:_S[0-9]+]] = *(AnyValue4 thread*)((ulong)([[SA]]));
+// METAL: visible]] void SharedHit_closesthit(ClosestHitInvocationContext_{{[0-9]+}} thread* [[SC:invocation_[0-9]+]])
+// METAL: AnyValue4 [[SA_PACKED:_S[0-9]+]] = *(AnyValue4 thread*)((ulong)([[SC]]->attributes_{{[0-9]+}}));
 // METAL: [[SHARED_TYPE]] {{_S[0-9]+}} = unpackAnyValue4_{{[0-9]+}}(&[[SA_PACKED]]);
-// METAL: *(SharedData_{{[0-9]+}} device*)((ulong)([[SR]]))
+// METAL: *(SharedData_{{[0-9]+}} device*)((ulong)([[SC]]->recordData_{{[0-9]+}}))
 // METAL: [[SHARED]](
-// METAL: visible]] void CallingHit_closesthit(void thread* payload_{{[0-9]+}}, void thread* [[CEA:attributes_[0-9]+]],
-// METAL-SAME: uchar device* [[CER:recordData_[0-9]+]],
-// METAL: AnyValue4 [[CEA_PACKED:_S[0-9]+]] = *(AnyValue4 thread*)((ulong)([[CEA]]));
+// METAL: visible]] void CallingHit_closesthit(ClosestHitInvocationContext_{{[0-9]+}} thread* [[CC:invocation_[0-9]+]])
+// METAL: AnyValue4 [[CEA_PACKED:_S[0-9]+]] = *(AnyValue4 thread*)((ulong)([[CC]]->attributes_{{[0-9]+}}));
 // METAL: [[SHARED_TYPE]] {{_S[0-9]+}} = unpackAnyValue4_{{[0-9]+}}(&[[CEA_PACKED]]);
-// METAL: *(SharedData_{{[0-9]+}} device*)((ulong)([[CER]]))
+// METAL: *(SharedData_{{[0-9]+}} device*)((ulong)([[CC]]->recordData_{{[0-9]+}}))
 // METAL: [[CALLING]](
-// METAL: visible]] void OtherHit_closesthit(void thread* payload_{{[0-9]+}}, void thread* [[OA:attributes_[0-9]+]],
-// METAL-SAME: uchar device* [[OR:recordData_[0-9]+]],
-// METAL: AnyValue8 [[OA_PACKED:_S[0-9]+]] = *(AnyValue8 thread*)((ulong)([[OA]]));
+// METAL: visible]] void OtherHit_closesthit(ClosestHitInvocationContext_{{[0-9]+}} thread* [[OC:invocation_[0-9]+]])
+// METAL: AnyValue8 [[OA_PACKED:_S[0-9]+]] = *(AnyValue8 thread*)((ulong)([[OC]]->attributes_{{[0-9]+}}));
 // METAL: [[OTHER_ATTR]] {{_S[0-9]+}} = unpackAnyValue8_{{[0-9]+}}(&[[OA_PACKED]]);
-// METAL: *([[OTHER_RECORD]] device*)((ulong)([[OR]]))
+// METAL: *([[OTHER_RECORD]] device*)((ulong)([[OC]]->recordData_{{[0-9]+}}))
 // METAL: [[OTHER]](
-// METAL: visible]] void TriangleHit_closesthit(
-// METAL-SAME: float2 [[BARY:barycentricCoord_[0-9]+]],
-// METAL-SAME: uchar device* [[TR:recordData_[0-9]+]],
-// METAL: *([[OTHER_RECORD]] device*)((ulong)([[TR]]))
+// METAL: visible]] void TriangleHit_closesthit(ClosestHitInvocationContext_{{[0-9]+}} thread* [[TC:invocation_[0-9]+]])
+// METAL: float2 [[BARY:_S[0-9]+]] = [[TC]]->barycentricCoord_{{[0-9]+}};
+// METAL: *([[OTHER_RECORD]] device*)((ulong)([[TC]]->recordData_{{[0-9]+}}))
 // METAL: [[TRIANGLE]]({{.*}}, [[BARY]]);
 
 // OptiX forwards payload and custom attributes through helpers. Record reads use the

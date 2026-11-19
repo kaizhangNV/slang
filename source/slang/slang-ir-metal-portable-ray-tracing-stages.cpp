@@ -82,19 +82,20 @@ IRType* getRayPayloadStorageType(IRBuilder& builder, IRType* payloadType)
 }
 
 /// Builds an IR pointer to stage data using the concrete type expected by the selected shader.
-/// Metal function-table signatures pass payload, callable data, and attributes as thread void*
-/// so independently compiled shaders agree on the argument types. The selected adapter knows
+/// Invocation contexts store payload, callable data, and attributes as thread void*
+/// so independently compiled shaders agree on the field types. The selected adapter knows
 /// the concrete type from the shader's input contract and restores that type here.
 ///
 /// Consider a miss shader whose Context.Payload is `struct Payload { float value; }`.
-/// The generated caller and adapter conceptually do the following (other arguments omitted):
+/// The generated caller and adapter conceptually do the following (other fields omitted):
 ///     // Caller: pass the address of the actual payload through the common table signature.
 ///     Payload payload;
-///     missTable[index]((thread void*)&payload, ...);
-///     // Selected miss adapter: recover the pointer type needed by input.payload.value.
-///     thread Payload* typedPayload = (thread Payload*)payloadAddress;
+///     MissInvocationContext context = { (thread void*)&payload, ... };
+///     missTable[index](&context);
+///     // Selected miss adapter receives &context as invocation and restores the payload type.
+///     thread Payload* typedPayload = (thread Payload*)invocation->payload;
 ///
-/// `erasedAddress` is the IR value for payloadAddress, and `dataType` is Payload. The returned
+/// `erasedAddress` is the loaded invocation->payload field, and `dataType` is Payload. The returned
 /// pointer lets later input lowering pass the same payload storage to invoke and its helpers.
 /// For nonempty data, the caller must supply storage of the matching type in the thread address
 /// space; this function does not discover or validate the storage's type at runtime.
@@ -180,53 +181,23 @@ bool isBuiltinAttributeView(IRInst* operation)
            primitive == KnownBuiltinDeclName::RayTracingCurvePrimitive;
 }
 
-enum class ParameterKind
+/// Defines one physical context field and the logical getter it directly supplies, if any.
+struct InvocationFieldInfo
 {
-    Data,
-    HitAttributes,
-    Distance,
-    HitKind,
-    Barycentrics,
-    FrontFacing,
-    CurveParameter,
-    WorldOrigin,
-    WorldDirection,
-    PrimitiveIndex,
-    GeometryIndex,
-    InstanceCount,
-    InstanceIndices,
-    InstanceIDs,
-    ObjectOrigin,
-    ObjectDirection,
-    ObjectToWorld,
-    WorldToObject,
-    Record,
-    Descriptor,
-    Records,
-    MinDistance,
-    RayTime,
-    RayFlags,
-    DispatchIndex,
-    DispatchDimensions,
-    GlobalResources,
-};
-
-struct ParameterInfo
-{
-    ParameterKind kind;
+    MetalRTInvocationField role;
     IRType* type;
     const char* name;
     IROp operation = kIROp_Invalid;
 };
 
-/// Defines the table signature once for both resource construction and adapter parameters.
-/// Its ordering is the physical visible-function ABI consumed by Metal trace emission.
-List<ParameterInfo> getVisibleParameters(
+/// Defines the fixed field types and order shared by independently compiled callers and stages.
+/// The getter opcode identifies fields that directly supply a logical input property.
+List<InvocationFieldInfo> getVisibleContextFields(
     IRBuilder& builder,
     const StageRequirements& requirements,
     IRType* descriptorPointerType)
 {
-    List<ParameterInfo> result;
+    List<InvocationFieldInfo> result;
     auto floatType = builder.getFloatType();
     auto uintType = builder.getUIntType();
     auto float3Type = builder.getVectorType(floatType, 3);
@@ -236,120 +207,128 @@ List<ParameterInfo> getVisibleParameters(
         builder.getIntValue(builder.getIntType(), 3),
         builder.getIntValue(builder.getIntType(), kMatrixLayoutMode_RowMajor));
     result.add(
-        {ParameterKind::Data,
+        {MetalRTInvocationField::Data,
          builder.getPtrType(builder.getVoidType(), AddressSpace::ThreadLocal),
          "payload"});
     if (requirements.has(MetalRTStageRequirement::HitAttributes))
         result.add(
-            {ParameterKind::HitAttributes,
+            {MetalRTInvocationField::HitAttributes,
              builder.getPtrType(builder.getVoidType(), AddressSpace::ThreadLocal),
              "attributes"});
     if (requirements.has(MetalRTStageRequirement::Distance) ||
         requirements.has(MetalRTStageRequirement::ObjectSpaceRay))
         result.add(
-            {ParameterKind::Distance, floatType, "distance", kIROp_MetalRTGetCurrentDistance});
+            {MetalRTInvocationField::Distance,
+             floatType,
+             "distance",
+             kIROp_MetalRTGetCurrentDistance});
     if (requirements.has(MetalRTStageRequirement::HitKind))
-        result.add({ParameterKind::HitKind, uintType, "hitKind", kIROp_MetalRTGetHitKind});
+        result.add({MetalRTInvocationField::HitKind, uintType, "hitKind", kIROp_MetalRTGetHitKind});
     if (requirements.has(MetalRTStageRequirement::TriangleBarycentricCoord))
         result.add(
-            {ParameterKind::Barycentrics,
+            {MetalRTInvocationField::Barycentrics,
              builder.getVectorType(floatType, 2),
              "barycentricCoord",
              kIROp_PortableRTGetTriangleBarycentricCoord});
     if (requirements.has(MetalRTStageRequirement::TriangleFrontFacing))
         result.add(
-            {ParameterKind::FrontFacing,
+            {MetalRTInvocationField::FrontFacing,
              builder.getBoolType(),
              "frontFacing",
              kIROp_MetalRTGetTriangleFrontFacing});
     if (requirements.has(MetalRTStageRequirement::CurveParameter))
         result.add(
-            {ParameterKind::CurveParameter,
+            {MetalRTInvocationField::CurveParameter,
              floatType,
              "curveParameter",
              kIROp_PortableRTGetCurveParameter});
     if (requirements.has(MetalRTStageRequirement::WorldSpaceOrigin))
         result.add(
-            {ParameterKind::WorldOrigin,
+            {MetalRTInvocationField::WorldOrigin,
              float3Type,
              "worldSpaceOrigin",
              kIROp_MetalRTGetWorldSpaceOrigin});
     if (requirements.has(MetalRTStageRequirement::WorldSpaceDirection))
         result.add(
-            {ParameterKind::WorldDirection,
+            {MetalRTInvocationField::WorldDirection,
              float3Type,
              "worldSpaceDirection",
              kIROp_MetalRTGetWorldSpaceDirection});
     if (requirements.has(MetalRTStageRequirement::PrimitiveIndex))
         result.add(
-            {ParameterKind::PrimitiveIndex,
+            {MetalRTInvocationField::PrimitiveIndex,
              uintType,
              "primitiveIndex",
              kIROp_MetalRTGetPrimitiveIndex});
     if (requirements.has(MetalRTStageRequirement::GeometryIndex))
         result.add(
-            {ParameterKind::GeometryIndex,
+            {MetalRTInvocationField::GeometryIndex,
              uintType,
              "geometryIndex",
              kIROp_MetalRTGetGeometryIndex});
     if (requirements.has(MetalRTStageRequirement::InstanceCount))
         result.add(
-            {ParameterKind::InstanceCount,
+            {MetalRTInvocationField::InstanceCount,
              uintType,
              "instanceCount",
              kIROp_MetalRTGetInstanceCount});
     if (requirements.has(MetalRTStageRequirement::InstanceIndexAtLevel))
         result.add(
-            {ParameterKind::InstanceIndices,
+            {MetalRTInvocationField::InstanceIndices,
              builder.getPtrType(uintType, AddressSpace::ThreadLocal),
              "instanceIndices",
              kIROp_MetalRTGetInstanceIndex});
     if (requirements.has(MetalRTStageRequirement::InstanceIDAtLevel))
         result.add(
-            {ParameterKind::InstanceIDs,
+            {MetalRTInvocationField::InstanceIDs,
              builder.getPtrType(uintType, AddressSpace::ThreadLocal),
              "instanceIDs",
              kIROp_MetalRTGetInstanceID});
     if (requirements.has(MetalRTStageRequirement::ObjectSpaceRay))
     {
-        result.add({ParameterKind::ObjectOrigin, float3Type, "objectSpaceOrigin"});
-        result.add({ParameterKind::ObjectDirection, float3Type, "objectSpaceDirection"});
+        result.add({MetalRTInvocationField::ObjectOrigin, float3Type, "objectSpaceOrigin"});
+        result.add({MetalRTInvocationField::ObjectDirection, float3Type, "objectSpaceDirection"});
     }
     if (requirements.has(MetalRTStageRequirement::ObjectToWorld))
         result.add(
-            {ParameterKind::ObjectToWorld,
+            {MetalRTInvocationField::ObjectToWorld,
              matrixType,
              "objectToWorld",
              kIROp_MetalRTGetObjectToWorld});
     if (requirements.has(MetalRTStageRequirement::WorldToObject))
         result.add(
-            {ParameterKind::WorldToObject,
+            {MetalRTInvocationField::WorldToObject,
              matrixType,
              "worldToObject",
              kIROp_MetalRTGetWorldToObject});
     if (requirements.has(MetalRTStageRequirement::Record))
         result.add(
-            {ParameterKind::Record,
+            {MetalRTInvocationField::Record,
              builder.getPtrType(builder.getUInt8Type(), AddressSpace::Global),
              "recordData"});
     if (requirements.has(MetalRTStageRequirement::CallableDispatch))
-        result.add({ParameterKind::Descriptor, descriptorPointerType, "descriptorResources"});
-    result.add({ParameterKind::MinDistance, floatType, "minDistance", kIROp_MetalRTGetMinDistance});
-    result.add({ParameterKind::RayTime, floatType, "rayTime", kIROp_MetalRTGetRayTime});
-    result.add({ParameterKind::RayFlags, uintType, "rayFlags", kIROp_MetalRTGetRayFlags});
+        result.add(
+            {MetalRTInvocationField::Descriptor, descriptorPointerType, "descriptorResources"});
+    result.add(
+        {MetalRTInvocationField::MinDistance,
+         floatType,
+         "minDistance",
+         kIROp_MetalRTGetMinDistance});
+    result.add({MetalRTInvocationField::RayTime, floatType, "rayTime", kIROp_MetalRTGetRayTime});
+    result.add({MetalRTInvocationField::RayFlags, uintType, "rayFlags", kIROp_MetalRTGetRayFlags});
     auto uint3 = builder.getVectorType(uintType, 3);
     result.add(
-        {ParameterKind::DispatchIndex,
+        {MetalRTInvocationField::DispatchIndex,
          uint3,
          "dispatchRaysIndex",
          kIROp_MetalRTGetDispatchRaysIndex});
     result.add(
-        {ParameterKind::DispatchDimensions,
+        {MetalRTInvocationField::DispatchDimensions,
          uint3,
          "dispatchRaysDimensions",
          kIROp_MetalRTGetDispatchRaysDimensions});
     result.add(
-        {ParameterKind::Records,
+        {MetalRTInvocationField::Records,
          builder.getPtrType(
              uintType,
              AccessQualifier::Read,
@@ -357,47 +336,45 @@ List<ParameterInfo> getVisibleParameters(
              builder.getDefaultBufferLayoutType()),
          "records"});
     result.add(
-        {ParameterKind::GlobalResources,
+        {MetalRTInvocationField::GlobalResources,
          builder.getPtrType(builder.getUInt8Type(), AddressSpace::ThreadLocal),
          "globalResources"});
     return result;
 }
 
-/// Defines callable parameter order once for the physical table and each adapter. The emitter's
-/// MetalRTCallDispatch consumes this ABI; source data types may differ because the first pointer
-/// is erased until the selected adapter knows its Context.CallableData.
-List<ParameterInfo> getCallableParameters(
+/// Defines the callable context independently of the source CallableData and Record types.
+/// The selected receiver restores those types from the erased addresses.
+List<InvocationFieldInfo> getCallableContextFields(
     IRBuilder& builder,
     const StageRequirements& requirements,
     IRType* descriptorPointerType)
 {
     SLANG_RELEASE_ASSERT(
-        requirements.dispatchRaysIndex && requirements.dispatchRaysDimensions &&
         requirements.has(MetalRTStageRequirement::Record) &&
         requirements.has(MetalRTStageRequirement::CallableDispatch));
-    List<ParameterInfo> result;
+    List<InvocationFieldInfo> result;
     result.add(
-        {ParameterKind::Data,
+        {MetalRTInvocationField::Data,
          builder.getPtrType(builder.getVoidType(), AddressSpace::ThreadLocal),
          "data"});
     auto uint3 = builder.getVectorType(builder.getUIntType(), 3);
     result.add(
-        {ParameterKind::DispatchIndex,
+        {MetalRTInvocationField::DispatchIndex,
          uint3,
          "dispatchRaysIndex",
          kIROp_MetalRTGetDispatchRaysIndex});
     result.add(
-        {ParameterKind::DispatchDimensions,
+        {MetalRTInvocationField::DispatchDimensions,
          uint3,
          "dispatchRaysDimensions",
          kIROp_MetalRTGetDispatchRaysDimensions});
     result.add(
-        {ParameterKind::Record,
+        {MetalRTInvocationField::Record,
          builder.getPtrType(builder.getUInt8Type(), AddressSpace::Global),
          "recordData"});
-    result.add({ParameterKind::Descriptor, descriptorPointerType, "descriptorResources"});
+    result.add({MetalRTInvocationField::Descriptor, descriptorPointerType, "descriptorResources"});
     result.add(
-        {ParameterKind::Records,
+        {MetalRTInvocationField::Records,
          builder.getPtrType(
              builder.getUIntType(),
              AccessQualifier::Read,
@@ -405,7 +382,7 @@ List<ParameterInfo> getCallableParameters(
              builder.getDefaultBufferLayoutType()),
          "records"});
     result.add(
-        {ParameterKind::GlobalResources,
+        {MetalRTInvocationField::GlobalResources,
          builder.getPtrType(builder.getUInt8Type(), AddressSpace::ThreadLocal),
          "globalResources"});
     return result;
@@ -484,14 +461,9 @@ StageRequirements getStageContractRequirements(Stage stage)
     StageRequirements result;
     result.add(MetalRTStageRequirement::Record);
     result.add(MetalRTStageRequirement::CallableDispatch);
-    result.dispatchRaysIndex = true;
-    result.dispatchRaysDimensions = true;
     if (stage == Stage::Callable)
         return result;
 
-    result.minDistance = true;
-    result.rayTime = true;
-    result.rayFlags = true;
     result.add(MetalRTStageRequirement::Distance);
     result.add(MetalRTStageRequirement::WorldSpaceOrigin);
     result.add(MetalRTStageRequirement::WorldSpaceDirection);
@@ -516,52 +488,129 @@ StageRequirements getStageContractRequirements(Stage stage)
     return result;
 }
 
-IRFuncType* getVisibleFunctionSignature(
-    IRBuilder& builder,
-    const StageRequirements& requirements,
-    IRType* descriptorPointerType)
+IRStructType* InvocationContexts::get(Stage stage) const
 {
-    List<IRType*> types;
-    for (auto parameter : getVisibleParameters(builder, requirements, descriptorPointerType))
-        types.add(parameter.type);
-    return builder.getFuncType(types, builder.getVoidType());
+    switch (stage)
+    {
+    case Stage::ClosestHit:
+        return closestHit;
+    case Stage::Miss:
+        return miss;
+    case Stage::Callable:
+        return callable;
+    default:
+        SLANG_UNEXPECTED("Not a post-traversal or callable stage");
+    }
 }
 
-IRFuncType* getCallableFunctionSignature(
-    IRBuilder& builder,
-    const StageRequirements& requirements,
-    IRType* descriptorPointerType)
+/// Builds an ordinary struct with a fixed ABI. Field roles survive later renaming and let the
+/// emitter fill the context while the receiver loads only properties used by its shader.
+IRStructType* createInvocationContext(IRModule* module, Stage stage, const char* name)
 {
-    List<IRType*> types;
-    for (auto parameter : getCallableParameters(builder, requirements, descriptorPointerType))
-        types.add(parameter.type);
-    return builder.getFuncType(types, builder.getVoidType());
+    IRBuilder builder(module);
+    builder.setInsertInto(module);
+    auto type = builder.createStructType();
+    builder.addNameHintDecoration(type, UnownedTerminatedStringSlice(name));
+    auto descriptorPointer = builder.getPtrType(builder.getUIntType(), AddressSpace::Uniform);
+    auto requirements = getStageContractRequirements(stage);
+    auto fields = stage == Stage::Callable
+                      ? getCallableContextFields(builder, requirements, descriptorPointer)
+                      : getVisibleContextFields(builder, requirements, descriptorPointer);
+    for (const auto& field : fields)
+    {
+        auto key = builder.createStructKey();
+        builder.addNameHintDecoration(key, UnownedTerminatedStringSlice(field.name));
+        builder.addDecoration(
+            key,
+            kIROp_MetalRTInvocationFieldDecoration,
+            builder.getIntValue(builder.getIntType(), IRIntegerValue(field.role)),
+            builder.getIntValue(builder.getIntType(), IRIntegerValue(field.operation)));
+        builder.createStructField(type, key, field.type);
+    }
+    return type;
 }
 
-/// Creates the Metal function-table wrapper for a selected miss or closest-hit shader.
-/// The wrapper receives physical arguments such as a payload address and hit distance, then
-/// calls the source invoke method. This function also records which wrapper values supply reads
+InvocationContexts createInvocationContexts(IRModule* module)
+{
+    return {
+        createInvocationContext(module, Stage::ClosestHit, "ClosestHitInvocationContext"),
+        createInvocationContext(module, Stage::Miss, "MissInvocationContext"),
+        createInvocationContext(module, Stage::Callable, "CallableInvocationContext")};
+}
+
+IRFuncType* getInvocationFunctionSignature(IRBuilder& builder, IRStructType* contextType)
+{
+    IRType* parameter = builder.getPtrType(contextType, AddressSpace::ThreadLocal);
+    return builder.getFuncType(1, &parameter, builder.getVoidType());
+}
+
+/// Loads invocation fields on demand. The field's role handles compound properties such as
+/// objectSpaceRay; its getter opcode handles direct properties such as distance. Both identify
+/// the same canonical field key, so constructing a wrapper needs no parallel parameter maps.
+struct InvocationContextReader
+{
+    IRBuilder& builder;
+    IRInst* context;
+    IRStructType* type;
+
+    IRInst* load(IRStructField* field)
+    {
+        return builder.emitLoad(builder.emitFieldAddress(
+            builder.getPtrType(field->getFieldType(), AddressSpace::ThreadLocal),
+            context,
+            field->getKey()));
+    }
+
+    IRInst* load(MetalRTInvocationField role)
+    {
+        for (auto field : type->getFields())
+        {
+            auto info = field->getKey()->findDecoration<IRMetalRTInvocationFieldDecoration>();
+            SLANG_RELEASE_ASSERT(info);
+            if (getIntVal(info->getRole()) == IRIntegerValue(role))
+                return load(field);
+        }
+        SLANG_UNEXPECTED("Required invocation field is absent");
+    }
+
+    IRInst* tryLoadInput(IROp op)
+    {
+        for (auto field : type->getFields())
+        {
+            auto info = field->getKey()->findDecoration<IRMetalRTInvocationFieldDecoration>();
+            SLANG_RELEASE_ASSERT(info);
+            if (getIntVal(info->getOperation()) == IRIntegerValue(op))
+                return load(field);
+        }
+        return nullptr;
+    }
+};
+
+/// Creates the Metal function-table wrapper for a selected miss, closest-hit, or callable shader.
+/// The wrapper receives a thread pointer to the fixed invocation context and loads the fields
+/// used by the source invoke method. This function also records which wrapper values supply reads
 /// of the logical shader input. Later, lowerVisibleStageInputs passes those values through invoke
 /// and its helpers and replaces the input-read instructions with the corresponding values.
 VisibleAdapter createVisibleAdapter(
     IRModule* module,
     TargetRequest* target,
     const SchemaStage& stage,
-    const StageRequirements& tableRequirements,
-    UnownedStringSlice symbolName,
-    IRType* descriptorPointerType)
+    IRStructType* contextType,
+    UnownedStringSlice symbolName)
 {
-    SLANG_RELEASE_ASSERT(stage.stage == Stage::ClosestHit || stage.stage == Stage::Miss);
+    SLANG_RELEASE_ASSERT(
+        stage.stage == Stage::ClosestHit || stage.stage == Stage::Miss ||
+        stage.stage == Stage::Callable);
+    SLANG_RELEASE_ASSERT(stage.isPresent && stage.invoke && stage.input);
 
     // Create the exported function with the signature expected by its visible function table.
-    // Both the table type and the parameters below use getVisibleParameters, so their types and
-    // order agree. Mark this as a Metal visible function and keep its selected export name.
+    // The table and its receiver share the canonical context type. Its field layout is fixed
+    // by stage kind, including fields this particular shader does not use.
     IRBuilder builder(module);
     builder.setInsertInto(module->getModuleInst());
     VisibleAdapter result;
     result.function = builder.createFunc();
-    auto functionType =
-        getVisibleFunctionSignature(builder, tableRequirements, descriptorPointerType);
+    auto functionType = getInvocationFunctionSignature(builder, contextType);
     result.function->setFullType(functionType);
     builder.addNameHintDecoration(result.function, symbolName);
     builder.addExportDecoration(result.function, symbolName);
@@ -580,77 +629,46 @@ VisibleAdapter createVisibleAdapter(
     builder.setInsertInto(result.function);
     builder.emitBlock();
 
-    // Create the incoming parameters and keep two lookups while constructing this wrapper:
-    //     parameters[Data] = %payload              // find an argument by its role
-    //     values[MetalRTGetCurrentDistance] = %distance // find the value for an input read
-    // The first lookup also covers arguments that need a cast or load, such as the payload and
-    // record addresses. The second covers arguments associated with a getter instruction.
-    // `seen` tracks (getter opcode, getter result type) pairs already saved in result.bindings.
-    // These are C++ construction data; result.bindings is the list returned for later input
-    // lowering. None of these dictionaries or lists becomes a shader buffer.
-    Dictionary<ParameterKind, IRInst*> parameters;
-    Dictionary<IROp, IRInst*> values;
+    auto context = builder.emitParam(builder.getPtrType(contextType, AddressSpace::ThreadLocal));
+    builder.addNameHintDecoration(context, toSlice("invocation"));
+    InvocationContextReader inputs{builder, context, contextType};
     HashSet<KeyValuePair<IROp, IRType*>> seen;
-    for (auto parameter : getVisibleParameters(builder, tableRequirements, descriptorPointerType))
+
+    // Nested TraceRay/CallShader lowering can introduce launch getters after this body scan.
+    // Bind those two fields now so later helper forwarding still uses this invocation's launch.
+    IROp launchOps[] = {kIROp_MetalRTGetDispatchRaysIndex, kIROp_MetalRTGetDispatchRaysDimensions};
+    for (auto op : launchOps)
     {
-        auto value = builder.emitParam(parameter.type);
-        builder.addNameHintDecoration(value, UnownedTerminatedStringSlice(parameter.name));
-        // Global-context lowering uses this marker to find the incoming shared resources.
-        if (parameter.kind == ParameterKind::GlobalResources)
-            builder.addDecoration(value, kIROp_MetalRTGlobalResourceContextDecoration);
-        parameters.add(parameter.kind, value);
-        if (parameter.operation != kIROp_Invalid)
-            values.add(parameter.operation, value);
-        // These two uint3 arguments describe the originating ray-generation launch. Save both
-        // values even when the source body does not read them yet. Consider
-        // Miss.invoke calling a helper that contains CallShader. Later, lowerCallable creates
-        // MetalRTGetDispatchRaysIndex/Dimensions in that helper to pass to the callable shader.
-        // The binding saved here says, for example:
-        //     (MetalRTGetDispatchRaysIndex, uint3) -> %dispatchRaysIndex
-        // lowerVisibleStageInputs then passes this existing argument through invoke and the
-        // helper, replacing the new getter. The wrapper needs no extra parameter.
-        // Other getters are recorded by the body scan below, which supplies their result type.
-        // For example, an instance-index getter returns uint, but its argument is a uint*.
-        if (stage.isPresent && (parameter.operation == kIROp_MetalRTGetDispatchRaysIndex ||
-                                parameter.operation == kIROp_MetalRTGetDispatchRaysDimensions))
-        {
-            seen.add({parameter.operation, parameter.type});
-            result.bindings.add({parameter.operation, parameter.type, value});
-        }
+        auto value = inputs.tryLoadInput(op);
+        SLANG_RELEASE_ASSERT(value);
+        seen.add({op, value->getDataType()});
+        result.bindings.add({op, value->getDataType(), value});
     }
 
-    // A missing stage needs only the function signature and an empty body.
-    if (!stage.isPresent)
-    {
-        builder.emitReturn();
-        return result;
-    }
-    SLANG_RELEASE_ASSERT(stage.invoke && stage.input);
-
-    // Keep the descriptor and whole records-buffer arguments in the returned description.
-    if (auto descriptor = parameters.tryGetValue(ParameterKind::Descriptor))
-        result.descriptorResources = *descriptor;
-    result.records = parameters.getValue(ParameterKind::Records);
+    // Nested dispatch also needs the program descriptor and the complete records buffer.
+    result.descriptorResources = inputs.load(MetalRTInvocationField::Descriptor);
+    result.records = inputs.load(MetalRTInvocationField::Records);
 
     // Find input reads in invoke and the ordinary helper functions it calls. For each kind of
     // read, construct its replacement value inside this wrapper. Leave the source instructions
     // in place for now: lowerVisibleStageInputs will forward these values through their callers.
-    HashSet<IRFunc*> visited;
     List<IRInst*> operations;
-    collectOperations(stage.invoke, visited, operations);
+    collectStageInputOperations(stage.invoke, operations);
     for (auto operation : operations)
     {
         auto op = operation->getOp();
         auto type = operation->getDataType();
+        if (!seen.add({op, type}))
+            continue;
         IRInst* value = nullptr;
         // Recover a typed pointer to the caller's payload so writes update the same storage.
-        if (op == kIROp_PortableRTGetPayload)
+        if (op == kIROp_PortableRTGetPayload || op == kIROp_PortableRTGetCallableData)
             value = getStageDataReference(
                 builder,
-                parameters.getValue(ParameterKind::Data),
+                inputs.load(MetalRTInvocationField::Data),
                 cast<IRPtrTypeBase>(type)->getValueType());
-        else if (auto bound = values.tryGetValue(op))
-            value = *bound;
+        else if (auto bound = inputs.tryLoadInput(op))
+            value = bound;
         else if (op == kIROp_PortableRTGetRecord)
         {
             // Read this shader's Record value from the incoming record-data address. Empty
@@ -660,7 +678,7 @@ VisibleAdapter createVisibleAdapter(
                                              : builder.emitDefaultConstruct(type);
             else
             {
-                auto address = parameters.getValue(ParameterKind::Record);
+                auto address = inputs.load(MetalRTInvocationField::Record);
                 // This is application buffer storage, not a pointer to an already-legalized
                 // internal struct. UserPointer lets existing Metal storage lowering pack its
                 // vectors/matrices consistently with reflected structured-buffer field offsets.
@@ -672,7 +690,7 @@ VisibleAdapter createVisibleAdapter(
         else if (op == kIROp_PortableRTGetHitAttributes)
         {
             // Triangle/curve attribute views carry no data themselves; their getters use the
-            // separate barycentric/front-facing/curve parameters. Procedural attributes have an
+            // separate barycentric/front-facing/curve fields. Procedural attributes have an
             // application-defined type packed in the shared committed-attribute storage. Its
             // packing is independent of schema order and native Metal float3 padding.
             if (isBuiltinAttributeView(operation))
@@ -688,117 +706,30 @@ VisibleAdapter createVisibleAdapter(
                     auto packedType = builder.getAnyValueType(packedSize);
                     auto address = builder.emitBitCast(
                         builder.getPtrType(packedType, AddressSpace::ThreadLocal),
-                        parameters.getValue(ParameterKind::HitAttributes));
+                        inputs.load(MetalRTInvocationField::HitAttributes));
                     value = builder.emitUnpackAnyValue(type, builder.emitLoad(address));
                 }
             }
         }
         else if (op == kIROp_MetalRTGetObjectSpaceRay)
         {
-            // The signature passes the ray components separately. Assemble the RayDesc value
+            // The context stores the ray components separately. Assemble the RayDesc value
             // expected by this getter from origin, minimum distance, direction and hit distance.
             IRInst* fields[] = {
-                parameters.getValue(ParameterKind::ObjectOrigin),
-                values.getValue(kIROp_MetalRTGetMinDistance),
-                parameters.getValue(ParameterKind::ObjectDirection),
-                values.getValue(kIROp_MetalRTGetCurrentDistance)};
+                inputs.load(MetalRTInvocationField::ObjectOrigin),
+                inputs.load(MetalRTInvocationField::MinDistance),
+                inputs.load(MetalRTInvocationField::ObjectDirection),
+                inputs.load(MetalRTInvocationField::Distance)};
             value = builder.emitMakeStruct(type, SLANG_COUNT_OF(fields), fields);
         }
         // Save one rule per opcode/result type, even if several helpers contain the same read.
-        // For example, all float MetalRTGetCurrentDistance reads use this wrapper's %distance.
-        if (value && seen.add({op, type}))
+        // For example, all float MetalRTGetCurrentDistance reads use the same context field load.
+        if (value)
             result.bindings.add({op, type, value});
     }
 
     // Call the original method with its empty logical input. Later input lowering adds the
     // arguments needed by its body and helpers, using the replacement rules recorded above.
-    emitInvoke(builder, stage.invoke);
-    builder.emitReturn();
-    return result;
-}
-
-VisibleAdapter createCallableAdapter(
-    IRModule* module,
-    const SchemaStage& stage,
-    const StageRequirements& tableRequirements,
-    UnownedStringSlice symbolName,
-    IRType* descriptorPointerType)
-{
-    SLANG_RELEASE_ASSERT(
-        stage.stage == Stage::Callable && stage.isPresent && stage.invoke && stage.input);
-    IRBuilder builder(module);
-    builder.setInsertInto(module->getModuleInst());
-    VisibleAdapter result;
-    result.function = builder.createFunc();
-    auto functionType =
-        getCallableFunctionSignature(builder, tableRequirements, descriptorPointerType);
-    result.function->setFullType(functionType);
-    builder.addNameHintDecoration(result.function, symbolName);
-    builder.addExportDecoration(result.function, symbolName);
-    builder.addExternCppDecoration(result.function, symbolName);
-    builder.addKeepAliveDecoration(result.function);
-    IRInst* operands[] = {
-        functionType,
-        builder.getIntValue(builder.getIntType(), IRIntegerValue(Stage::Callable))};
-    auto tableType = builder.getType(kIROp_MetalVisibleFunctionTable, 2, operands);
-    builder.addDecoration(
-        result.function,
-        kIROp_MetalVisibleFunctionDecoration,
-        operands[1],
-        tableType);
-    builder.setInsertInto(result.function);
-    builder.emitBlock();
-    Dictionary<ParameterKind, IRInst*> parameters;
-    Dictionary<IROp, IRInst*> values;
-    HashSet<KeyValuePair<IROp, IRType*>> seen;
-    for (auto parameter : getCallableParameters(builder, tableRequirements, descriptorPointerType))
-    {
-        auto value = builder.emitParam(parameter.type);
-        builder.addNameHintDecoration(value, UnownedTerminatedStringSlice(parameter.name));
-        if (parameter.kind == ParameterKind::GlobalResources)
-            builder.addDecoration(value, kIROp_MetalRTGlobalResourceContextDecoration);
-        parameters.add(parameter.kind, value);
-        if (parameter.operation != kIROp_Invalid)
-            values.add(parameter.operation, value);
-        // Nested dispatch can create launch queries after this adapter's body is inspected.
-        // Their fixed uint3 result types already match these invocation parameters.
-        if (parameter.operation == kIROp_MetalRTGetDispatchRaysIndex ||
-            parameter.operation == kIROp_MetalRTGetDispatchRaysDimensions)
-        {
-            seen.add({parameter.operation, parameter.type});
-            result.bindings.add({parameter.operation, parameter.type, value});
-        }
-    }
-    result.descriptorResources = parameters.getValue(ParameterKind::Descriptor);
-    result.records = parameters.getValue(ParameterKind::Records);
-    auto data = getStageDataReference(
-        builder,
-        parameters.getValue(ParameterKind::Data),
-        stage.input->getPayloadType());
-    values.add(kIROp_PortableRTGetCallableData, data);
-    HashSet<IRFunc*> visited;
-    List<IRInst*> operations;
-    collectOperations(stage.invoke, visited, operations);
-    for (auto operation : operations)
-    {
-        auto op = operation->getOp();
-        auto type = operation->getDataType();
-        IRInst* value = nullptr;
-        if (auto bound = values.tryGetValue(op))
-            value = *bound;
-        else if (op == kIROp_PortableRTGetRecord)
-        {
-            if (isEmptyType(type))
-                value = as<IRVoidType>(type) ? builder.getVoidValue()
-                                             : builder.emitDefaultConstruct(type);
-            else
-                value = builder.emitLoad(builder.emitBitCast(
-                    builder.getPtrType(type, AddressSpace::UserPointer),
-                    parameters.getValue(ParameterKind::Record)));
-        }
-        if (value && seen.add({op, type}))
-            result.bindings.add({op, type, value});
-    }
     emitInvoke(builder, stage.invoke);
     builder.emitReturn();
     return result;
@@ -870,6 +801,7 @@ List<PortableRT::Metal::VisibleAdapter> createMetalStageAdapters(
     List<IRFunc*>& entryPoints,
     const PortableRT::Metal::RayDataHeader& header,
     const MetalRTCandidateResources& candidateResources,
+    const PortableRT::Metal::InvocationContexts& invocationContexts,
     bool& requiresResultTypeLowering,
     DiagnosticSink* sink)
 {
@@ -939,30 +871,12 @@ List<PortableRT::Metal::VisibleAdapter> createMetalStageAdapters(
         }
         else
         {
-            auto requirements = getStageContractRequirements(stage.stage);
-            auto descriptorPointer =
-                builder.getPtrType(builder.getUIntType(), AddressSpace::Uniform);
-            if (stage.stage == Stage::Callable)
-            {
-                root = createCallableAdapter(
-                    module,
-                    stage,
-                    requirements,
-                    symbolName,
-                    descriptorPointer);
-            }
-            else
-            {
-                SLANG_RELEASE_ASSERT(
-                    stage.stage == Stage::ClosestHit || stage.stage == Stage::Miss);
-                root = createVisibleAdapter(
-                    module,
-                    targetProgram->getTargetReq(),
-                    stage,
-                    requirements,
-                    symbolName,
-                    descriptorPointer);
-            }
+            root = createVisibleAdapter(
+                module,
+                targetProgram->getTargetReq(),
+                stage,
+                invocationContexts.get(stage.stage),
+                symbolName);
         }
         result.add(_Move(root));
     }

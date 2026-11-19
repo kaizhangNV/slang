@@ -43,6 +43,40 @@ enum class MetalRTStageRequirement : UInt
     InstanceIDAtLevel = 1 << 19,
 };
 
+/// Identifies fields of the fixed invocation context shared by a VFT caller and its receiver.
+/// Field keys retain these roles through legalization; consumers never infer a role from a
+/// generated field name or position. Payload and record fields contain erased addresses.
+enum class MetalRTInvocationField : UInt
+{
+    Data,
+    HitAttributes,
+    Distance,
+    HitKind,
+    Barycentrics,
+    FrontFacing,
+    CurveParameter,
+    WorldOrigin,
+    WorldDirection,
+    PrimitiveIndex,
+    GeometryIndex,
+    InstanceCount,
+    InstanceIndices,
+    InstanceIDs,
+    ObjectOrigin,
+    ObjectDirection,
+    ObjectToWorld,
+    WorldToObject,
+    Record,
+    Descriptor,
+    Records,
+    MinDistance,
+    RayTime,
+    RayFlags,
+    DispatchIndex,
+    DispatchDimensions,
+    GlobalResources,
+};
+
 /// Selects the native geometry annotation or an intersector geometry assumption. Unknown means
 /// the schema contains multiple primitive kinds and the intersector must not assume one kind.
 enum class MetalRTGeometryKind : UInt

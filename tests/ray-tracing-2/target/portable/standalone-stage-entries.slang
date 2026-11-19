@@ -47,8 +47,8 @@ struct Background : rt::IMissShader
 // Both selections produce the same visible adapter and concrete float3 payload access.
 // METAL: void [[INVOKE:Stages_Background_invoke_[0-9]+]](float3 thread* [[PAYLOAD:[A-Za-z0-9_]+]])
 // METAL: *[[PAYLOAD]] = float3(0.25f, 0.5f, 1.0f);
-// METAL: visible]] void Stages_Background_miss(void thread* [[ENTRY_PAYLOAD:payload_[0-9]+]],
-// METAL: [[INVOKE]]((float3 thread*)((ulong)([[ENTRY_PAYLOAD]])));
+// METAL: visible]] void Stages_Background_miss(MissInvocationContext_{{[0-9]+}} thread* [[ENTRY_CONTEXT:invocation_[0-9]+]])
+// METAL: [[INVOKE]]((float3 thread*)((ulong)([[ENTRY_CONTEXT]]->payload_{{[0-9]+}})));
 
 // Selecting either declaration emits the same OptiX entry and writes all three payload words.
 // CUDA: void [[INVOKE:Stages_Background_invoke_[0-9]+]](float3 {{ *}}* [[PAYLOAD:[A-Za-z0-9_]+]])

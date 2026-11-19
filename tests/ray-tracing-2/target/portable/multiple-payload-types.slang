@@ -152,19 +152,19 @@ struct LibraryCallable : rt::ICallableShader
 // METAL: [[LD]]->{{libraryValue_[0-9]+}} = [[LD]]->{{libraryValue_[0-9]+}} + 29U;
 // METAL: void [[LIB_CALLABLE:LibraryCallable_invoke_[0-9]+]]([[LIB_TYPE]] thread* [[LCD:[A-Za-z0-9_]+]])
 // METAL: [[LIB_DATA]]([[LCD]]);
-// METAL: visible]] void FirstMiss_miss(void thread* [[FEP:payload_[0-9]+]],
-// METAL: [[FIRST]](([[SHARED_TYPE]] thread*)((ulong)([[FEP]])));
-// METAL: visible]] void SharedMiss_miss(void thread* [[SEP:payload_[0-9]+]],
-// METAL: [[SHARED]](([[SHARED_TYPE]] thread*)((ulong)([[SEP]])));
-// METAL: visible]] void OtherMiss_miss(void thread* [[OEP:payload_[0-9]+]],
-// METAL: [[OTHER]](([[OTHER_TYPE]] thread*)((ulong)([[OEP]])));
-// METAL: visible]] void UnusedMiss_miss(void thread* payload_
-// METAL: visible]] void Callable_callable(void thread* [[CD:data_[0-9]+]],
-// METAL: [[CALLABLE]](([[SHARED_TYPE]] thread*)((ulong)([[CD]])));
-// METAL: visible]] void LibraryMiss_miss(void thread* [[LMEP:payload_[0-9]+]],
-// METAL: [[LIB_MISS]](([[LIB_TYPE]] thread*)((ulong)([[LMEP]])));
-// METAL: visible]] void LibraryCallable_callable(void thread* [[LCED:data_[0-9]+]],
-// METAL: [[LIB_CALLABLE]](([[LIB_TYPE]] thread*)((ulong)([[LCED]])));
+// METAL: visible]] void FirstMiss_miss(MissInvocationContext_{{[0-9]+}} thread* [[FEP:invocation_[0-9]+]])
+// METAL: [[FIRST]](([[SHARED_TYPE]] thread*)((ulong)([[FEP]]->payload_{{[0-9]+}})));
+// METAL: visible]] void SharedMiss_miss(MissInvocationContext_{{[0-9]+}} thread* [[SEP:invocation_[0-9]+]])
+// METAL: [[SHARED]](([[SHARED_TYPE]] thread*)((ulong)([[SEP]]->payload_{{[0-9]+}})));
+// METAL: visible]] void OtherMiss_miss(MissInvocationContext_{{[0-9]+}} thread* [[OEP:invocation_[0-9]+]])
+// METAL: [[OTHER]](([[OTHER_TYPE]] thread*)((ulong)([[OEP]]->payload_{{[0-9]+}})));
+// METAL: visible]] void UnusedMiss_miss(MissInvocationContext_{{[0-9]+}} thread* invocation_
+// METAL: visible]] void Callable_callable(CallableInvocationContext_{{[0-9]+}} thread* [[CD:invocation_[0-9]+]])
+// METAL: [[CALLABLE]](([[SHARED_TYPE]] thread*)((ulong)([[CD]]->data_{{[0-9]+}})));
+// METAL: visible]] void LibraryMiss_miss(MissInvocationContext_{{[0-9]+}} thread* [[LMEP:invocation_[0-9]+]])
+// METAL: [[LIB_MISS]](([[LIB_TYPE]] thread*)((ulong)([[LMEP]]->payload_{{[0-9]+}})));
+// METAL: visible]] void LibraryCallable_callable(CallableInvocationContext_{{[0-9]+}} thread* [[LCED:invocation_[0-9]+]])
+// METAL: [[LIB_CALLABLE]](([[LIB_TYPE]] thread*)((ulong)([[LCED]]->data_{{[0-9]+}})));
 
 // Retaining an exported helper alone does not provide a Metal invocation ABI.
 // UNBOUND-NOT: error[E99997]

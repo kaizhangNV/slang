@@ -48,8 +48,8 @@ struct StatefulMiss : rt::IMissShader
 // METAL: *[[PAYLOAD]] = 11U;
 // METAL-NOT: ordinaryState
 // METAL-NOT: ordinaryVector
-// METAL: visible]] void StatefulMiss_miss(void thread* [[ENTRY_PAYLOAD:payload_[0-9]+]],
-// METAL: [[INVOKE]]((uint thread*)((ulong)([[ENTRY_PAYLOAD]])));
+// METAL: visible]] void StatefulMiss_miss(MissInvocationContext_{{[0-9]+}} thread* [[ENTRY_CONTEXT:invocation_[0-9]+]])
+// METAL: [[INVOKE]]((uint thread*)((ulong)([[ENTRY_CONTEXT]]->payload_{{[0-9]+}})));
 // METAL-NOT: ordinaryState
 // METAL-NOT: ordinaryVector
 

@@ -1767,8 +1767,6 @@ local insts = {
 			operands = {
 				{ "tagMask" },
 				{ "maxLevels" },
-				{ "missRequirements" },
-				{ "closestHitRequirements" },
 				{ "geometryKind" },
 				{ "hasIntersectionFunctions" },
 				{ "hasMissFunctions" },
@@ -1792,8 +1790,6 @@ local insts = {
 				{ "hitRecordStride", "IRIntLit" },
 				{ "missRecordStride", "IRIntLit" },
 				{ "rayData" },
-				{ "missHasGlobalContext" },
-				{ "closestHitHasGlobalContext" },
 				{ "globalContext" },
 				-- Candidate dispatch and committed closest-hit dispatch call this same helper so
 				-- both interpret a multi-level instance path through the AS metadata trie
@@ -1817,15 +1813,11 @@ local insts = {
 				{ "data" },
 				{ "dispatchRaysIndex" },
 				{ "dispatchRaysDimensions" },
-				{ "hasDispatchRaysIndex" },
-				{ "hasDispatchRaysDimensions" },
 				{ "descriptorResources" },
 				{ "records" },
 				{ "callableRecordStride", "IRIntLit" },
-				{ "hasRecord", "IRBoolLit" },
 				{ "descriptorResourcesType" },
 				{ "callableFunctionsKey", "IRStructKey" },
-				{ "hasGlobalContext" },
 				{ "globalContext" },
 			},
 		},
@@ -2335,6 +2327,13 @@ local insts = {
 			{
 				-- The fixed table ABI passes resources, never a caller's private globals.
 				MetalRTGlobalResourceContextDecoration = {},
+			},
+			{
+				-- Identifies a fixed invocation-context field and its optional logical getter.
+				-- Constructed after specialization; caller and provider share this physical ABI.
+				MetalRTInvocationFieldDecoration = {
+					operands = { { "role", "IRIntLit" }, { "operation", "IRIntLit" } },
+				},
 			},
 			{
 				-- An explicitly selected logical Metal stage remains an ordinary exported

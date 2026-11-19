@@ -80,20 +80,19 @@ struct StandaloneCallable : rt::ICallableShader
 }
 
 // MISS: updateMiss
-// MISS: visible]] void StandaloneMiss_miss(
-// MISS-SAME: uchar device* recordData
-// MISS-SAME: uchar thread* globalResources
+// MISS: visible]] void StandaloneMiss_miss(MissInvocationContext_{{[0-9]+}} thread* [[CONTEXT:invocation_[0-9]+]])
+// MISS: [[CONTEXT]]->globalResources_
+// MISS: [[CONTEXT]]->recordData_
+// MISS: StandaloneMiss_invoke_
 // MISS-NOT: kernel]]
 // MISS-NOT: visible_function_table
 // MISS-NOT: intersection_function_table
-// HIT: visible]] void StandaloneHit_closesthit(
-// HIT-SAME: void thread* attributes
-// HIT-SAME: uchar thread* globalResources
+// HIT: visible]] void StandaloneHit_closesthit(ClosestHitInvocationContext_{{[0-9]+}} thread* [[CONTEXT:invocation_[0-9]+]])
+// HIT: StandaloneHit_invoke_{{[0-9]+}}({{.*}}[[CONTEXT]]->barycentricCoord_{{[0-9]+}}, [[CONTEXT]]->frontFacing_{{[0-9]+}});
 // HIT-NOT: kernel]]
 // HIT-NOT: visible_function_table
 // CALLABLE: updateCallable
-// CALLABLE: visible]] void StandaloneCallable_callable(
-// CALLABLE-SAME: uint3 dispatchRaysIndex
-// CALLABLE-SAME: uchar thread* globalResources
+// CALLABLE: visible]] void StandaloneCallable_callable(CallableInvocationContext_{{[0-9]+}} thread* [[CONTEXT:invocation_[0-9]+]])
+// CALLABLE: StandaloneCallable_invoke_{{[0-9]+}}([[CONTEXT]]->dispatchRaysIndex_{{[0-9]+}}, (uint thread*)((ulong)([[CONTEXT]]->data_{{[0-9]+}})));
 // CALLABLE-NOT: kernel]]
 // CALLABLE-NOT: visible_function_table

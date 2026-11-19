@@ -88,18 +88,19 @@ void RayGeneration()
 // METAL-NOT: visible]]
 // METAL-DAG: uint device* background
 // METAL-DAG: traceIndirect
-// METAL-DAG: [_slang_miss_function_index]({{.*}}, (thread uchar*)
+// METAL-DAG: _slang_invocation.globalResources_{{[0-9]+}} = (thread uchar*)
+// METAL-DAG: [_slang_miss_function_index](&_slang_invocation);
 // METAL-NOT: visible]]
 // METAL-NOT: loadBackground
 
 // BUFFER: uint loadBackground
 // BUFFER: ->globalResources{{.*}}->background
-// BUFFER: visible]] void BufferMiss_miss(void thread* payload
-// BUFFER-SAME: uchar thread* globalResources
-// BUFFER: = (MetalRTGlobalResources{{.*}} thread*){{.*}}globalResources
+// BUFFER: visible]] void BufferMiss_miss(MissInvocationContext_{{[0-9]+}} thread* [[CONTEXT:invocation_[0-9]+]])
+// BUFFER: = (MetalRTGlobalResources{{.*}} thread*){{.*}}[[CONTEXT]]->globalResources_
 // BUFFER: BufferMiss_invoke
 
 // CONSTANT: = 17U;
-// CONSTANT: visible]] void ConstantMiss_miss(void thread* payload
-// CONSTANT-SAME: uchar thread* globalResources
+// CONSTANT: struct [[CONTEXT_TYPE:MissInvocationContext_[0-9]+]]
+// CONSTANT: uchar thread* globalResources_{{[0-9]+}};
+// CONSTANT: visible]] void ConstantMiss_miss([[CONTEXT_TYPE]] thread* invocation_{{[0-9]+}})
 // CONSTANT: ConstantMiss_invoke

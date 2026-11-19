@@ -131,11 +131,13 @@ void RayGeneration()
 // DXIL-DAG: @dx.op.traceRay
 
 // METAL-DAG: metal::raytracing::intersector<
-// METAL-DAG: [_slang_miss_function_index]({{.*}}invocationValue_{{[0-9]+}}, invocationValue_
-// METAL-DAG: visible]] void RecursiveClosestHit_closesthit(
-// METAL-DAG: RecursiveClosestHit_invoke_{{[0-9]+}}(dispatchRaysIndex_{{[0-9]+}}, dispatchRaysDimensions_{{[0-9]+}}, (float4 thread*)((ulong)(payload_
-// METAL-DAG: visible]] void SecondaryMiss_miss(
-// METAL-DAG: SecondaryMiss_invoke_{{[0-9]+}}(dispatchRaysIndex_{{[0-9]+}}, dispatchRaysDimensions_{{[0-9]+}}, (uint thread*)((ulong)(payload_
+// METAL-DAG: _slang_invocation.dispatchRaysIndex_{{[0-9]+}} = invocationValue_{{[0-9]+}};
+// METAL-DAG: _slang_invocation.dispatchRaysDimensions_{{[0-9]+}} = invocationValue_{{[0-9]+}};
+// METAL-DAG: [_slang_miss_function_index](&_slang_invocation);
+// METAL-DAG: visible]] void RecursiveClosestHit_closesthit(ClosestHitInvocationContext_{{[0-9]+}} thread* [[HIT_CONTEXT:invocation_[0-9]+]])
+// METAL-DAG: RecursiveClosestHit_invoke_{{[0-9]+}}([[HIT_CONTEXT]]->dispatchRaysIndex_{{[0-9]+}}, [[HIT_CONTEXT]]->dispatchRaysDimensions_{{[0-9]+}}, (float4 thread*)((ulong)([[HIT_CONTEXT]]->payload_
+// METAL-DAG: visible]] void SecondaryMiss_miss(MissInvocationContext_{{[0-9]+}} thread* [[MISS_CONTEXT:invocation_[0-9]+]])
+// METAL-DAG: SecondaryMiss_invoke_{{[0-9]+}}([[MISS_CONTEXT]]->dispatchRaysIndex_{{[0-9]+}}, [[MISS_CONTEXT]]->dispatchRaysDimensions_{{[0-9]+}}, (uint thread*)((ulong)([[MISS_CONTEXT]]->payload_
 
 // METAL_RAYGEN: error[E36107]: unavailable features in entry point
 // METAL_RAYGEN: note: see using of 'DispatchRaysIndex'

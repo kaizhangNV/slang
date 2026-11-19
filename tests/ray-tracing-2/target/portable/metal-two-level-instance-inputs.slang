@@ -99,10 +99,12 @@ void RayGeneration()
 // Neither spelling needs Metal 3.1's native multilevel traversal types for a single instance.
 // PROVIDER-NOT: metal::array_ref
 // PROVIDER-NOT: max_levels
-// PROVIDER: visible]] void ClosestHit_closesthit(
-// PROVIDER-SAME: uint instanceCount
-// PROVIDER-SAME: uint thread* instanceIndices
-// PROVIDER-SAME: uint thread* instanceIDs
+// PROVIDER: struct [[CONTEXT_TYPE:ClosestHitInvocationContext_[0-9]+]]
+// PROVIDER: uint instanceCount_{{[0-9]+}};
+// PROVIDER: uint thread* instanceIndices_{{[0-9]+}};
+// PROVIDER: uint thread* instanceIDs_{{[0-9]+}};
+// PROVIDER: visible]] void ClosestHit_closesthit([[CONTEXT_TYPE]] thread* [[CONTEXT:invocation_[0-9]+]])
+// PROVIDER: ClosestHit_invoke{{[_0-9]*}}({{.*}}[[CONTEXT]]->instanceIndices_{{[0-9]+}}, [[CONTEXT]]->instanceIDs_
 // PROVIDER-NOT: metal::array_ref
 // PROVIDER-NOT: max_levels
 // Any-hit dispatch transports the same path through its candidate-state pointer.
@@ -122,7 +124,9 @@ void RayGeneration()
 // TRACE-NOT: max_levels
 // TRACE: intersector<metal::raytracing::instancing, metal::raytracing::triangle_data, metal::raytracing::world_space_data>
 // The committed hit passes scalar Metal builtins as a one-element path to that same signature.
-// TRACE: , 1u, &_slang_result.instance_id, &_slang_result.user_instance_id
+// TRACE: _slang_invocation.instanceCount_{{[0-9]+}} = 1u;
+// TRACE: _slang_invocation.instanceIndices_{{[0-9]+}} = &_slang_result.instance_id;
+// TRACE: _slang_invocation.instanceIDs_{{[0-9]+}} = &_slang_result.user_instance_id;
 // TRACE-NOT: metal::array_ref
 // TRACE-NOT: max_levels
 // The separately selected candidate fills the same one-element path without native array_ref.

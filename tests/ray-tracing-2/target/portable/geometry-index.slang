@@ -40,9 +40,8 @@ struct GeometryClosestHit : rt::IClosestHitShader
 // METAL: uint [[GET:geometryIndex_get_[0-9]+]](uint [[INDEX:[A-Za-z0-9_]+]])
 // METAL: return [[INDEX]];
 // METAL: *{{[A-Za-z0-9_]+}} = [[GET]](
-// METAL: visible]] void GeometryClosestHit_closesthit(
-// METAL-SAME: uint [[ENTRY_INDEX:geometryIndex_[0-9]+]],
-// METAL: GeometryClosestHit_invoke_{{[0-9]+}}({{.*}}, [[ENTRY_INDEX]]);
+// METAL: visible]] void GeometryClosestHit_closesthit(ClosestHitInvocationContext_{{[0-9]+}} thread* [[CONTEXT:invocation_[0-9]+]])
+// METAL: GeometryClosestHit_invoke_{{[0-9]+}}({{.*}}, [[CONTEXT]]->geometryIndex_{{[0-9]+}});
 
 // PTX must write the SBT GAS index into the payload returned by this invocation.
 // PTX: .visible .entry __closesthit__GeometryClosestHit_closesthit()

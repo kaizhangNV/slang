@@ -1,6 +1,7 @@
 -- This file is machine generated! any entries written below will be preserved,
 -- but things like comments or anything outside the schema won't be preserved
 return {
+	["Decoration.MetalRTInvocationFieldDecoration"] = 985,
 	["metalRTCandidateDispatch"] = 977,
 	["metalRTGetGlobalResourceContext"] = 978,
 	["Decoration.MetalRTCandidateDescriptorDecoration"] = 979,

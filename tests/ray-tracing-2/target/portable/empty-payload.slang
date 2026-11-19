@@ -33,7 +33,7 @@ struct EmptyPayloadMiss : rt::IMissShader
 // SPIRV: OpEntryPoint MissKHR
 
 // Metal keeps its fixed visible-function ABI even when the payload type is empty.
-// METAL: visible]] void EmptyPayloadMiss_miss(void thread* payload_
+// METAL: visible]] void EmptyPayloadMiss_miss(MissInvocationContext_{{[0-9]+}} thread* invocation_
 // METAL-NOT: EmptyPayload_
 // METAL: return;
 

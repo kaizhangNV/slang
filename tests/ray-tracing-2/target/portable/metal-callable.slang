@@ -61,7 +61,7 @@ void RayGeneration()
 }
 
 // METAL-NOT: visible]]
-// METAL-DAG: visible_function_table<void(void thread*, uint3, uint3, uchar device*, uint constant*, const uint device*, uchar thread*)>
+// METAL-DAG: visible_function_table<void(CallableInvocationContext_{{[0-9]+}} thread*)>
 // METAL-DAG: _slang_callable_record
 // METAL-DAG: _slang_callable_function_index
 // METAL-NOT: visible]]
@@ -71,13 +71,9 @@ void RayGeneration()
 // CALLABLE: *[[UPDATE_DATA]] = *[[UPDATE_DATA]] + {{.*}}->addend{{.*}}rt_CallableInput_dispatchRaysIndex_get{{[_0-9]*}}([[UPDATE_INDEX]]).x + rt_CallableInput_dispatchRaysDimensions_get{{[_0-9]*}}([[UPDATE_DIMENSIONS]]).x
 // CALLABLE: void [[INVOKE:Callable_invoke[_0-9]*]](uint3 [[INVOKE_INDEX:[A-Za-z0-9_]+]], uint3 [[INVOKE_DIMENSIONS:[A-Za-z0-9_]+]], uint thread* [[INVOKE_DATA:[A-Za-z0-9_]+]],
 // CALLABLE: [[UPDATE]]([[INVOKE_INDEX]], [[INVOKE_DIMENSIONS]], [[INVOKE_DATA]],
-// CALLABLE: visible]] void Callable_callable(void thread* [[ENTRY_DATA:data[_0-9]*]],
-// CALLABLE-SAME: uint3 [[ENTRY_INDEX:dispatchRaysIndex[_0-9]*]],
-// CALLABLE-SAME: uint3 [[ENTRY_DIMENSIONS:dispatchRaysDimensions[_0-9]*]],
-// CALLABLE-SAME: uchar device* recordData
-// CALLABLE-SAME: uint constant* descriptorResources
-// CALLABLE-SAME: uint device* records
-// CALLABLE-SAME: uchar thread* globalResources{{[_0-9]*}})
-// CALLABLE: uint thread* [[DATA_PTR:[A-Za-z0-9_]+]] = (uint thread*)((ulong)([[ENTRY_DATA]]));
-// CALLABLE: Record{{.*}} device*{{.*}}recordData
+// CALLABLE: visible]] void Callable_callable(CallableInvocationContext_{{[0-9]+}} thread* [[CONTEXT:invocation_[0-9]+]])
+// CALLABLE: uint3 [[ENTRY_INDEX:[A-Za-z0-9_]+]] = [[CONTEXT]]->dispatchRaysIndex_{{[0-9]+}};
+// CALLABLE: uint3 [[ENTRY_DIMENSIONS:[A-Za-z0-9_]+]] = [[CONTEXT]]->dispatchRaysDimensions_{{[0-9]+}};
+// CALLABLE: uint thread* [[DATA_PTR:[A-Za-z0-9_]+]] = (uint thread*)((ulong)([[CONTEXT]]->data_{{[0-9]+}}));
+// CALLABLE: Record{{.*}} device*{{.*}}[[CONTEXT]]->recordData_
 // CALLABLE: [[INVOKE]]([[ENTRY_INDEX]], [[ENTRY_DIMENSIONS]], [[DATA_PTR]],

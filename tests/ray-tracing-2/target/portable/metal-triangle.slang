@@ -112,14 +112,11 @@ void RayGeneration()
 
 // HIT: void ClosestHit_update{{.*}}(float4 thread*
 // HIT: float4({{.*}}rt_ClosestHitInput_distance_get
-// HIT: visible]] void ClosestHit_closesthit(void thread* payload
-// HIT-SAME: void thread* attributes
-// HIT-SAME: uchar thread* globalResources
-// HIT: ClosestHit_invoke{{.*}}((float4 thread*){{.*}}payload{{.*}}, barycentricCoord{{.*}}, distance
+// HIT: visible]] void ClosestHit_closesthit(ClosestHitInvocationContext_{{[0-9]+}} thread* [[CONTEXT:invocation_[0-9]+]])
+// HIT: ClosestHit_invoke{{.*}}((float4 thread*)((ulong)([[CONTEXT]]->payload_{{[0-9]+}})), [[CONTEXT]]->barycentricCoord_{{[0-9]+}}, [[CONTEXT]]->distance_
 // HIT-NOT: visible]]
 
 // MISS: float4(-1.0f)
-// MISS: visible]] void Miss_miss(void thread* payload
-// MISS-SAME: uchar thread* globalResources
-// MISS: Miss_invoke{{.*}}((float4 thread*){{.*}}payload
+// MISS: visible]] void Miss_miss(MissInvocationContext_{{[0-9]+}} thread* [[CONTEXT:invocation_[0-9]+]])
+// MISS: Miss_invoke{{.*}}((float4 thread*)((ulong)([[CONTEXT]]->payload_
 // MISS-NOT: visible]]

@@ -95,13 +95,21 @@ struct EmptyCallable : rt::ICallableShader
 // HLSLCALLABLE: [shader("callable")]void EmptyCallable_callable(inout {{[^,)]+}})
 
 // Metal keeps its native callback and visible-function signatures for empty bodies.
-// METALCUSTOM: visible]] void EmptyCustomClosestHit_closesthit(void thread* payload_{{[0-9]+}}, void thread* attributes_
+// METALCUSTOM: struct [[CONTEXT:ClosestHitInvocationContext_[0-9]+]]
+// METALCUSTOM: void thread* payload_{{[0-9]+}};
+// METALCUSTOM: void thread* attributes_{{[0-9]+}};
+// METALCUSTOM: visible]] void EmptyCustomClosestHit_closesthit([[CONTEXT]] thread* invocation_{{[0-9]+}})
 // METALTRIANGLE: intersection(triangle,{{.*}} EmptyTriangleAnyHit_anyhit(
 // METALTRIANGLE-SAME: float2 {{barycentric_coord_[0-9]+}} {{\[\[barycentric_coord\]\]}}
 // METALTRIANGLE-SAME: bool {{front_facing_[0-9]+}} {{\[\[front_facing\]\]}}
 // METALTRIANGLE-SAME: ray_data PortableRTRayData_{{[0-9]+}}& {{rayData_[0-9]+}} {{\[\[payload\]\]}}
-// METALMISS: visible]] void EmptyMiss_miss(void thread* payload_
-// METALCALLABLE: visible]] void EmptyCallable_callable(void thread* data_{{[0-9]+}}, uint3 dispatchRaysIndex_
+// METALMISS: struct [[CONTEXT:MissInvocationContext_[0-9]+]]
+// METALMISS: void thread* payload_{{[0-9]+}};
+// METALMISS: visible]] void EmptyMiss_miss([[CONTEXT]] thread* invocation_{{[0-9]+}})
+// METALCALLABLE: struct [[CONTEXT:CallableInvocationContext_[0-9]+]]
+// METALCALLABLE: void thread* data_{{[0-9]+}};
+// METALCALLABLE: uint3 dispatchRaysIndex_{{[0-9]+}};
+// METALCALLABLE: visible]] void EmptyCallable_callable([[CONTEXT]] thread* invocation_{{[0-9]+}})
 
 // OptiX wrappers retain payload register round-trips even for an empty body. NVRTC may
 // remove unused attribute loads, while direct callable entries retain their data pointer ABI.

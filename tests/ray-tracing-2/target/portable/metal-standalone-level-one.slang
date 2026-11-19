@@ -31,8 +31,10 @@ struct LevelOneHit : rt::IClosestHitShader
 }
 
 // CHECK-NOT: metal::array_ref
-// CHECK: visible]] void LevelOneHit_closesthit(
-// CHECK-SAME: uint instanceCount
-// CHECK-SAME: uint thread* instanceIndices
-// CHECK-SAME: uint thread* instanceIDs
+// CHECK: struct [[CONTEXT_TYPE:ClosestHitInvocationContext_[0-9]+]]
+// CHECK: uint instanceCount_{{[0-9]+}};
+// CHECK: uint thread* instanceIndices_{{[0-9]+}};
+// CHECK: uint thread* instanceIDs_{{[0-9]+}};
+// CHECK: visible]] void LevelOneHit_closesthit([[CONTEXT_TYPE]] thread* [[CONTEXT:invocation_[0-9]+]])
+// CHECK: LevelOneHit_invoke{{[_0-9]*}}({{.*}}[[CONTEXT]]->instanceCount_{{[0-9]+}}, [[CONTEXT]]->instanceIndices_{{[0-9]+}}, [[CONTEXT]]->instanceIDs_
 // CHECK-NOT: metal::array_ref

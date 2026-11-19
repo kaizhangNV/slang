@@ -61,7 +61,7 @@ void RayGeneration()
 
 // METAL-NOT: __slang_portable_rt_0_closesthit_0
 // METAL-DAG: addInstanceID
-// METAL-DAG: visible]] void SharedHit_closesthit(void thread* payload
+// METAL-DAG: visible]] void SharedHit_closesthit(ClosestHitInvocationContext_{{[0-9]+}} thread* invocation_{{[0-9]+}})
 // METAL-DAG: [_slang_hit_function_index](
 // METAL-NOT: __slang_portable_rt_0_closesthit_0
 // METAL-NOT: metalRTGetInstanceID

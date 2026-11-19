@@ -60,9 +60,10 @@ void RayGeneration()
 // SPIRV-DAG: OpExecuteCallableKHR
 
 // METAL-DAG: kernel]] void RayGeneration(
-// METAL-DAG: callableFunctions_{{[0-9]+}}[_slang_callable_function_index](&value_
-// METAL-DAG: visible]] void AddThirtyOne_callable(
-// METAL-DAG: AddThirtyOne_invoke_{{[0-9]+}}((uint thread*)((ulong)(data_
+// METAL-DAG: _slang_invocation.data_{{[0-9]+}} = &value_{{[0-9]+}};
+// METAL-DAG: callableFunctions_{{[0-9]+}}[_slang_callable_function_index](&_slang_invocation);
+// METAL-DAG: visible]] void AddThirtyOne_callable(CallableInvocationContext_{{[0-9]+}} thread* [[CONTEXT:invocation_[0-9]+]])
+// METAL-DAG: AddThirtyOne_invoke_{{[0-9]+}}((uint thread*)((ulong)([[CONTEXT]]->data_
 
 // OptiX calls the selected callable with the caller's data pointer and returns its mutation.
 // CUDA: __raygen__RayGeneration()
