@@ -32,24 +32,35 @@ struct CandidateResult
     bool hasDistance = false;
 };
 
-/// Describes the generated struct holding shader inputs and mutable hit results during one
-/// native Metal intersection callback. A candidate is a potential ray/geometry hit: Metal
-/// supplies it for triangles/curves, while an Intersection shader proposes it with reportHit.
+/// Describes the generated struct used to pass data from the generated Metal [[intersection]]
+/// wrapper to the lowered user-defined AnyHit or Intersection function.
 ///
-/// The native callback allocates this struct in thread-local storage and passes its address to
-/// the stage implementation. A procedural Intersection shares that same instance with all its
-/// reportHit calls and the AnyHit shaders they invoke. It carries payload/Record addresses,
-/// built-in input values, the hit currently being considered, and the last accepted report.
+/// In our API, a source shader receives a stage-specific input parameter, such as
+/// AnyHitInput<Context>. This is an empty struct with properties that provide access to the
+/// values for the current invocation. Consider this example:
+///     static void invoke(rt::AnyHitInput<Context> input)
+///     {
+///         float distance = input.distance;
+///         // Use distance to decide whether to accept or reject the hit.
+///     }
 ///
-/// For example, suppose Intersection reports a hit at distance 5 that AnyHit accepts, then a hit
-/// at distance 3 that AnyHit rejects. The candidate fields describe the second report, but
-/// currentMax and the committed attributes/hit kind still describe the accepted hit at 5.
-/// The callback uses those committed values when returning its result to Metal.
+/// For triangle AnyHit, Metal provides that distance through a built-in parameter of its
+/// native intersection function. The abbreviated wrapper signature is:
+///     [[intersection(triangle, triangle_data)]]
+///     NativeResult wrapper(float distance [[distance]], ...);
 ///
-/// These C++ members hold the IR type and field keys used to generate accesses to that struct.
-/// Its fixed layout lets separately compiled Intersection and AnyHit functions share the data.
-/// Payload and attribute pointers refer to callback-owned thread storage; the Record pointer
-/// refers to device storage. The struct containing these pointers stays in thread storage.
+/// We generate this wrapper, collect the native parameter values into a thread-local instance
+/// of this struct, and pass its address to the lowered user function. Lowering replaces source
+/// property accesses with reads through these fields. Properties such as payload and Record
+/// also use this struct: payload points to a thread-local copy of the user payload from ray_data,
+/// while Record points into the SBT record buffer.
+///
+/// For procedural geometry, the Intersection function shares this instance with reportHit and
+/// AnyHit. reportHit fills the proposed distance/attributes before invoking AnyHit and saves the
+/// accepted result separately, so rejecting a later proposal preserves the earlier accepted hit.
+///
+/// This C++ struct records the generated IR type and its field keys. The generated layout is
+/// fixed so separately compiled Intersection and AnyHit functions can exchange the same data.
 struct CandidateStateLayout
 {
     IRStructType* type = nullptr;
