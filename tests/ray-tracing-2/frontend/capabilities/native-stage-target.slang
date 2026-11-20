@@ -1,7 +1,7 @@
 //TEST:SIMPLE: -entry main -target hlsl -no-codegen
 //DIAGNOSTIC_TEST:SIMPLE(diag=METAL,non-exhaustive): -entry main -target metal -no-codegen
 
-// A shared stage requirement does not enable native miss entry points on Metal.
+// The native miss requirement excludes Metal independently of portable_miss.
 [require(miss)]
 void missOnlyHelper() {}
 

@@ -22,6 +22,10 @@
 #define PROFILE_STAGE(TAG, NAME, VAL) /* empty */
 #endif
 
+#ifndef PROFILE_STAGE_WITH_PORTABLE
+#define PROFILE_STAGE_WITH_PORTABLE(TAG, NAME, PORTABLE_NAME, VAL) PROFILE_STAGE(TAG, NAME, VAL)
+#endif
+
 #ifndef PROFILE_STAGE_ALIAS
 #define PROFILE_STAGE_ALIAS(TAG, NAME, VAL) /* empty */
 #endif
@@ -65,11 +69,17 @@ PROFILE_STAGE(Pixel, pixel, SLANG_STAGE_FRAGMENT)
 PROFILE_STAGE(Compute, compute, SLANG_STAGE_COMPUTE)
 
 PROFILE_STAGE(RayGeneration, raygeneration, SLANG_STAGE_RAY_GENERATION)
-PROFILE_STAGE(Intersection, intersection, SLANG_STAGE_INTERSECTION)
-PROFILE_STAGE(AnyHit, anyhit, SLANG_STAGE_ANY_HIT)
-PROFILE_STAGE(ClosestHit, closesthit, SLANG_STAGE_CLOSEST_HIT)
-PROFILE_STAGE(Miss, miss, SLANG_STAGE_MISS)
-PROFILE_STAGE(Callable, callable, SLANG_STAGE_CALLABLE)
+// These stages have distinct native and portable contracts but share the public stage enum.
+// Ray generation uses the same capability for both APIs.
+PROFILE_STAGE_WITH_PORTABLE(
+    Intersection,
+    intersection,
+    portable_intersection,
+    SLANG_STAGE_INTERSECTION)
+PROFILE_STAGE_WITH_PORTABLE(AnyHit, anyhit, portable_anyhit, SLANG_STAGE_ANY_HIT)
+PROFILE_STAGE_WITH_PORTABLE(ClosestHit, closesthit, portable_closesthit, SLANG_STAGE_CLOSEST_HIT)
+PROFILE_STAGE_WITH_PORTABLE(Miss, miss, portable_miss, SLANG_STAGE_MISS)
+PROFILE_STAGE_WITH_PORTABLE(Callable, callable, portable_callable, SLANG_STAGE_CALLABLE)
 
 PROFILE_STAGE(Mesh, mesh, SLANG_STAGE_MESH)
 PROFILE_STAGE(Amplification, amplification, SLANG_STAGE_AMPLIFICATION)
@@ -380,6 +390,7 @@ PROFILE_ALIAS(GLSL_Task, GLSL_Task_450, glsl_task)
 #undef PROFILE_FAMILY
 #undef PROFILE_VERSION
 #undef PROFILE_STAGE
+#undef PROFILE_STAGE_WITH_PORTABLE
 #undef PROFILE_STAGE_ALIAS
 #undef PROFILE
 #undef PROFILE_ALIAS

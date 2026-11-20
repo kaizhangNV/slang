@@ -673,7 +673,13 @@ struct AddressSpaceContext : public AddressSpaceSpecializationContext
             }
             if (auto func = as<IRFunc>(globalInst))
             {
-                if (func->findDecoration<IREntryPointDecoration>())
+                // Visible and intersection functions are reached through Metal tables, not an
+                // IRCall. Their native parameters must seed address-space propagation just as
+                // source shader entries do, including device buffers read by retained helpers.
+                if (func->findDecoration<IREntryPointDecoration>() ||
+                    func->findDecoration<IRMetalVisibleFunctionDecoration>() ||
+                    func->findDecoration<IRMetalIntersectionFunctionDecoration>() ||
+                    func->findDecoration<IRMetalRTStandaloneStageDecoration>())
                     workList.add(func);
             }
         }

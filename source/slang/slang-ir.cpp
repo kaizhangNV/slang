@@ -9734,6 +9734,7 @@ bool IRInst::mightHaveSideEffects(
     case kIROp_CastDescriptorHandleToUInt64:
     case kIROp_CastDescriptorHandleToResource:
     case kIROp_CastResourceToDescriptorHandle:
+    case kIROp_CastToNativeAccelerationStructure:
     case kIROp_CastUIntToUntypedResourceHandle:
     case kIROp_CastUntypedResourceHandleToUInt:
     case kIROp_CastUIntToUntypedSamplerHandle:

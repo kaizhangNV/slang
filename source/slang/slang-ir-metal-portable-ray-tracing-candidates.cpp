@@ -1,0 +1,1398 @@
+#include "slang-ir-metal-portable-ray-tracing-candidates.h"
+
+#include "slang-ir-any-value-marshalling.h"
+#include "slang-ir-clone.h"
+#include "slang-ir-lower-error-handling.h"
+#include "slang-ir-metal-portable-ray-tracing-acceleration.h"
+#include "slang-ir-metal-portable-ray-tracing-instance-path.h"
+#include "slang-ir-portable-ray-tracing-util.h"
+#include "slang-ir-util.h"
+
+namespace Slang
+{
+namespace PortableRT
+{
+namespace Metal
+{
+namespace
+{
+
+// Zero is the ordinary AnyHit return. The other two values are nonlocal stage exits: IgnoreHit
+// exits AnyHit, whereas AcceptHitAndEndSearch also exits its enclosing Intersection invocation.
+enum class CandidateExit : UInt
+{
+    Accept,
+    Ignore,
+    EndSearch,
+};
+
+struct CandidateResult
+{
+    IRStructType* type = nullptr;
+    bool hasDistance = false;
+};
+
+/// Describes the generated struct used to pass data from the generated Metal [[intersection]]
+/// wrapper to the lowered user-defined AnyHit or Intersection function.
+///
+/// In our API, a source shader receives a stage-specific input parameter, such as
+/// AnyHitInput<Context>. This is an empty struct with properties that provide access to the
+/// values for the current invocation. Consider this example:
+///     static void invoke(rt::AnyHitInput<Context> input)
+///     {
+///         float distance = input.distance;
+///         // Use distance to decide whether to accept or reject the hit.
+///     }
+///
+/// For triangle AnyHit, Metal provides that distance through a built-in parameter of its
+/// native intersection function. The abbreviated wrapper signature is:
+///     [[intersection(triangle, triangle_data)]]
+///     NativeResult wrapper(float distance [[distance]], ...);
+///
+/// We generate this wrapper, collect the native parameter values into a thread-local instance
+/// of this struct, and pass its address to the lowered user function. Lowering replaces source
+/// property accesses with reads through these fields. Properties such as payload and Record
+/// also use this struct: payload points to a thread-local copy of the user payload from ray_data,
+/// while Record points into the SBT record buffer.
+///
+/// For procedural geometry, the Intersection function shares this instance with reportHit and
+/// AnyHit. reportHit fills the proposed distance/attributes before invoking AnyHit and saves the
+/// accepted result separately, so rejecting a later proposal preserves the earlier accepted hit.
+///
+/// This C++ struct records the generated IR type and its field keys. The generated layout is
+/// fixed so separately compiled Intersection and AnyHit functions can exchange the same data.
+struct CandidateStateLayout
+{
+    IRStructType* type = nullptr;
+    IRStructKey* payload = nullptr;
+    IRStructKey* record = nullptr;
+
+    // Procedural reports accepted by this callback; currentMax starts at Metal's max_distance.
+    IRStructKey* accepted = nullptr;
+    IRStructKey* currentMax = nullptr;
+
+    // The proposed hit exposed to AnyHit, which may still reject it.
+    IRStructKey* distance = nullptr;
+    IRStructKey* hitKind = nullptr;
+    IRStructKey* attributes = nullptr;
+
+    // Storage for the last accepted procedural report, preserved when a later report is rejected.
+    IRStructKey* committedAttributes = nullptr;
+    IRStructKey* committedHitKind = nullptr;
+    IRStructKey* minDistance = nullptr;
+    IRStructKey* origin = nullptr;
+    IRStructKey* direction = nullptr;
+    IRStructKey* opaque = nullptr;
+    IRStructKey* instanceIndices = nullptr;
+    IRStructKey* instanceIDs = nullptr;
+    IRStructKey* instanceCount = nullptr;
+
+    // Maps an input getter opcode to the struct field that supplies its value.
+    Dictionary<IROp, IRStructKey*> inputs;
+};
+
+struct CandidateParameter
+{
+    IRType* type;
+    const char* semantic;
+    IROp operation = kIROp_Invalid;
+};
+
+/// Collects the functions reachable through direct calls from the given function.
+void collectFunctions(IRFunc* function, HashSet<IRFunc*>& seen, List<IRFunc*>& functions)
+{
+    if (!seen.add(function))
+        return;
+    functions.add(function);
+    for (auto block : function->getBlocks())
+        for (auto inst : block->getOrdinaryInsts())
+            if (auto call = as<IRCall>(inst))
+                if (auto callee = as<IRFunc>(call->getCallee()))
+                    collectFunctions(callee, seen, functions);
+}
+
+/// Returns whether this instruction requires cloning its containing function before candidate
+/// lowering. The replacement may be a generated reportHit call, a load through the candidate-state
+/// pointer, or control flow for IgnoreHit/EndSearch. All of these rewrites happen in the clone.
+bool requiresFunctionCloneForCandidateLowering(IROp op)
+{
+    switch (op)
+    {
+    case kIROp_MetalRTIgnoreHit:
+    case kIROp_MetalRTAcceptHitAndEndSearch:
+    case kIROp_MetalRTReportHit:
+    case kIROp_MetalRTGetCurrentDistance:
+    case kIROp_MetalRTGetHitKind:
+    case kIROp_MetalRTGetObjectSpaceRay:
+    case kIROp_PortableRTGetHitAttributes:
+    case kIROp_MetalRTGetInstanceIndex:
+    case kIROp_MetalRTGetInstanceID:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/// Clones the selected invoke and helpers that later passes will rewrite for this shader.
+/// Consider this call graph in IR, where getID contains a MetalRTGetInstanceID instruction:
+///     AnyHit::invoke     -> helper -> getID
+///     ClosestHit::invoke -> helper -> getID
+///
+/// Later lowering will replace the intrinsic in getID with state->instanceIDs[level] and add a
+/// candidate-state pointer parameter. Rewriting the shared getID would propagate that parameter
+/// into both shaders, even though ClosestHit supplies its inputs through a different struct.
+///
+/// For the selected AnyHit, we therefore clone invoke, helper and getID, and redirect calls in
+/// those copies to the copied functions. Cloning helper is necessary even though it contains no
+/// intrinsic itself: its copy must call the new getID while ClosestHit keeps using the original.
+/// Helpers outside these call paths stay shared.
+///
+/// We always clone the root. For the remaining reachable functions, we select those containing
+/// an instruction identified by requiresFunctionCloneForCandidateLowering, then include their
+/// callers until the set stops growing. This function only creates and connects the copies;
+/// subsequent passes rewrite their intrinsics. It appends the copies to clones and returns the
+/// copied root.
+IRFunc* cloneFunctionsForCandidateLowering(IRModule* module, IRFunc* root, List<IRFunc*>& clones)
+{
+    HashSet<IRFunc*> seen;
+    List<IRFunc*> functions;
+    collectFunctions(root, seen, functions);
+    HashSet<IRFunc*> selected;
+    selected.add(root);
+    for (auto function : functions)
+        for (auto block : function->getBlocks())
+            for (auto inst : block->getOrdinaryInsts())
+                if (requiresFunctionCloneForCandidateLowering(inst->getOp()))
+                    selected.add(function);
+    bool changed;
+    do
+    {
+        changed = false;
+        for (auto function : functions)
+            for (auto block : function->getBlocks())
+                for (auto inst : block->getOrdinaryInsts())
+                    if (auto call = as<IRCall>(inst))
+                        if (selected.contains(as<IRFunc>(call->getCallee())))
+                            changed |= selected.add(function);
+    } while (changed);
+
+    IRBuilder builder(module);
+    builder.setInsertInto(module->getModuleInst());
+    IRCloneEnv environment;
+    for (auto function : functions)
+        if (selected.contains(function))
+        {
+            auto clone = cloneInstAndOperands(&environment, &builder, function);
+            environment.mapOldValToNew.add(function, clone);
+        }
+    for (auto function : functions)
+        if (selected.contains(function))
+        {
+            auto clone = cast<IRFunc>(lookUp(&environment, function));
+            cloneInstDecorationsAndChildren(&environment, module, function, clone);
+            removeLinkageDecorations(clone);
+            clones.add(clone);
+        }
+    return cast<IRFunc>(lookUp(&environment, root));
+}
+
+IRStructKey* addField(
+    IRBuilder& builder,
+    IRStructType* type,
+    IRType* fieldType,
+    const char* name,
+    const char* semantic = nullptr)
+{
+    auto key = builder.createStructKey();
+    builder.addNameHintDecoration(key, UnownedTerminatedStringSlice(name));
+    if (semantic)
+        builder.addTargetSystemValueDecoration(key, UnownedTerminatedStringSlice(semantic));
+    builder.createStructField(type, key, fieldType);
+    return key;
+}
+
+/// Defines the native return contract. Custom attributes stay in ray_data, not in this result.
+CandidateResult createResult(IRModule* module, bool procedural)
+{
+    IRBuilder builder(module);
+    builder.setInsertInto(module->getModuleInst());
+    CandidateResult result;
+    result.type = builder.createStructType();
+    result.hasDistance = procedural;
+    builder.addNameHintDecoration(result.type, toSlice("PortableRTCandidateResult"));
+    addField(builder, result.type, builder.getBoolType(), "accept", "accept_intersection");
+    addField(builder, result.type, builder.getBoolType(), "continueSearch", "continue_search");
+    if (procedural)
+        addField(builder, result.type, builder.getFloatType(), "distance", "distance");
+    return result;
+}
+
+IRInst* emitResult(
+    IRBuilder& builder,
+    const CandidateResult& result,
+    IRInst* accept,
+    IRInst* continueSearch,
+    IRInst* distance = nullptr)
+{
+    List<IRInst*> fields = {accept, continueSearch};
+    if (result.hasDistance)
+    {
+        SLANG_RELEASE_ASSERT(distance);
+        fields.add(distance);
+    }
+    return builder.emitMakeStruct(result.type, fields.getCount(), fields.getBuffer());
+}
+
+IRInst* loadField(IRBuilder& builder, IRInst* state, IRStructKey* key)
+{
+    return builder.emitLoad(builder.emitFieldAddress(state, key));
+}
+
+void storeField(IRBuilder& builder, IRInst* state, IRStructKey* key, IRInst* value)
+{
+    builder.emitStore(builder.emitFieldAddress(state, key), value);
+}
+
+/// Defines the IR struct layout shared by native callbacks and stage implementations.
+/// This creates the type and field declarations; createNativeCandidateCallback emits the
+/// thread-local runtime instance and passes its address through the generated call chain.
+CandidateStateLayout createCandidateStateLayout(IRModule* module)
+{
+    IRBuilder builder(module);
+    builder.setInsertInto(module->getModuleInst());
+    CandidateStateLayout state;
+    state.type = builder.createStructType();
+    builder.addNameHintDecoration(state.type, toSlice("PortableRTCandidateState"));
+    auto pointer = builder.getPtrType(builder.getVoidType(), AddressSpace::ThreadLocal);
+    auto uintPointer = builder.getPtrType(builder.getUIntType(), AddressSpace::ThreadLocal);
+    auto floatType = builder.getFloatType();
+    auto uintType = builder.getUIntType();
+    auto float3 = builder.getVectorType(floatType, 3);
+    auto uint3 = builder.getVectorType(uintType, 3);
+    state.payload = addField(builder, state.type, pointer, "payload");
+    state.record = addField(
+        builder,
+        state.type,
+        builder.getPtrType(builder.getUInt8Type(), AddressSpace::Global),
+        "record");
+    state.accepted = addField(builder, state.type, builder.getBoolType(), "accepted");
+    state.currentMax = addField(builder, state.type, floatType, "currentMax");
+    state.distance = addField(builder, state.type, floatType, "candidateDistance");
+    state.hitKind = addField(builder, state.type, uintType, "candidateHitKind");
+    state.attributes = addField(builder, state.type, pointer, "candidateAttributes");
+    state.committedAttributes = addField(builder, state.type, pointer, "committedAttributes");
+    state.committedHitKind = addField(builder, state.type, uintPointer, "committedHitKind");
+    state.minDistance = addField(builder, state.type, floatType, "minDistance");
+    state.origin = addField(builder, state.type, float3, "objectOrigin");
+    state.direction = addField(builder, state.type, float3, "objectDirection");
+    state.opaque = addField(builder, state.type, builder.getBoolType(), "opaque");
+    state.instanceIndices = addField(builder, state.type, uintPointer, "instanceIndices");
+    state.instanceIDs = addField(builder, state.type, uintPointer, "instanceIDs");
+    state.instanceCount = addField(builder, state.type, uintType, "instanceCount");
+    state.inputs.add(kIROp_MetalRTGetMinDistance, state.minDistance);
+    state.inputs.add(kIROp_MetalRTGetInstanceCount, state.instanceCount);
+    // Keep one fixed field order. A body's choice of getters cannot change this contract.
+    struct Input
+    {
+        IROp op;
+        IRType* type;
+        const char* name;
+    };
+    auto matrix = builder.getMatrixType(
+        floatType,
+        builder.getIntValue(builder.getIntType(), 4),
+        builder.getIntValue(builder.getIntType(), 3),
+        builder.getIntValue(builder.getIntType(), kMatrixLayoutMode_RowMajor));
+    Input inputs[] = {
+        {kIROp_MetalRTGetRayTime, floatType, "rayTime"},
+        {kIROp_MetalRTGetRayFlags, uintType, "rayFlags"},
+        {kIROp_MetalRTGetDispatchRaysIndex, uint3, "dispatchRaysIndex"},
+        {kIROp_MetalRTGetDispatchRaysDimensions, uint3, "dispatchRaysDimensions"},
+        {kIROp_PortableRTGetTriangleBarycentricCoord,
+         builder.getVectorType(floatType, 2),
+         "barycentrics"},
+        {kIROp_MetalRTGetTriangleFrontFacing, builder.getBoolType(), "frontFacing"},
+        {kIROp_PortableRTGetCurveParameter, floatType, "curveParameter"},
+        {kIROp_MetalRTGetWorldSpaceOrigin, float3, "worldOrigin"},
+        {kIROp_MetalRTGetWorldSpaceDirection, float3, "worldDirection"},
+        {kIROp_MetalRTGetPrimitiveIndex, uintType, "primitiveIndex"},
+        {kIROp_MetalRTGetGeometryIndex, uintType, "geometryIndex"},
+        {kIROp_MetalRTGetObjectToWorld, matrix, "objectToWorld"},
+        {kIROp_MetalRTGetWorldToObject, matrix, "worldToObject"},
+    };
+    for (auto input : inputs)
+        state.inputs.add(input.op, addField(builder, state.type, input.type, input.name));
+    return state;
+}
+
+List<CandidateParameter> getParameters(
+    IRBuilder& builder,
+    MetalRTGeometryKind geometry,
+    UInt tags,
+    IRType* instancePathType)
+{
+    List<CandidateParameter> parameters;
+    bool instancing = (tags & UInt(MetalRTTag::Instancing)) != 0;
+    bool procedural = geometry == MetalRTGeometryKind::BoundingBox;
+    auto floatType = builder.getFloatType();
+    auto uintType = builder.getUIntType();
+    auto float3 = builder.getVectorType(floatType, 3);
+    if (procedural)
+    {
+        parameters.add({floatType, "min_distance", kIROp_MetalRTGetMinDistance});
+        parameters.add({floatType, "max_distance", kIROp_MetalRTGetCurrentDistance});
+        parameters.add({builder.getBoolType(), "opaque"});
+    }
+    else
+        parameters.add({floatType, "distance", kIROp_MetalRTGetCurrentDistance});
+    if (geometry == MetalRTGeometryKind::Triangle)
+    {
+        parameters.add(
+            {builder.getVectorType(floatType, 2),
+             "barycentric_coord",
+             kIROp_PortableRTGetTriangleBarycentricCoord});
+        parameters.add(
+            {builder.getBoolType(), "front_facing", kIROp_MetalRTGetTriangleFrontFacing});
+    }
+    if (geometry == MetalRTGeometryKind::Curve)
+        parameters.add({floatType, "curve_parameter", kIROp_PortableRTGetCurveParameter});
+    parameters.add({uintType, "geometry_id", kIROp_MetalRTGetGeometryIndex});
+    parameters.add({uintType, "primitive_id", kIROp_MetalRTGetPrimitiveIndex});
+    if (instancing)
+        parameters.add({instancePathType, "instance_id", kIROp_MetalRTGetInstanceIndex});
+    if (instancing)
+        parameters.add({instancePathType, "user_instance_id", kIROp_MetalRTGetInstanceID});
+    parameters.add(
+        {float3, instancing ? "world_space_origin" : "origin", kIROp_MetalRTGetWorldSpaceOrigin});
+    parameters.add(
+        {float3,
+         instancing ? "world_space_direction" : "direction",
+         kIROp_MetalRTGetWorldSpaceDirection});
+    if (instancing)
+    {
+        parameters.add({float3, "origin"});
+        parameters.add({float3, "direction"});
+    }
+    auto matrixType = builder.getMatrixType(
+        floatType,
+        builder.getIntValue(builder.getIntType(), 4),
+        builder.getIntValue(builder.getIntType(), 3),
+        builder.getIntValue(builder.getIntType(), kMatrixLayoutMode_RowMajor));
+    if (instancing)
+        parameters.add({matrixType, "object_to_world_transform", kIROp_MetalRTGetObjectToWorld});
+    if (instancing)
+        parameters.add({matrixType, "world_to_object_transform", kIROp_MetalRTGetWorldToObject});
+    return parameters;
+}
+
+/// Calls an unchanged static stage with its zero-storage input token. The token is not a payload
+/// copy: its intrinsic properties are supplied through invocation parameters in a later step.
+void emitStageCall(IRBuilder& builder, IRFunc* invoke)
+{
+    auto type = invoke->getParamType(0);
+    IRInst* input;
+    if (auto pointer = as<IRPtrTypeBase>(type))
+    {
+        input = builder.emitVar(pointer->getValueType());
+        builder.emitStore(input, builder.emitDefaultConstruct(pointer->getValueType()));
+    }
+    else
+        input = builder.emitDefaultConstruct(type);
+    builder.emitCallInst(invoke->getResultType(), invoke, 1, &input);
+}
+
+/// Replaces candidate reads with loads at the original operation, not snapshots at the adapter.
+/// For example, a noinline helper reading IntersectionInput.objectSpaceRay.TMax before and after
+/// ReportHit sees the updated accepted distance on its second call.
+void lowerMutableInputs(
+    IRModule* module,
+    const List<IRFunc*>& functions,
+    PortableRTInvocationParameter& parameter,
+    const CandidateStateLayout& state,
+    bool intersection)
+{
+    List<IRInst*> operations;
+    for (auto function : functions)
+        for (auto block : function->getBlocks())
+            for (auto inst : block->getOrdinaryInsts())
+                if (inst->getOp() == kIROp_MetalRTGetCurrentDistance ||
+                    inst->getOp() == kIROp_MetalRTGetHitKind ||
+                    inst->getOp() == kIROp_MetalRTGetObjectSpaceRay ||
+                    inst->getOp() == kIROp_PortableRTGetHitAttributes ||
+                    inst->getOp() == kIROp_MetalRTGetInstanceIndex ||
+                    inst->getOp() == kIROp_MetalRTGetInstanceID)
+                    operations.add(inst);
+    for (auto operation : operations)
+    {
+        IRBuilder builder(module);
+        if (operation->getOp() == kIROp_PortableRTGetHitAttributes &&
+            isBuiltinHitAttributeView(operation))
+        {
+            // Built-in attribute aggregates are zero-storage views. Their leaf getters receive
+            // native barycentrics/curve data later and need no procedural candidate-state pointer.
+            builder.setInsertBefore(operation);
+            operation->replaceUsesWith(builder.emitDefaultConstruct(operation->getDataType()));
+            operation->removeAndDeallocate();
+            continue;
+        }
+        auto context = parameter.addParameterAndUpdateCallers(getParentFunc(operation));
+        builder.setInsertBefore(operation);
+        IRInst* value = nullptr;
+        switch (operation->getOp())
+        {
+        case kIROp_MetalRTGetCurrentDistance:
+            value = loadField(builder, context, intersection ? state.currentMax : state.distance);
+            break;
+        case kIROp_MetalRTGetHitKind:
+            value = loadField(builder, context, state.hitKind);
+            break;
+        case kIROp_PortableRTGetHitAttributes:
+            if (isEmptyType(operation->getDataType()))
+                value = builder.emitDefaultConstruct(operation->getDataType());
+            else
+                value = builder.emitLoad(builder.emitBitCast(
+                    builder.getPtrType(operation->getDataType(), AddressSpace::ThreadLocal),
+                    loadField(builder, context, state.attributes)));
+            break;
+        case kIROp_MetalRTGetInstanceIndex:
+        case kIROp_MetalRTGetInstanceID:
+            {
+                auto key = operation->getOp() == kIROp_MetalRTGetInstanceIndex
+                               ? state.instanceIndices
+                               : state.instanceIDs;
+                auto path = loadField(builder, context, key);
+                value = builder.emitLoad(builder.emitGetOffsetPtr(path, operation->getOperand(0)));
+                break;
+            }
+        case kIROp_MetalRTGetObjectSpaceRay:
+            {
+                IRInst* fields[] = {
+                    loadField(builder, context, state.origin),
+                    loadField(builder, context, state.minDistance),
+                    loadField(builder, context, state.direction),
+                    loadField(builder, context, intersection ? state.currentMax : state.distance)};
+                value = builder.emitMakeStruct(operation->getDataType(), 4, fields);
+                break;
+            }
+        default:
+            SLANG_UNEXPECTED("expected candidate input");
+        }
+        operation->replaceUsesWith(value);
+        operation->removeAndDeallocate();
+    }
+}
+
+/// Converts only control-dependent candidate functions to Slang's existing throwing IR. This
+/// preserves arbitrary helper return types: IgnoreHit in a value-returning helper does not need
+/// to invent a value that its caller could accidentally consume. The existing error lowering
+/// then turns these edges into ordinary Result calls before invocation threading continues.
+bool lowerCandidateExits(
+    IRModule* module,
+    const List<IRFunc*>& functions,
+    const HashSet<IRFunc*>& handlers,
+    DiagnosticSink* sink)
+{
+    HashSet<IRFunc*> throwing;
+    for (auto function : functions)
+        for (auto block : function->getBlocks())
+            for (auto inst : block->getOrdinaryInsts())
+                if (inst->getOp() == kIROp_MetalRTIgnoreHit ||
+                    inst->getOp() == kIROp_MetalRTAcceptHitAndEndSearch ||
+                    inst->getOp() == kIROp_Throw)
+                    throwing.add(function);
+    bool changed;
+    do
+    {
+        changed = false;
+        for (auto function : functions)
+            if (!handlers.contains(function))
+                for (auto block : function->getBlocks())
+                    for (auto inst : block->getOrdinaryInsts())
+                        if (auto call = as<IRCall>(inst))
+                            if (throwing.contains(as<IRFunc>(call->getCallee())))
+                                changed |= throwing.add(function);
+    } while (changed);
+
+    IRBuilder builder(module);
+    IRInst* errorType = builder.getUIntType();
+    auto attribute = builder.getAttr(kIROp_FuncThrowTypeAttr, 1, &errorType);
+    for (auto function : throwing)
+    {
+        List<IRType*> types;
+        for (auto parameter : function->getParams())
+            types.add(parameter->getDataType());
+        function->setFullType(builder.getFuncType(
+            types.getCount(),
+            types.getBuffer(),
+            function->getResultType(),
+            attribute));
+    }
+    List<IRInst*> exits;
+    List<IRCall*> calls;
+    for (auto function : functions)
+        for (auto block : function->getBlocks())
+            for (auto inst : block->getOrdinaryInsts())
+            {
+                if (inst->getOp() == kIROp_MetalRTIgnoreHit ||
+                    inst->getOp() == kIROp_MetalRTAcceptHitAndEndSearch)
+                    exits.add(inst);
+                if (auto call = as<IRCall>(inst))
+                    if (throwing.contains(as<IRFunc>(call->getCallee())))
+                        calls.add(call);
+            }
+    // Convert calls first: an early exit may make a later call unreachable, but retaining its
+    // continuation keeps every original SSA use valid until the ordinary CFG simplifier runs.
+    for (auto call : calls)
+    {
+        auto function = getParentFunc(call);
+        auto success = builder.createBlock();
+        success->insertAfter(call->getParent());
+        builder.setInsertInto(success);
+        auto result = builder.emitParam(call->getDataType());
+        call->replaceUsesWith(result);
+        for (auto suffix = call->getNextInst(); suffix;)
+        {
+            auto next = suffix->getNextInst();
+            suffix->insertAtEnd(success);
+            suffix = next;
+        }
+        auto failure = builder.createBlock();
+        failure->insertAfter(success);
+        builder.setInsertInto(failure);
+        auto error = builder.emitParam(builder.getUIntType());
+        if (handlers.contains(function))
+            builder.emitReturn(error);
+        else
+            builder.emitThrow(error);
+        List<IRInst*> arguments;
+        for (UInt i = 0; i < call->getArgCount(); ++i)
+            arguments.add(call->getArg(i));
+        builder.setInsertBefore(call);
+        auto replacement = builder.emitTryCallInst(
+            call->getDataType(),
+            success,
+            failure,
+            call->getCallee(),
+            arguments.getCount(),
+            arguments.getBuffer());
+        call->transferDecorationsTo(replacement);
+        call->removeAndDeallocate();
+    }
+    for (auto operation : exits)
+    {
+        auto exit = operation->getOp() == kIROp_MetalRTIgnoreHit ? CandidateExit::Ignore
+                                                                 : CandidateExit::EndSearch;
+        auto continuation = builder.createBlock();
+        continuation->insertAfter(operation->getParent());
+        for (auto suffix = operation->getNextInst(); suffix;)
+        {
+            auto next = suffix->getNextInst();
+            suffix->insertAtEnd(continuation);
+            suffix = next;
+        }
+        builder.setInsertBefore(operation);
+        builder.emitThrow(builder.getIntValue(builder.getUIntType(), UInt(exit)));
+        operation->removeAndDeallocate();
+    }
+    lowerErrorHandling(module, sink);
+    for (auto function : functions)
+        sortBlocksInFunc(function);
+    return throwing.getCount() != 0;
+}
+
+/// Defines the ordinary Intersection implementation's arguments. ReportHit needs the AnyHit
+/// table and slot in addition to candidate state; only the native wrapper has Metal builtins.
+IRFuncType* getIntersectionBodySignature(IRBuilder& builder)
+{
+    auto anyHit = getAnyHitFunctionSignature(builder);
+    IRInst* tableOperands[] = {
+        anyHit,
+        builder.getIntValue(builder.getIntType(), IRIntegerValue(Stage::AnyHit))};
+    IRType* parameters[] = {
+        anyHit->getParamType(0),
+        anyHit->getParamType(1),
+        builder.getType(kIROp_MetalVisibleFunctionTable, 2, tableOperands),
+        builder.getUIntType()};
+    return builder.getFuncType(SLANG_COUNT_OF(parameters), parameters, builder.getUIntType());
+}
+
+/// Builds ReportHit for one selected intersection shader. Consider two groups sharing this
+/// shader but using different any-hit filters: the caller supplies the table and index, so the
+/// same compiled ReportHit calls either filter. Rejection preserves payload writes but leaves
+/// committed attributes and the accepted distance unchanged.
+IRFunc* createReportHit(IRModule* module, const CandidateStateLayout& state, IRType* attributesType)
+{
+    IRBuilder builder(module);
+    builder.setInsertInto(module->getModuleInst());
+    auto function = builder.createFunc();
+    builder.addNameHintDecoration(function, toSlice("portableRTReportHit"));
+    auto intersectionSignature = getIntersectionBodySignature(builder);
+    IRType* types[] = {
+        builder.getPtrType(state.type, AddressSpace::ThreadLocal),
+        intersectionSignature->getParamType(1),
+        intersectionSignature->getParamType(2),
+        builder.getUIntType(),
+        builder.getFloatType(),
+        builder.getUIntType(),
+        attributesType};
+    function->setFullType(builder.getFuncType(SLANG_COUNT_OF(types), types, builder.getBoolType()));
+    builder.setInsertInto(function);
+    builder.emitBlock();
+    auto context = builder.emitParam(types[0]);
+    auto globals = builder.emitParam(types[1]);
+    auto anyHitTable = builder.emitParam(types[2]);
+    auto anyHitIndex = builder.emitParam(types[3]);
+    auto distance = builder.emitParam(types[4]);
+    auto hitKind = builder.emitParam(types[5]);
+    auto attributes = builder.emitParam(types[6]);
+    auto candidate = builder.createBlock();
+    auto reject = builder.createBlock();
+    auto after = builder.createBlock();
+    function->addBlock(candidate);
+    function->addBlock(reject);
+    function->addBlock(after);
+    auto inRange = builder.emitAnd(
+        builder.getBoolType(),
+        builder.emitGeq(distance, loadField(builder, context, state.minDistance)),
+        builder.emitGeq(loadField(builder, context, state.currentMax), distance));
+    builder.emitIfElse(inRange, candidate, reject, after);
+    builder.setInsertInto(reject);
+    builder.emitReturn(builder.getBoolValue(false));
+    builder.setInsertInto(after);
+    builder.emitUnreachable();
+    builder.setInsertInto(candidate);
+    storeField(builder, context, state.distance, distance);
+    storeField(builder, context, state.hitKind, hitKind);
+    if (!isEmptyType(attributesType))
+        builder.emitStore(
+            builder.emitBitCast(
+                builder.getPtrType(attributesType, AddressSpace::ThreadLocal),
+                loadField(builder, context, state.attributes)),
+            attributes);
+    auto evaluate = builder.createBlock();
+    auto skip = builder.createBlock();
+    auto commit = builder.createBlock();
+    auto accept = builder.createBlock();
+    function->addBlock(evaluate);
+    function->addBlock(skip);
+    function->addBlock(commit);
+    function->addBlock(accept);
+    auto absent =
+        builder.emitEql(anyHitIndex, builder.getIntValue(builder.getUIntType(), 0xffffffffu));
+    auto bypass =
+        builder.emitOr(builder.getBoolType(), absent, loadField(builder, context, state.opaque));
+    builder.emitIfElse(bypass, skip, evaluate, commit);
+    builder.setInsertInto(skip);
+    IRInst* accepted = builder.getIntValue(builder.getUIntType(), UInt(CandidateExit::Accept));
+    builder.emitBranch(commit, 1, &accepted);
+    builder.setInsertInto(evaluate);
+    IRInst* callOperands[] = {
+        anyHitTable,
+        anyHitIndex,
+        builder.emitBitCast(getAnyHitFunctionSignature(builder)->getParamType(0), context),
+        globals};
+    IRInst* result = builder.emitIntrinsicInst(
+        builder.getUIntType(),
+        kIROp_MetalRTCandidateDispatch,
+        SLANG_COUNT_OF(callOperands),
+        callOperands);
+    builder.emitBranch(commit, 1, &result);
+    builder.setInsertInto(commit);
+    auto decision = builder.emitParam(builder.getUIntType());
+    builder.emitIfElse(
+        builder.emitEql(
+            decision,
+            builder.getIntValue(builder.getUIntType(), UInt(CandidateExit::Ignore))),
+        reject,
+        accept,
+        after);
+    builder.setInsertInto(accept);
+    storeField(builder, context, state.accepted, builder.getBoolValue(true));
+    storeField(builder, context, state.currentMax, distance);
+    if (!isEmptyType(attributesType))
+        builder.emitStore(
+            builder.emitBitCast(
+                builder.getPtrType(attributesType, AddressSpace::ThreadLocal),
+                loadField(builder, context, state.committedAttributes)),
+            attributes);
+    builder.emitStore(loadField(builder, context, state.committedHitKind), hitKind);
+    auto flags = loadField(builder, context, state.inputs.getValue(kIROp_MetalRTGetRayFlags));
+    auto firstHit = builder.emitNeq(
+        builder.emitBitAnd(
+            builder.getUIntType(),
+            flags,
+            builder.getIntValue(builder.getUIntType(), 4)),
+        builder.getIntValue(builder.getUIntType(), 0));
+    auto terminate = builder.emitOr(
+        builder.getBoolType(),
+        firstHit,
+        builder.emitEql(
+            decision,
+            builder.getIntValue(builder.getUIntType(), UInt(CandidateExit::EndSearch))));
+    auto terminateBlock = builder.createBlock();
+    auto continueBlock = builder.createBlock();
+    function->addBlock(terminateBlock);
+    function->addBlock(continueBlock);
+    builder.emitIfElse(terminate, terminateBlock, continueBlock, after);
+    builder.setInsertInto(terminateBlock);
+    builder.emitThrow(builder.getIntValue(builder.getUIntType(), UInt(CandidateExit::EndSearch)));
+    builder.setInsertInto(continueBlock);
+    builder.emitReturn(builder.getBoolValue(true));
+    return function;
+}
+
+/// Supplies immutable values at the independently compiled provider boundary. Mutable getters
+/// are lowered to state loads at their original use so ReportHit can change the current interval.
+void collectBindings(
+    IRModule* module,
+    VisibleAdapter& adapter,
+    IRInst* context,
+    const CandidateStateLayout& state)
+{
+    IRBuilder builder(module);
+    builder.setInsertAfter(context);
+    HashSet<IRFunc*> seen;
+    List<IRFunc*> functions;
+    collectFunctions(adapter.function, seen, functions);
+    HashSet<KeyValuePair<IROp, IRType*>> queries;
+    // Nested trace/callable lowering introduces launch queries after this collection. Bind
+    // those fixed invocation values now, including when the source stage reads neither one.
+    for (auto op : {kIROp_MetalRTGetDispatchRaysIndex, kIROp_MetalRTGetDispatchRaysDimensions})
+    {
+        auto value = loadField(builder, context, state.inputs.getValue(op));
+        queries.add({op, value->getDataType()});
+        adapter.bindings.add({op, value->getDataType(), value});
+    }
+    for (auto function : functions)
+        for (auto block : function->getBlocks())
+            for (auto operation : block->getOrdinaryInsts())
+            {
+                auto op = operation->getOp();
+                auto type = operation->getDataType();
+                if (!queries.add({op, type}))
+                    continue;
+                IRInst* value = nullptr;
+                if (op == kIROp_PortableRTGetPayload)
+                {
+                    value = recoverStageDataPointer(
+                        builder,
+                        loadField(builder, context, state.payload),
+                        cast<IRPtrTypeBase>(type)->getValueType());
+                }
+                else if (auto key = state.inputs.tryGetValue(op))
+                    value = loadField(builder, context, *key);
+                else if (op == kIROp_PortableRTGetRecord)
+                {
+                    if (isEmptyType(type))
+                        value = as<IRVoidType>(type) ? builder.getVoidValue()
+                                                     : builder.emitDefaultConstruct(type);
+                    else
+                        value = builder.emitLoad(builder.emitBitCast(
+                            builder.getPtrType(type, AddressSpace::UserPointer),
+                            loadField(builder, context, state.record)));
+                }
+                if (value)
+                    adapter.bindings.add({op, type, value});
+            }
+}
+
+/// Copies a native instance path into the fixed provider ABI. The arrays remain alive throughout
+/// the callback, including nested any-hit calls, and only initialized path elements are exposed.
+void initializeInstancePath(
+    IRBuilder& builder,
+    IRModule* module,
+    IRInst* context,
+    const CandidateStateLayout& state,
+    IRInst* indices,
+    IRInst* ids,
+    IRIntegerValue maxLevels)
+{
+    SLANG_RELEASE_ASSERT(indices && ids);
+    auto uintType = builder.getUIntType();
+    bool indexed = indices->getDataType()->getOp() == kIROp_MetalRTInstancePath;
+    // Only traversal deeper than two levels uses native array_ref paths. Two-level traversal
+    // uses scalar builtins and supplies one element to the same provider path ABI.
+    SLANG_RELEASE_ASSERT(!indexed || maxLevels > 1);
+    auto capacity = indexed ? maxLevels - 1 : 1;
+    auto arrayType = builder.getArrayType(uintType, builder.getIntValue(uintType, capacity));
+    auto indexStorage = builder.emitVar(arrayType);
+    auto idStorage = builder.emitVar(arrayType);
+    auto zero = builder.getIntValue(uintType, 0);
+    storeField(
+        builder,
+        context,
+        state.instanceIndices,
+        builder.emitElementAddress(indexStorage, zero));
+    storeField(builder, context, state.instanceIDs, builder.emitElementAddress(idStorage, zero));
+    if (!indexed)
+    {
+        builder.emitStore(builder.emitElementAddress(indexStorage, zero), indices);
+        builder.emitStore(builder.emitElementAddress(idStorage, zero), ids);
+        storeField(builder, context, state.instanceCount, builder.getIntValue(uintType, 1));
+        return;
+    }
+    auto countFunction = createInstancePathOperation(module, InstancePathOperation::Count);
+    auto elementFunction = createInstancePathOperation(module, InstancePathOperation::Element);
+    auto count = builder.emitCallInst(uintType, countFunction, 1, &indices);
+    storeField(builder, context, state.instanceCount, count);
+    auto function = getParentFunc(context);
+    for (IRIntegerValue i = 0; i < capacity; ++i)
+    {
+        auto element = builder.getIntValue(uintType, i);
+        auto copy = builder.createBlock();
+        auto next = builder.createBlock();
+        function->addBlock(copy);
+        function->addBlock(next);
+        builder.emitIfElse(builder.emitLess(element, count), copy, next, next);
+        builder.setInsertInto(copy);
+        IRInst* indexArgs[] = {indices, element};
+        IRInst* idArgs[] = {ids, element};
+        builder.emitStore(
+            builder.emitElementAddress(indexStorage, element),
+            builder.emitCallInst(uintType, elementFunction, 2, indexArgs));
+        builder.emitStore(
+            builder.emitElementAddress(idStorage, element),
+            builder.emitCallInst(uintType, elementFunction, 2, idArgs));
+        builder.emitBranch(next);
+        builder.setInsertInto(next);
+    }
+}
+
+IRInst* getRecordAddress(
+    IRBuilder& builder,
+    IRInst* header,
+    const RayDataHeader& headerType,
+    IRInst* geometry,
+    IRInst* instance,
+    IRFunc* contribution)
+{
+    auto uintType = builder.getUIntType();
+    auto records = loadField(builder, header, headerType.recordsKey);
+    auto offset = loadField(builder, header, headerType.sbtOffsetKey);
+    auto geometryStride = loadField(builder, header, headerType.sbtStrideKey);
+    auto index =
+        builder.emitAdd(uintType, offset, builder.emitMul(uintType, geometry, geometryStride));
+    if (instance)
+    {
+        SLANG_RELEASE_ASSERT(contribution);
+        auto metadata = loadField(builder, header, headerType.instanceContributionMetadataKey);
+        IRInst* arguments[] = {metadata, instance};
+        index = builder.emitAdd(
+            uintType,
+            index,
+            builder.emitCallInst(uintType, contribution, 2, arguments));
+    }
+    auto sectionOffset = builder.emitLoad(builder.emitGetOffsetPtr(
+        records,
+        builder.getIntValue(uintType, UInt(MetalRTRecordSection::Hit))));
+    auto byteOffset = builder.emitAdd(
+        uintType,
+        sectionOffset,
+        builder
+            .emitMul(uintType, index, loadField(builder, header, headerType.hitRecordStrideKey)));
+    auto bytes = builder.emitBitCast(
+        builder.getPtrType(builder.getUInt8Type(), AddressSpace::Global),
+        records);
+    return builder.emitGetOffsetPtr(bytes, byteOffset);
+}
+
+} // namespace
+
+IRFuncType* getAnyHitFunctionSignature(IRBuilder& builder)
+{
+    IRType* parameters[] = {
+        builder.getPtrType(builder.getVoidType(), AddressSpace::ThreadLocal),
+        builder.getPtrType(builder.getUInt8Type(), AddressSpace::ThreadLocal)};
+    return builder.getFuncType(SLANG_COUNT_OF(parameters), parameters, builder.getUIntType());
+}
+
+/// Creates the implementation function for a selected AnyHit or Intersection shader.
+/// Procedural AnyHit is exported as [[visible]] so reportHit can call it through the AnyHit VFT.
+/// Triangle/curve AnyHit and procedural Intersection remain ordinary functions. Their native
+/// [[intersection]] wrappers, generated by createNativeCandidateCallback, call them directly.
+/// Each implementation receives candidate state and calls a clone of the source invoke.
+static VisibleAdapter createCandidateImplementation(
+    IRModule* module,
+    const SchemaStage& stage,
+    UnownedStringSlice symbolName,
+    bool visible,
+    bool& requiresResultTypeLowering,
+    DiagnosticSink* sink)
+{
+    SLANG_RELEASE_ASSERT(stage.invoke && stage.input);
+    SLANG_RELEASE_ASSERT(stage.stage == Stage::AnyHit || stage.stage == Stage::Intersection);
+
+    // Define the shared candidate-state layout and the function signature. The native callback
+    // supplies the state at runtime; this function returns a CandidateExit decision to its caller.
+    bool intersection = stage.stage == Stage::Intersection;
+    auto state = createCandidateStateLayout(module);
+    IRBuilder builder(module);
+    builder.setInsertInto(module->getModuleInst());
+    VisibleAdapter result;
+    result.function = builder.createFunc();
+    auto signature =
+        intersection ? getIntersectionBodySignature(builder) : getAnyHitFunctionSignature(builder);
+    result.function->setFullType(signature);
+    builder.addNameHintDecoration(result.function, symbolName);
+
+    // Export procedural AnyHit as a visible function so reportHit can call it through a VFT.
+    if (visible)
+    {
+        builder.addExportDecoration(result.function, symbolName);
+        builder.addExternCppDecoration(result.function, symbolName);
+        builder.addKeepAliveDecoration(result.function);
+        IRInst* tableOperands[] = {
+            signature,
+            builder.getIntValue(builder.getIntType(), IRIntegerValue(stage.stage))};
+        auto tableType = builder.getType(kIROp_MetalVisibleFunctionTable, 2, tableOperands);
+        builder.addDecoration(
+            result.function,
+            kIROp_MetalVisibleFunctionDecoration,
+            tableOperands[1],
+            tableType);
+    }
+
+    // Receive shared state and global resources. Intersection also receives the descriptor's
+    // AnyHit table and the current record's slot, allowing one body to serve several hit groups.
+    builder.setInsertInto(result.function);
+    builder.emitBlock();
+    auto erasedState = builder.emitParam(signature->getParamType(0));
+    builder.addNameHintDecoration(erasedState, toSlice("candidateState"));
+    auto globals = builder.emitParam(signature->getParamType(1));
+    builder.addNameHintDecoration(globals, toSlice("globalResourceContext"));
+    if (visible)
+        builder.addDecoration(globals, kIROp_MetalRTGlobalResourceContextDecoration);
+    IRInst* anyHitTable = nullptr;
+    IRInst* anyHitIndex = nullptr;
+    if (intersection)
+    {
+        anyHitTable = builder.emitParam(signature->getParamType(2));
+        builder.addNameHintDecoration(anyHitTable, toSlice("anyHitFunctions"));
+        anyHitIndex = builder.emitParam(signature->getParamType(3));
+        builder.addNameHintDecoration(anyHitIndex, toSlice("anyHitIndex"));
+    }
+
+    // The caller passes candidate state as void*. Recover its concrete thread pointer type.
+    auto context =
+        builder.emitBitCast(builder.getPtrType(state.type, AddressSpace::ThreadLocal), erasedState);
+
+    // Clone invoke and helpers that need candidate-specific lowering, keeping other helpers
+    // shared. Call the clone with an empty logical Input; lowering supplies its property values.
+    List<IRFunc*> functions;
+    auto invoke = cloneFunctionsForCandidateLowering(module, stage.invoke, functions);
+    emitStageCall(builder, invoke);
+
+    // Normal completion accepts an AnyHit candidate. For Intersection, it does not report a hit:
+    // the native callback reads state.accepted and state.currentMax set by successful reportHit.
+    builder.emitReturn(builder.getIntValue(builder.getUIntType(), UInt(CandidateExit::Accept)));
+
+    // Forward the state pointer through helpers and reload mutable properties at each use.
+    // For example, input.objectSpaceRay.TMax must reflect an earlier successful reportHit.
+    PortableRTInvocationParameter stateParameter(module, context->getDataType(), "candidateState");
+    stateParameter.bind(result.function, context);
+    lowerMutableInputs(module, functions, stateParameter, state, intersection);
+    if (intersection)
+    {
+        // Build reportHit for this shader's attribute type. Its AnyHit selection comes from the
+        // caller, so the generated helper does not depend on a particular hit group's filter.
+        auto report = createReportHit(module, state, stage.input->getAttributesType());
+        PortableRTInvocationParameter globalsParameter(
+            module,
+            globals->getDataType(),
+            "globalResources");
+        PortableRTInvocationParameter tableParameter(
+            module,
+            anyHitTable->getDataType(),
+            "anyHitFunctions");
+        PortableRTInvocationParameter indexParameter(
+            module,
+            anyHitIndex->getDataType(),
+            "anyHitIndex");
+        globalsParameter.bind(result.function, globals);
+        tableParameter.bind(result.function, anyHitTable);
+        indexParameter.bind(result.function, anyHitIndex);
+
+        // Replace source reportHit operations with helper calls, adding the required state,
+        // resources and AnyHit selection to enclosing functions and their callers as needed.
+        List<IRInst*> reports;
+        for (auto function : functions)
+            for (auto block : function->getBlocks())
+                for (auto operation : block->getOrdinaryInsts())
+                    if (operation->getOp() == kIROp_MetalRTReportHit)
+                        reports.add(operation);
+        for (auto operation : reports)
+        {
+            auto function = getParentFunc(operation);
+            IRInst* arguments[] = {
+                stateParameter.addParameterAndUpdateCallers(function),
+                globalsParameter.addParameterAndUpdateCallers(function),
+                tableParameter.addParameterAndUpdateCallers(function),
+                indexParameter.addParameterAndUpdateCallers(function),
+                operation->getOperand(0),
+                operation->getOperand(1),
+                operation->getOperand(2)};
+            builder.setInsertBefore(operation);
+            operation->replaceUsesWith(builder.emitCallInst(
+                builder.getBoolType(),
+                report,
+                SLANG_COUNT_OF(arguments),
+                arguments));
+            operation->removeAndDeallocate();
+        }
+
+        // reportHit can end the search, so include it when lowering nonlocal exits below.
+        functions.add(report);
+    }
+
+    // Propagate IgnoreHit/EndSearch through helper calls and handle them at this implementation.
+    // Return the exit decision to the caller without executing source statements after the exit.
+    functions.add(result.function);
+    HashSet<IRFunc*> handlers;
+    handlers.add(result.function);
+    requiresResultTypeLowering |= lowerCandidateExits(module, functions, handlers, sink);
+
+    // Save payload pointers, Record values and fixed built-ins for lowerVisibleStageInputs.
+    // That pass forwards them after trace/callShader lowering has introduced any additional reads.
+    collectBindings(module, result, context, state);
+    return result;
+}
+
+/// Creates the signature and body of the native Metal [[intersection]] wrapper. It receives
+/// Metal inputs, prepares invocation state, calls the separate function created by
+/// createCandidateImplementation, and writes back changes before returning a Metal result.
+/// Consider the generated wrapper in pseudocode:
+///     NativeResult callback(nativeInputs..., rayData)
+///     {
+///         state = prepareInvocation(nativeInputs, rayData);
+///         decision = implementation(&state, ...);
+///         writeBack(state, rayData);
+///         return makeNativeResult(state, decision);
+///     }
+///
+/// Copying the payload-typed prefix into thread storage lets helpers share thread pointers
+/// without treating a ray_data pointer as a thread pointer. Attribute storage is located by
+/// a byte offset because this shader does not know the caller's complete schema.
+static void createNativeCandidateCallback(
+    IRModule* module,
+    TargetRequest* target,
+    const SchemaStage& stage,
+    IRFunc* implementation,
+    const RayDataHeader& header,
+    const MetalRTCandidateResources& candidateResources,
+    const TraceContextRequirements& requirements,
+    MetalRTGeometryKind geometry,
+    UnownedStringSlice symbolName)
+{
+    IRBuilder builder(module);
+    auto carrier = createRayDataPrefix(module, header, stage.input->getPayloadType());
+    bool procedural = geometry == MetalRTGeometryKind::BoundingBox;
+    auto nativeResult = createResult(module, procedural);
+    auto instancePathType = requirements.maxLevels > 0 ? builder.getType(kIROp_MetalRTInstancePath)
+                                                       : builder.getUIntType();
+    auto parameters = getParameters(builder, geometry, requirements.tags, instancePathType);
+    IRFunc* contribution = nullptr;
+    if (requirements.tags & UInt(MetalRTTag::Instancing))
+        contribution = createInstanceContribution(module, instancePathType);
+    auto state = createCandidateStateLayout(module);
+    builder.setInsertInto(module);
+    auto function = builder.createFunc();
+    builder.addNameHintDecoration(function, symbolName);
+    builder.addExportDecoration(function, symbolName);
+    builder.addExternCppDecoration(function, symbolName);
+    builder.addKeepAliveDecoration(function);
+    IRInst* decoration[] = {
+        builder.getIntValue(builder.getIntType(), UInt(geometry)),
+        builder.getIntValue(builder.getIntType(), requirements.tags),
+        builder.getIntValue(builder.getIntType(), requirements.maxLevels)};
+    builder.addDecoration(function, kIROp_MetalIntersectionFunctionDecoration, decoration, 3);
+    List<IRType*> types;
+    for (auto parameter : parameters)
+        types.add(parameter.type);
+    types.add(builder.getPtrType(carrier.type, AddressSpace::MetalRayData));
+    function->setFullType(builder.getFuncType(types, nativeResult.type));
+    builder.setInsertInto(function);
+    builder.emitBlock();
+    Dictionary<String, IRInst*> semantics;
+    Dictionary<IROp, IRInst*> values;
+    for (auto parameter : parameters)
+    {
+        auto value = builder.emitParam(parameter.type);
+        builder.addNameHintDecoration(value, UnownedTerminatedStringSlice(parameter.semantic));
+        builder.addTargetSystemValueDecoration(
+            value,
+            UnownedTerminatedStringSlice(parameter.semantic));
+        semantics.add(String(parameter.semantic), value);
+        if (parameter.operation != kIROp_Invalid)
+            values.add(parameter.operation, value);
+    }
+    auto rayData = builder.emitParam(types.getLast());
+    builder.addNameHintDecoration(rayData, toSlice("rayData"));
+    builder.addTargetSystemValueDecoration(rayData, toSlice("payload"));
+    auto local = builder.emitVar(carrier.type);
+    builder.emitStore(local, builder.emitLoad(rayData));
+    auto localHeader = builder.emitFieldAddress(local, carrier.headerKey);
+    // Allocate the runtime state shared by this callback, its stage body and nested AnyHit calls.
+    auto context = builder.emitVar(state.type);
+    builder.emitStore(context, builder.emitDefaultConstruct(state.type));
+    auto erasedPointer = getAnyHitFunctionSignature(builder)->getParamType(0);
+    IRInst* payload = builder.getNullPtrValue(erasedPointer);
+    if (carrier.payloadKey)
+        payload =
+            builder.emitBitCast(erasedPointer, builder.emitFieldAddress(local, carrier.payloadKey));
+    storeField(builder, context, state.payload, payload);
+    auto instance = values.tryGetValue(kIROp_MetalRTGetInstanceIndex);
+    auto record = getRecordAddress(
+        builder,
+        localHeader,
+        header,
+        values.getValue(kIROp_MetalRTGetGeometryIndex),
+        instance ? *instance : nullptr,
+        contribution);
+    storeField(
+        builder,
+        context,
+        state.record,
+        builder.emitGetOffsetPtr(
+            record,
+            builder.getIntValue(builder.getUIntType(), kMetalRTRecordHeaderSize)));
+
+    IRInst* committedAttributes = nullptr;
+    IRInst* committedRayAttributes = nullptr;
+    IRAnyValueType* packedAttributesType = nullptr;
+    if (procedural)
+    {
+        auto attributesType = stage.input->getAttributesType();
+        if (!isEmptyType(attributesType))
+        {
+            auto candidateAttributes = builder.emitVar(attributesType);
+            committedAttributes = builder.emitVar(attributesType);
+            auto bytes = builder.emitBitCast(
+                builder.getPtrType(builder.getUInt8Type(), AddressSpace::MetalRayData),
+                rayData);
+            auto address = builder.emitGetOffsetPtr(
+                bytes,
+                loadField(builder, localHeader, header.committedAttributesOffsetKey));
+            auto packedSize = getAnyValueSize(attributesType, target);
+            SLANG_RELEASE_ASSERT(packedSize > 0);
+            packedAttributesType = builder.getAnyValueType(packedSize);
+            committedRayAttributes = builder.emitBitCast(
+                builder.getPtrType(packedAttributesType, AddressSpace::MetalRayData),
+                address);
+            // ReportHit fills this value before marking the candidate accepted. The previous
+            // hit may have a different attribute type, so its packed bytes must remain untouched.
+            builder.emitStore(committedAttributes, builder.emitDefaultConstruct(attributesType));
+            storeField(
+                builder,
+                context,
+                state.attributes,
+                builder.emitBitCast(erasedPointer, candidateAttributes));
+            storeField(
+                builder,
+                context,
+                state.committedAttributes,
+                builder.emitBitCast(erasedPointer, committedAttributes));
+        }
+        storeField(
+            builder,
+            context,
+            state.committedHitKind,
+            builder.emitFieldAddress(localHeader, header.customHitKindKey));
+    }
+    struct CarrierInput
+    {
+        IRStructKey* key;
+        IROp op;
+    };
+    CarrierInput carrierInputs[] = {
+        {header.minDistanceKey, kIROp_MetalRTGetMinDistance},
+        {header.rayTimeKey, kIROp_MetalRTGetRayTime},
+        {header.rayFlagsKey, kIROp_MetalRTGetRayFlags},
+        {header.dispatchRaysIndexKey, kIROp_MetalRTGetDispatchRaysIndex},
+        {header.dispatchRaysDimensionsKey, kIROp_MetalRTGetDispatchRaysDimensions}};
+    for (auto input : carrierInputs)
+        if (!values.containsKey(input.op))
+            values.add(input.op, loadField(builder, localHeader, input.key));
+    for (auto input : state.inputs)
+        if (auto value = values.tryGetValue(input.first))
+            storeField(builder, context, input.second, *value);
+    auto distance = values.getValue(kIROp_MetalRTGetCurrentDistance);
+    storeField(builder, context, state.currentMax, distance);
+    storeField(builder, context, state.distance, distance);
+    storeField(builder, context, state.origin, semantics.getValue(String("origin")));
+    storeField(builder, context, state.direction, semantics.getValue(String("direction")));
+    if (auto opaque = semantics.tryGetValue(String("opaque")))
+        storeField(builder, context, state.opaque, *opaque);
+    if (auto front = values.tryGetValue(kIROp_MetalRTGetTriangleFrontFacing))
+    {
+        IRInst* fields[] = {
+            *front,
+            builder.getIntValue(builder.getUIntType(), 254),
+            builder.getIntValue(builder.getUIntType(), 255)};
+        storeField(
+            builder,
+            context,
+            state.hitKind,
+            builder.emitIntrinsicInst(builder.getUIntType(), kIROp_Select, 3, fields));
+    }
+    if (instance)
+        initializeInstancePath(
+            builder,
+            module,
+            context,
+            state,
+            *instance,
+            values.getValue(kIROp_MetalRTGetInstanceID),
+            requirements.maxLevels);
+    else
+    {
+        auto floatType = builder.getFloatType();
+        auto zero = builder.getFloatValue(floatType, 0);
+        auto one = builder.getFloatValue(floatType, 1);
+        IRInst* elements[] = {one, zero, zero, zero, one, zero, zero, zero, one, zero, zero, zero};
+        auto matrixType =
+            cast<IRPtrTypeBase>(
+                builder
+                    .emitFieldAddress(context, state.inputs.getValue(kIROp_MetalRTGetObjectToWorld))
+                    ->getDataType())
+                ->getValueType();
+        auto identity = builder.emitMakeMatrix(matrixType, 12, elements);
+        storeField(
+            builder,
+            context,
+            state.inputs.getValue(kIROp_MetalRTGetObjectToWorld),
+            identity);
+        storeField(
+            builder,
+            context,
+            state.inputs.getValue(kIROp_MetalRTGetWorldToObject),
+            identity);
+    }
+    auto globals = builder.emitIntrinsicInst(
+        getAnyHitFunctionSignature(builder)->getParamType(1),
+        kIROp_MetalRTGetGlobalResourceContext,
+        0,
+        nullptr);
+    List<IRInst*> arguments;
+    arguments.add(builder.emitBitCast(erasedPointer, context));
+    arguments.add(globals);
+    if (procedural)
+    {
+        auto resources = loadField(builder, localHeader, header.candidateResourcesKey);
+        auto anyHitHandle =
+            loadField(builder, resources, candidateResources.anyHitFunctions->getKey());
+        arguments.add(builder.emitIntrinsicInst(
+            cast<IRDescriptorHandleType>(anyHitHandle->getDataType())->getResourceType(),
+            kIROp_CastDescriptorHandleToResource,
+            1,
+            &anyHitHandle));
+        auto recordWords = builder.emitBitCast(
+            builder.getPtrType(builder.getUIntType(), AddressSpace::Global),
+            record);
+        arguments.add(builder.emitLoad(
+            builder.emitGetOffsetPtr(recordWords, builder.getIntValue(builder.getUIntType(), 1))));
+    }
+    auto decision = builder.emitCallInst(builder.getUIntType(), implementation, arguments);
+    // Even rejected candidates retain payload writes. Commit attribute bytes only after a
+    // successful report: the previous hit's attributes may have a different type and packing.
+    builder.emitStore(rayData, builder.emitLoad(local));
+    if (committedAttributes)
+    {
+        auto commit = builder.createBlock();
+        auto after = builder.createBlock();
+        function->addBlock(commit);
+        function->addBlock(after);
+        builder.emitIfElse(loadField(builder, context, state.accepted), commit, after, after);
+        builder.setInsertInto(commit);
+        builder.emitStore(
+            committedRayAttributes,
+            builder.emitPackAnyValue(packedAttributesType, builder.emitLoad(committedAttributes)));
+        builder.emitBranch(after);
+        builder.setInsertInto(after);
+    }
+    auto continueSearch = builder.emitNeq(
+        decision,
+        builder.getIntValue(builder.getUIntType(), UInt(CandidateExit::EndSearch)));
+    if (procedural)
+        builder.emitReturn(emitResult(
+            builder,
+            nativeResult,
+            loadField(builder, context, state.accepted),
+            continueSearch,
+            loadField(builder, context, state.currentMax)));
+    else
+        builder.emitReturn(emitResult(
+            builder,
+            nativeResult,
+            builder.emitNeq(
+                decision,
+                builder.getIntValue(builder.getUIntType(), UInt(CandidateExit::Ignore))),
+            continueSearch));
+}
+
+VisibleAdapter createSelectedCandidateAdapter(
+    IRModule* module,
+    TargetRequest* target,
+    const SchemaStage& stage,
+    const RayDataHeader& header,
+    const MetalRTCandidateResources& candidateResources,
+    UnownedStringSlice symbolName,
+    bool& requiresResultTypeLowering,
+    DiagnosticSink* sink)
+{
+    auto primitive = getBuiltinRole(stage.input->getPrimitiveType());
+    bool procedural = primitive == KnownBuiltinDeclName::RayTracingBoundingBoxPrimitive;
+    // Procedural AnyHit is called through a VFT when Intersection reports a hit.
+    // Intersection and triangle/curve AnyHit become native IFT callbacks.
+    if (procedural && stage.stage == Stage::AnyHit)
+        return createCandidateImplementation(
+            module,
+            stage,
+            symbolName,
+            true,
+            requiresResultTypeLowering,
+            sink);
+
+    Schema context;
+    context.accelerationStructure = stage.input->getAccelerationStructureType();
+    context.motion = stage.input->getMotionType();
+    TraceContextRequirements requirements;
+    if (!getTraceContextRequirements(context, target, stage.invoke, sink, requirements))
+        return {};
+    MetalRTGeometryKind geometry;
+    switch (primitive)
+    {
+    case KnownBuiltinDeclName::RayTracingTrianglePrimitive:
+        geometry = MetalRTGeometryKind::Triangle;
+        break;
+    case KnownBuiltinDeclName::RayTracingCurvePrimitive:
+        geometry = MetalRTGeometryKind::Curve;
+        break;
+    case KnownBuiltinDeclName::RayTracingBoundingBoxPrimitive:
+        geometry = MetalRTGeometryKind::BoundingBox;
+        break;
+    default:
+        SLANG_UNEXPECTED("expected a checked portable ray-tracing primitive");
+    }
+    auto result = createCandidateImplementation(
+        module,
+        stage,
+        toSlice("portableRTCandidateImplementation"),
+        false,
+        requiresResultTypeLowering,
+        sink);
+    createNativeCandidateCallback(
+        module,
+        target,
+        stage,
+        result.function,
+        header,
+        candidateResources,
+        requirements,
+        geometry,
+        symbolName);
+    return result;
+}
+
+} // namespace Metal
+} // namespace PortableRT
+} // namespace Slang

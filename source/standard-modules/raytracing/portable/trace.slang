@@ -8,10 +8,34 @@ namespace rt
 /// The wrapper passes this value to the ordinary payload overload. For example,
 /// `tracer.trace(desc, scene, program)` forwards an `EmptyTracePayload` as its fourth argument.
 /// Application shaders can keep their own empty payload types; they do not name this internal type.
-/// TODO: Post-link lowering must normalize empty payload representations across trace calls and
-/// their reached stages before generating native code.
+/// Post-link lowering normalizes empty payload representations across trace calls and their
+/// reached stages before generating native code.
 internal struct EmptyTracePayload
 {}
+
+/// Checks the count's upper bound for D3D, Vulkan, and OptiX trace operations. The descriptor type
+/// already requires a positive count and valid layout.
+/// For example, 16 per-geometry ray types would truncate the native multiplier to zero. Shared
+/// records use multiplier zero and can select 16 offsets. Classic Metal IFT traces skip this check;
+/// their record indexing is shader code and does not use the Metal IFB selectors.
+[ForceInline]
+internal void __validateNativeTraceIndexing<
+    let rayTypeCount : int, let hitRecordLayout : HitRecordLayout>()
+{
+    static_assert(
+        rayTypeCount <= (hitRecordLayout == HitRecordLayout.PerGeometry ? 15 : 16),
+        "Native trace indexing requires rayTypeCount <= 15 for PerGeometry or <= 16 for SharedAcrossGeometries");
+}
+
+/// Uses the portable handle as the core acceleration structure on native ray-tracing targets.
+///
+/// Consider `RayTracer.trace` passing an `AccelerationStructure` to the core `TraceRay` function.
+/// The caller has IR type AS(2), while TraceRay takes AS(0xFFFF). These types emit as the same native
+/// resource, so this instruction emits its operand directly without copying or changing the AS.
+[require(cuda_glsl_hlsl_spirv)]
+__intrinsic_op(castToNativeAccelerationStructure)
+internal RaytracingAccelerationStructure __asNativeAccelerationStructure<AS>(AS value)
+    where AS : IAccelerationStructure;
 
 /// Emits the Metal trace operation for traversal without motion.
 ///
@@ -35,12 +59,12 @@ internal struct EmptyTracePayload
 /// @param[in,out] payload Payload storage read and updated by the selected shaders.
 /// @par Constraints
 /// Requires a Metal trace stage and `Schema.TraceContext.Motion == NoMotion`.
-/// @todo Lower this operation to Metal intersector dispatch in the backend adapter slice.
 [require(metal, portable_raytracing_trace)]
 __intrinsic_op(metalTraceRay)
-internal void __metalTraceRay<Schema, Payload>(
+internal void __metalTraceRay<
+    Schema, Payload, let rayTypeCount : int, let hitRecordLayout : HitRecordLayout>(
     Schema.TraceContext.AccelerationStructure accelerationStructure,
-    TraceProgramDescriptor<Schema> descriptor,
+    TraceProgramDescriptor<Schema, rayTypeCount, hitRecordLayout> descriptor,
     uint rayFlags,
     uint instanceMask,
     uint sbtOffset,
@@ -77,12 +101,12 @@ internal void __metalTraceRay<Schema, Payload>(
 /// @par Constraints
 /// Requires Metal 2.4 and a trace stage. `Schema.TraceContext.Motion : IEnabledRayMotion`
 /// admits primitive motion, instance motion, and their combination.
-/// @todo Lower this operation to Metal intersector dispatch in the backend adapter slice.
 [require(metallib_2_4, portable_raytracing_trace)]
 __intrinsic_op(metalTraceRay)
-internal void __metalTraceRayMotion<Schema, Payload>(
+internal void __metalTraceRayMotion<
+    Schema, Payload, let rayTypeCount : int, let hitRecordLayout : HitRecordLayout>(
     Schema.TraceContext.AccelerationStructure accelerationStructure,
-    TraceProgramDescriptor<Schema> descriptor,
+    TraceProgramDescriptor<Schema, rayTypeCount, hitRecordLayout> descriptor,
     uint rayFlags,
     uint instanceMask,
     uint sbtOffset,
@@ -96,6 +120,22 @@ internal void __metalTraceRayMotion<Schema, Payload>(
     float time)
     where Schema : ITraceProgramSchema
     where Schema.TraceContext.Motion : IEnabledRayMotion;
+
+/// Emits a Metal callable dispatch while preserving the descriptor schema and mutable data type.
+///
+/// @tparam Schema Trace-program schema; must conform to `ITraceProgramSchema`.
+/// @tparam Data Callable data passed by reference to the selected callable stage.
+/// @param[in] descriptor Program and shader-record descriptor for the schema.
+/// @param[in] callableIndex Index of the runtime callable record to invoke.
+/// @param[in,out] data Storage shared with the selected callable invocation.
+[require(metal, portable_call_shader)]
+__intrinsic_op(metalRTCallShader)
+internal void __metalRTCallShader<
+    Schema, Data, let rayTypeCount : int, let hitRecordLayout : HitRecordLayout>(
+    TraceProgramDescriptor<Schema, rayTypeCount, hitRecordLayout> descriptor,
+    uint callableIndex,
+    inout Data data)
+    where Schema : ITraceProgramSchema;
 
 /// Provides schema-typed structural trace and callable dispatch operations.
 ///
@@ -134,10 +174,10 @@ public extension<Schema> RayTracer<Schema>
     /// @param[in] accelerationStructure Handle of exactly `Schema.TraceContext.AccelerationStructure`.
     /// @param[in] descriptor Program and shader-record descriptor for the same `Schema`.
     [ForceInline]
-    public void trace(
+    public void trace<let rayTypeCount : int, let hitRecordLayout : HitRecordLayout>(
         RayTraversalDesc desc,
         Schema.TraceContext.AccelerationStructure accelerationStructure,
-        TraceProgramDescriptor<Schema> descriptor)
+        TraceProgramDescriptor<Schema, rayTypeCount, hitRecordLayout> descriptor)
     {
         EmptyTracePayload payload = {};
         trace(desc, accelerationStructure, descriptor, payload);
@@ -152,12 +192,13 @@ public extension<Schema> RayTracer<Schema>
     /// @param[in] descriptor Program and shader-record descriptor for the same `Schema`.
     /// @param[in,out] payload Payload storage read and updated by the reached hit or miss stages.
     [ForceInline]
-    public void trace<Payload>(
+    public void trace<Payload, let rayTypeCount : int, let hitRecordLayout : HitRecordLayout>(
         RayTraversalDesc desc,
         Schema.TraceContext.AccelerationStructure accelerationStructure,
-        TraceProgramDescriptor<Schema> descriptor,
+        TraceProgramDescriptor<Schema, rayTypeCount, hitRecordLayout> descriptor,
         inout Payload payload)
     {
+        let geometryMultiplier = hitRecordLayout == HitRecordLayout.PerGeometry ? rayTypeCount : 0;
         __target_switch
         {
         case metal:
@@ -166,8 +207,8 @@ public extension<Schema> RayTracer<Schema>
                 descriptor,
                 desc.rayFlags,
                 desc.instanceMask,
-                desc.sbtOffset,
-                desc.sbtStride,
+                desc.rayType,
+                geometryMultiplier,
                 desc.missIndex,
                 desc.ray.Origin,
                 desc.ray.TMin,
@@ -176,15 +217,15 @@ public extension<Schema> RayTracer<Schema>
                 payload);
             break;
         default:
-            // These targets support only AccelerationStructure. The cast lets this generic
-            // body call TraceRay's concrete-handle overload; a supported call casts the
-            // handle to its own type.
+            __validateNativeTraceIndexing<rayTypeCount, hitRecordLayout>();
+            // Both AS types represent the same native resource. The conversion only supplies
+            // the core type expected by TraceRay; emission uses accelerationStructure directly.
             TraceRay(
-                bit_cast<AccelerationStructure>(accelerationStructure),
+                __asNativeAccelerationStructure(accelerationStructure),
                 desc.rayFlags,
                 desc.instanceMask,
-                desc.sbtOffset,
-                desc.sbtStride,
+                desc.rayType,
+                geometryMultiplier,
                 desc.missIndex,
                 desc.ray,
                 payload);
@@ -218,10 +259,10 @@ public extension<Schema> RayTracer<Schema>
     /// @param[in] accelerationStructure Handle of exactly `Schema.TraceContext.AccelerationStructure`.
     /// @param[in] descriptor Program and shader-record descriptor for the same `Schema`.
     [ForceInline]
-    public void trace(
+    public void trace<let rayTypeCount : int, let hitRecordLayout : HitRecordLayout>(
         RayTraversalDesc desc,
         Schema.TraceContext.AccelerationStructure accelerationStructure,
-        TraceProgramDescriptor<Schema> descriptor)
+        TraceProgramDescriptor<Schema, rayTypeCount, hitRecordLayout> descriptor)
     {
         EmptyTracePayload payload = {};
         trace(desc, accelerationStructure, descriptor, payload);
@@ -236,12 +277,13 @@ public extension<Schema> RayTracer<Schema>
     /// @param[in] descriptor Program and shader-record descriptor for the same `Schema`.
     /// @param[in,out] payload Payload storage read and updated by the reached hit or miss stages.
     [ForceInline]
-    public void trace<Payload>(
+    public void trace<Payload, let rayTypeCount : int, let hitRecordLayout : HitRecordLayout>(
         RayTraversalDesc desc,
         Schema.TraceContext.AccelerationStructure accelerationStructure,
-        TraceProgramDescriptor<Schema> descriptor,
+        TraceProgramDescriptor<Schema, rayTypeCount, hitRecordLayout> descriptor,
         inout Payload payload)
     {
+        let geometryMultiplier = hitRecordLayout == HitRecordLayout.PerGeometry ? rayTypeCount : 0;
         __target_switch
         {
         case metal:
@@ -250,8 +292,8 @@ public extension<Schema> RayTracer<Schema>
                 descriptor,
                 desc.rayFlags,
                 desc.instanceMask,
-                desc.sbtOffset,
-                desc.sbtStride,
+                desc.rayType,
+                geometryMultiplier,
                 desc.missIndex,
                 desc.ray.Origin,
                 desc.ray.TMin,
@@ -268,14 +310,14 @@ public extension<Schema> RayTracer<Schema>
             break;
         case glsl:
         case spirv:
-            // On these targets the supported handle is AccelerationStructure, so the cast
-            // connects the generic parameter to TraceMotionRay's concrete signature.
+            __validateNativeTraceIndexing<rayTypeCount, hitRecordLayout>();
+            // As for TraceRay, the conversion emits the same native handle directly.
             TraceMotionRay(
-                bit_cast<AccelerationStructure>(accelerationStructure),
+                __asNativeAccelerationStructure(accelerationStructure),
                 desc.rayFlags,
                 desc.instanceMask,
-                desc.sbtOffset,
-                desc.sbtStride,
+                desc.rayType,
+                geometryMultiplier,
                 desc.missIndex,
                 desc.ray,
                 desc.time,
@@ -295,7 +337,7 @@ public extension<Schema> RayTracer<Schema>
 /// @par Specialization
 /// Extends `RayTracer<Schema>` with these constraints:
 /// - `Schema : ITraceProgramSchema` supplies the trace context and shader lists.
-[require(portable_raytracing_call_shader)]
+[require(portable_call_shader)]
 public extension<Schema> RayTracer<Schema>
     where Schema : ITraceProgramSchema
 {
@@ -311,9 +353,10 @@ public extension<Schema> RayTracer<Schema>
     /// `CallableContext.TraceContext == Schema.TraceContext` requires the callable stage and the
     /// descriptor to share the same traversal contract.
     [ForceInline]
-    public void callShader<CallableContext>(
+    public void callShader<
+        CallableContext, let rayTypeCount : int, let hitRecordLayout : HitRecordLayout>(
         uint callableIndex,
-        TraceProgramDescriptor<Schema> descriptor,
+        TraceProgramDescriptor<Schema, rayTypeCount, hitRecordLayout> descriptor,
         inout CallableContext.CallableData data)
         where CallableContext : ICallableContext
         where CallableContext.TraceContext == Schema.TraceContext
@@ -321,10 +364,7 @@ public extension<Schema> RayTracer<Schema>
         __target_switch
         {
         case metal:
-            // TODO: Lower this structural dispatch to a Metal visible-function-table call.
-            static_assert(
-                false,
-                "Metal structural ray-tracing callable dispatch requires compiler synthesis");
+            __metalRTCallShader(descriptor, callableIndex, data);
             break;
         default:
             CallShader(callableIndex, data);

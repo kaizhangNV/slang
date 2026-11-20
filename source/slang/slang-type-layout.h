@@ -1181,6 +1181,15 @@ public:
     // Layout for any results of the entry point
     RefPtr<VarLayout> resultLayout;
 
+    /// The compiler-provided ConstantBuffer<Record> layout for a selected portable RT stage.
+    ///
+    /// The same layout appears as an anonymous entry-point parameter for ordinary reflection.
+    /// It has no source variable: input.record is a property, not a user-declared parameter.
+    /// Keeping this layout also lets adapter synthesis consume the byte layout and any resource
+    /// bindings computed before code generation. Vulkan's ShaderRecord storage needs no descriptor
+    /// binding for ordinary data; D3D additionally assigns a constant-buffer register.
+    RefPtr<VarLayout> portableRTRecordLayout;
+
     enum Flag : unsigned
     {
         usesAnySampleRateInput = 0x1,

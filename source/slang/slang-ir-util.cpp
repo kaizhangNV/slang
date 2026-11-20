@@ -569,6 +569,7 @@ bool isValueType(IRInst* dataType)
     case kIROp_ArrayType:
     case kIROp_FuncType:
     case kIROp_RaytracingAccelerationStructureType:
+    case kIROp_MetalAccelerationStructureType:
     case kIROp_GLSLAtomicUintType:
     case kIROp_EnumType:
     // Work-graph input records are immutable payload views, so treat them as values.
@@ -1058,6 +1059,9 @@ void getTypeNameHint(StringBuilder& sb, IRInst* type)
         break;
     case kIROp_RaytracingAccelerationStructureType:
         sb << "RaytracingAccelerationStructure";
+        break;
+    case kIROp_MetalAccelerationStructureType:
+        sb << "MetalAccelerationStructure";
         break;
     case kIROp_HitObjectType:
         sb << "HitObject";

@@ -22,6 +22,22 @@ Profile Profile::lookUp(char const* name)
     return lookUp(UnownedStringSlice(name));
 }
 
+void Profile::setPortableRayTracingStage(Stage stage)
+{
+    // Only checked stage-interface selections use these contracts. Ray generation already
+    // admits Metal through its ordinary capability and has no separate portable profile.
+    switch (stage)
+    {
+#define PROFILE_STAGE_WITH_PORTABLE(TAG, NAME, PORTABLE_NAME, VAL) case Stage::TAG:
+#include "slang-profile-defs.h"
+        setStage(stage);
+        raw |= kPortableRayTracingStage;
+        return;
+    default:
+        SLANG_UNEXPECTED("stage has no portable ray-tracing contract");
+    }
+}
+
 CapabilitySet Profile::getCapabilityName()
 {
     List<CapabilityName> result;
@@ -40,6 +56,11 @@ CapabilitySet Profile::getCapabilityName()
 #define PROFILE_STAGE(TAG, NAME, VAL)     \
     case Stage::TAG:                      \
         result.add(CapabilityName::NAME); \
+        break;
+#define PROFILE_STAGE_WITH_PORTABLE(TAG, NAME, PORTABLE_NAME, VAL)                               \
+    case Stage::TAG:                                                                             \
+        result.add(                                                                              \
+            isPortableRayTracingStage() ? CapabilityName::PORTABLE_NAME : CapabilityName::NAME); \
         break;
 #include "slang-profile-defs.h"
     default:

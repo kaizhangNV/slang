@@ -1,0 +1,72 @@
+//TEST:SIMPLE(filecheck=HLSL): -experimental-feature -entry nativeMiss -stage miss -entry PortableMiss -stage miss -target hlsl
+//TEST:SIMPLE(filecheck=SPIRV): -experimental-feature -entry nativeMiss -stage miss -entry PortableMiss -stage miss -target spirv-assembly -emit-spirv-directly
+//DIAGNOSTIC_TEST:SIMPLE(filecheck=METAL): -experimental-feature -entry nativeMiss -stage miss -entry PortableMiss -stage miss -target metal -profile metallib_2_4 -validate-ir
+//TEST:SIMPLE(filecheck=CUDA): -experimental-feature -entry nativeMiss -stage miss -entry PortableMiss -stage miss -target cuda -validate-ir
+//TEST:SIMPLE(filecheck=PTX): -experimental-feature -entry nativeMiss -stage miss -entry PortableMiss -stage miss -target ptx -validate-ir -Xnvrtc -I"./external/optix-dev/include/"
+
+import slang.raytracing.portable;
+
+struct Payload
+{
+    uint value;
+}
+
+struct TraceContext : rt::ITraceContext
+{
+    typealias AccelerationStructure = rt::AccelerationStructure;
+    typealias Motion = rt::NoMotion;
+}
+
+struct MissContext : rt::IPayloadContext
+{
+    typealias TraceContext = ::TraceContext;
+    typealias Payload = ::Payload;
+    typealias Record = void;
+}
+
+void updatePayload(inout Payload payload)
+{
+    payload.value += 7;
+}
+
+[shader("miss")]
+void nativeMiss(inout Payload payload)
+{
+    updatePayload(payload);
+}
+
+struct PortableMiss : rt::IMissShader
+{
+    typealias Context = MissContext;
+
+    static void invoke(in rt::MissInput<Context> input)
+    {
+        updatePayload(input.payload);
+    }
+}
+
+// The two declaration models can coexist and call the same ordinary payload helper. Only the
+// portable entry needs an adapter; the native entry must retain its existing parameter ABI.
+// HLSL-DAG: void nativeMiss(inout {{.*}})
+// HLSL-DAG: void PortableMiss_miss(inout {{.*}} : SV_RayPayload)
+// SPIRV-COUNT-2: OpEntryPoint MissKHR
+
+// Metal supports the portable visible adapter, but cannot compile the raw native miss ABI.
+// METAL: error[E39032]: target does not support ray tracing entry point parameters
+// METAL: void nativeMiss(inout Payload payload)
+
+// Both declaration styles lower to OptiX miss entries and update their incoming payload.
+// CUDA: __miss__nativeMiss()
+// CUDA: optixGetPayload_0()
+// CUDA: optixSetPayload_0(
+// CUDA: __miss__PortableMiss_miss()
+// CUDA: optixGetPayload_0()
+// CUDA: optixSetPayload_0(
+// PTX: .visible .entry __miss__nativeMiss()
+// PTX: _optix_get_payload
+// PTX: add.s32 {{.*}}, 7;
+// PTX: _optix_set_payload
+// PTX: .visible .entry __miss__PortableMiss_miss()
+// PTX: _optix_get_payload
+// PTX: add.s32 {{.*}}, 7;
+// PTX: _optix_set_payload
