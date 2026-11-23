@@ -600,8 +600,18 @@ bool lowerCandidateExits(
     return throwing.getCount() != 0;
 }
 
-/// Defines the ordinary Intersection implementation's arguments. ReportHit needs the AnyHit
-/// table and slot in addition to candidate state; only the native wrapper has Metal builtins.
+/// Defines our fixed Metal signature for the ordinary Intersection implementation:
+///     uint intersectionBody(
+///         thread void* candidateState,
+///         thread uchar* globalResourceContext,
+///         visible_function_table<uint(thread void*, thread uchar*)> anyHitFunctions,
+///         uint anyHitIndex);
+///
+/// The native [[intersection]] wrapper supplies these arguments. It declares the Metal built-in
+/// parameters and collects their values into candidateState before calling this function.
+/// ReportHit uses the table and record-selected index to call AnyHit with the same state and
+/// global resources. The return value encodes CandidateExit; Accept means normal completion,
+/// while successful ReportHit calls record accepted hits in the state.
 IRFuncType* getIntersectionBodySignature(IRBuilder& builder)
 {
     auto anyHit = getAnyHitFunctionSignature(builder);
@@ -898,6 +908,16 @@ IRInst* getRecordAddress(
 
 } // namespace
 
+/// Defines our fixed Metal signature for generated AnyHit implementations:
+///     uint anyHit(thread void* candidateState, thread uchar* globalResourceContext);
+///
+/// candidateState points to the caller's CandidateState instance in thread storage. Passing it
+/// as void* keeps this signature independent of the shader's Payload, Record and Attributes
+/// types; the implementation casts it back to the fixed candidate-state layout. The second
+/// pointer supplies the global-resource context. The return value encodes CandidateExit:
+/// Accept (0), Ignore (1), or EndSearch (2).
+/// Procedural AnyHit exports a [[visible]] function with this signature for ReportHit's VFT
+/// call. Native triangle/curve wrappers call an ordinary implementation with the same signature.
 IRFuncType* getAnyHitFunctionSignature(IRBuilder& builder)
 {
     IRType* parameters[] = {
@@ -956,6 +976,8 @@ static VisibleAdapter createCandidateImplementation(
     // AnyHit table and the current record's slot, allowing one body to serve several hit groups.
     builder.setInsertInto(result.function);
     builder.emitBlock();
+    // The adapter's first parameter is thread void*. The caller passes the address of its
+    // CandidateState instance through this fixed signature; the cast below recovers its type.
     auto erasedState = builder.emitParam(signature->getParamType(0));
     builder.addNameHintDecoration(erasedState, toSlice("candidateState"));
     auto globals = builder.emitParam(signature->getParamType(1));
@@ -972,8 +994,8 @@ static VisibleAdapter createCandidateImplementation(
         builder.addNameHintDecoration(anyHitIndex, toSlice("anyHitIndex"));
     }
 
-    // The caller passes candidate state as void*. Recover its concrete thread pointer type.
-    auto context =
+    // Emit a pointer-conversion instruction from thread void* to thread CandidateState*.
+    auto candidateStatePtr =
         builder.emitBitCast(builder.getPtrType(state.type, AddressSpace::ThreadLocal), erasedState);
 
     // Clone invoke and helpers that need candidate-specific lowering, keeping other helpers
@@ -986,10 +1008,17 @@ static VisibleAdapter createCandidateImplementation(
     // the native callback reads state.accepted and state.currentMax set by successful reportHit.
     builder.emitReturn(builder.getIntValue(builder.getUIntType(), UInt(CandidateExit::Accept)));
 
-    // Forward the state pointer through helpers and reload mutable properties at each use.
-    // For example, input.objectSpaceRay.TMax must reflect an earlier successful reportHit.
-    PortableRTInvocationParameter stateParameter(module, context->getDataType(), "candidateState");
-    stateParameter.bind(result.function, context);
+    // Track the IR value supplying CandidateState* in each function that needs it. bind records
+    // {result.function -> candidateStatePtr} in a compiler-side dictionary: this implementation
+    // already has the pointer. When lowerMutableInputs reaches a getter in a helper, forwarding
+    // adds a pointer parameter to that helper and its callers until it reaches this binding.
+    PortableRTInvocationParameter stateParameter(
+        module,
+        candidateStatePtr->getDataType(),
+        "candidateState");
+    stateParameter.bind(result.function, candidateStatePtr);
+    // Reload mutable properties at each use so, for example, input.objectSpaceRay.TMax reflects
+    // an earlier successful reportHit.
     lowerMutableInputs(module, functions, stateParameter, state, intersection);
     if (intersection)
     {
@@ -1053,7 +1082,7 @@ static VisibleAdapter createCandidateImplementation(
 
     // Save payload pointers, Record values and fixed built-ins for lowerVisibleStageInputs.
     // That pass forwards them after trace/callShader lowering has introduced any additional reads.
-    collectBindings(module, result, context, state);
+    collectBindings(module, result, candidateStatePtr, state);
     return result;
 }
 
