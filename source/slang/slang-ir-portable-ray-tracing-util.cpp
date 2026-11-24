@@ -93,6 +93,15 @@ IRInst* PortableRTInvocationParameter::createParameter(IRFunc* function)
     return parameter;
 }
 
+/// Returns the invocation value for a function, adding a parameter if needed.
+/// m_values maps each function to its bound value or the parameter already created for it.
+/// This cache belongs to this PortableRTInvocationParameter object.
+///
+/// Consider A -> b -> c and b -> d, with bind(A, state) called first.
+/// Processing c adds parameters to c and b. A supplies its existing state pointer.
+/// Processing d adds a parameter to d. The lookup for b finds its cached parameter.
+/// The call from b to d passes that parameter. We do not add another parameter to b or visit A
+/// again.
 IRInst* PortableRTInvocationParameter::addParameterAndUpdateCallers(IRFunc* function)
 {
     if (auto value = m_values.tryGetValue(function))

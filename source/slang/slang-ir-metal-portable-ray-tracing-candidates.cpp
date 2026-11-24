@@ -401,9 +401,22 @@ void emitStageCall(IRBuilder& builder, IRFunc* invoke)
     builder.emitCallInst(invoke->getResultType(), invoke, 1, &input);
 }
 
-/// Replaces candidate reads with loads at the original operation, not snapshots at the adapter.
-/// For example, a noinline helper reading IntersectionInput.objectSpaceRay.TMax before and after
-/// ReportHit sees the updated accepted distance on its second call.
+/// Replaces reads of logical input properties with reads from CandidateState.
+/// For example, input.distance in AnyHit becomes state->candidateDistance.
+///
+/// parameter records which functions can provide the state pointer.
+/// It adds a pointer parameter to functions that need it.
+/// It updates their callers to pass the pointer.
+///
+/// Read the field each time the shader reads the property. For example:
+///     // In an Intersection shader, assume the initial ray limit is 10.
+///     float before = input.objectSpaceRay.TMax; // Reads 10.
+///     input.reportHit(5, kind, attributes);     // Assume this hit is accepted.
+///     float after = input.objectSpaceRay.TMax;  // Must read 5.
+///
+/// The accepted hit changes state->currentMax to 5.
+/// The second property read must load that new value.
+/// Reusing the value read before reportHit would incorrectly give 10.
 void lowerMutableInputs(
     IRModule* module,
     const List<IRFunc*>& functions,
