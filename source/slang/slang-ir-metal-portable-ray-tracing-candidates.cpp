@@ -695,6 +695,10 @@ IRFunc* createReportHit(IRModule* module, const CandidateStateLayout& state, IRT
     }
     IRInst* operands[] =
         {candidateStatePtr, globals, anyHitTable, anyHitIndex, distance, hitKind, attributesPtr};
+    // Processes a hit reported by source reportHit. The Metal emitter emits a call to
+    // _slang_metalReportHit, which checks the distance, runs AnyHit when needed, and commits
+    // accepted hits. The helper is defined in kMetalBuiltinPreludeReportHit in
+    // slang-emit-metal-prelude.cpp.
     auto decision = builder.emitIntrinsicInst(
         builder.getUIntType(),
         kIROp_MetalRTProcessReportedHit,
