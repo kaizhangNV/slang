@@ -72,12 +72,12 @@ struct AnyHit : rt::IAnyHitShader
 // METALCH: visible]] void ClosestHit_closesthit(ClosestHitInvocationContext_{{[0-9]+}} thread* [[CONTEXT:invocation_[0-9]+]])
 // METALCH: ClosestHit_invoke_{{[0-9]+}}({{.*}}, [[CONTEXT]]->barycentricCoord_{{[0-9]+}}, [[CONTEXT]]->frontFacing_{{[0-9]+}});
 // METALAH: uint [[IMPLEMENTATION:portableRTCandidateImplementation_[0-9]+]](void thread* candidateState_
-// METALAH: AnyHit_invoke_{{[0-9]+}}({{.*}}->payload_{{[0-9]+}})), [[STATE:[A-Za-z0-9_]+]]->barycentrics_{{[0-9]+}}, [[STATE]]->frontFacing_{{[0-9]+}});
+// METALAH: AnyHit_invoke_{{[0-9]+}}({{.*}}->payload)), [[STATE:[A-Za-z0-9_]+]]->barycentrics, [[STATE]]->frontFacing);
 // METALAH: intersection(triangle,{{.*}} AnyHit_anyhit(
 // METALAH-SAME: float2 [[BARY:barycentric_coord_[0-9]+]]
 // METALAH-SAME: bool [[FRONT:front_facing_[0-9]+]]
-// METALAH: ->barycentrics_{{[0-9]+}} = [[BARY]];
-// METALAH: ->frontFacing_{{[0-9]+}} = [[FRONT]];
+// METALAH: ->barycentrics = [[BARY]];
+// METALAH: ->frontFacing = [[FRONT]];
 // METALAH: [[IMPLEMENTATION]](
 
 // OptiX gets front-facing from HitKind and the copied view's barycentrics from attributes.

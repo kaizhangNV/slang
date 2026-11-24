@@ -45,7 +45,7 @@ struct BoolIntersection : rt::IIntersectionShader
 // METAL: AnyValue4 ray_data* [[UINT_ADDRESS:_S[0-9]+]] =
 // METAL-NOT: unpackAnyValue
 // METAL: *&rayData_{{[0-9]+}} =
-// METAL: if(({{.*}})->accepted_{{[0-9]+}})
+// METAL: if(({{.*}})->accepted)
 // METAL-NEXT: {
 // METAL: AnyValue4 [[UINT_PACKED:_S[0-9]+]] = packAnyValue4_{{[0-9]+}}(
 // METAL: *[[UINT_ADDRESS]] = [[UINT_PACKED]];
@@ -56,7 +56,7 @@ struct BoolIntersection : rt::IIntersectionShader
 // METAL: AnyValue4 ray_data* [[BOOL_ADDRESS:_S[0-9]+]] =
 // METAL-NOT: unpackAnyValue
 // METAL: *&rayData_{{[0-9]+}} =
-// METAL: if(({{.*}})->accepted_{{[0-9]+}})
+// METAL: if(({{.*}})->accepted)
 // METAL-NEXT: {
 // METAL: AnyValue4 [[BOOL_PACKED:_S[0-9]+]] = packAnyValue4_{{[0-9]+}}(
 // METAL: *[[BOOL_ADDRESS]] = [[BOOL_PACKED]];

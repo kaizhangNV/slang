@@ -322,6 +322,15 @@ CandidateStateLayout createCandidateStateLayout(IRModule* module)
     };
     for (auto input : inputs)
         state.inputs.add(input.op, addField(builder, state.type, input.type, input.name));
+
+    // The Metal ReportHit prelude reads this generated struct through a template parameter.
+    // Give its fields fixed C++ names, such as currentMax, rather than unique name hints such
+    // as currentMax_0. The IR still defines the field types and order in one place above.
+    for (auto field : state.type->getFields())
+    {
+        auto key = field->getKey();
+        builder.addExternCppDecoration(key, key->findDecoration<IRNameHintDecoration>()->getName());
+    }
     return state;
 }
 
@@ -639,10 +648,12 @@ IRFuncType* getIntersectionBodySignature(IRBuilder& builder)
     return builder.getFuncType(SLANG_COUNT_OF(parameters), parameters, builder.getUIntType());
 }
 
-/// Builds ReportHit for one selected intersection shader. Consider two groups sharing this
-/// shader but using different any-hit filters: the caller supplies the table and index, so the
-/// same compiled ReportHit calls either filter. Rejection preserves payload writes but leaves
-/// committed attributes and the accepted distance unchanged.
+/// Builds the small IR wrapper around the Metal ReportHit prelude.
+/// The prelude tests the distance, runs AnyHit and saves the accepted hit. It returns a
+/// CandidateExit decision. Accept and Ignore become the source reportHit result: true or false.
+/// EndSearch becomes an IR throw so lowerCandidateExits can stop the calling Intersection shader.
+/// For example, if reportHit in a helper returns EndSearch, neither the helper's remaining code
+/// nor the Intersection code after that helper call may run.
 IRFunc* createReportHit(IRModule* module, const CandidateStateLayout& state, IRType* attributesType)
 {
     IRBuilder builder(module);
@@ -661,106 +672,54 @@ IRFunc* createReportHit(IRModule* module, const CandidateStateLayout& state, IRT
     function->setFullType(builder.getFuncType(SLANG_COUNT_OF(types), types, builder.getBoolType()));
     builder.setInsertInto(function);
     builder.emitBlock();
-    auto context = builder.emitParam(types[0]);
+    auto candidateStatePtr = builder.emitParam(types[0]);
     auto globals = builder.emitParam(types[1]);
     auto anyHitTable = builder.emitParam(types[2]);
     auto anyHitIndex = builder.emitParam(types[3]);
     auto distance = builder.emitParam(types[4]);
     auto hitKind = builder.emitParam(types[5]);
     auto attributes = builder.emitParam(types[6]);
-    auto candidate = builder.createBlock();
-    auto reject = builder.createBlock();
-    auto after = builder.createBlock();
-    function->addBlock(candidate);
-    function->addBlock(reject);
-    function->addBlock(after);
-    auto inRange = builder.emitAnd(
-        builder.getBoolType(),
-        builder.emitGeq(distance, loadField(builder, context, state.minDistance)),
-        builder.emitGeq(loadField(builder, context, state.currentMax), distance));
-    builder.emitIfElse(inRange, candidate, reject, after);
-    builder.setInsertInto(reject);
-    builder.emitReturn(builder.getBoolValue(false));
-    builder.setInsertInto(after);
-    builder.emitUnreachable();
-    builder.setInsertInto(candidate);
-    storeField(builder, context, state.distance, distance);
-    storeField(builder, context, state.hitKind, hitKind);
-    if (!isEmptyType(attributesType))
-        builder.emitStore(
-            builder.emitBitCast(
-                builder.getPtrType(attributesType, AddressSpace::ThreadLocal),
-                loadField(builder, context, state.attributes)),
-            attributes);
-    auto evaluate = builder.createBlock();
-    auto skip = builder.createBlock();
-    auto commit = builder.createBlock();
-    auto accept = builder.createBlock();
-    function->addBlock(evaluate);
-    function->addBlock(skip);
-    function->addBlock(commit);
-    function->addBlock(accept);
-    auto absent =
-        builder.emitEql(anyHitIndex, builder.getIntValue(builder.getUIntType(), 0xffffffffu));
-    auto bypass =
-        builder.emitOr(builder.getBoolType(), absent, loadField(builder, context, state.opaque));
-    builder.emitIfElse(bypass, skip, evaluate, commit);
-    builder.setInsertInto(skip);
-    IRInst* accepted = builder.getIntValue(builder.getUIntType(), UInt(CandidateExit::Accept));
-    builder.emitBranch(commit, 1, &accepted);
-    builder.setInsertInto(evaluate);
-    IRInst* callOperands[] = {
-        anyHitTable,
-        anyHitIndex,
-        builder.emitBitCast(getAnyHitFunctionSignature(builder)->getParamType(0), context),
-        globals};
-    IRInst* result = builder.emitIntrinsicInst(
+
+    // Pass a typed address so the prelude copies attributes using their emitted Metal type.
+    // Empty attributes need no storage; a null void pointer selects the no-copy overload.
+    IRInst* attributesPtr;
+    if (isEmptyType(attributesType))
+    {
+        attributesPtr = builder.getNullPtrValue(
+            builder.getPtrType(builder.getVoidType(), AddressSpace::ThreadLocal));
+    }
+    else
+    {
+        attributesPtr = builder.emitVar(attributesType);
+        builder.emitStore(attributesPtr, attributes);
+    }
+    IRInst* operands[] =
+        {candidateStatePtr, globals, anyHitTable, anyHitIndex, distance, hitKind, attributesPtr};
+    auto decision = builder.emitIntrinsicInst(
         builder.getUIntType(),
-        kIROp_MetalRTCandidateDispatch,
-        SLANG_COUNT_OF(callOperands),
-        callOperands);
-    builder.emitBranch(commit, 1, &result);
-    builder.setInsertInto(commit);
-    auto decision = builder.emitParam(builder.getUIntType());
-    builder.emitIfElse(
-        builder.emitEql(
-            decision,
-            builder.getIntValue(builder.getUIntType(), UInt(CandidateExit::Ignore))),
-        reject,
-        accept,
-        after);
-    builder.setInsertInto(accept);
-    storeField(builder, context, state.accepted, builder.getBoolValue(true));
-    storeField(builder, context, state.currentMax, distance);
-    if (!isEmptyType(attributesType))
-        builder.emitStore(
-            builder.emitBitCast(
-                builder.getPtrType(attributesType, AddressSpace::ThreadLocal),
-                loadField(builder, context, state.committedAttributes)),
-            attributes);
-    builder.emitStore(loadField(builder, context, state.committedHitKind), hitKind);
-    auto flags = loadField(builder, context, state.inputs.getValue(kIROp_MetalRTGetRayFlags));
-    auto firstHit = builder.emitNeq(
-        builder.emitBitAnd(
-            builder.getUIntType(),
-            flags,
-            builder.getIntValue(builder.getUIntType(), 4)),
-        builder.getIntValue(builder.getUIntType(), 0));
-    auto terminate = builder.emitOr(
-        builder.getBoolType(),
-        firstHit,
-        builder.emitEql(
-            decision,
-            builder.getIntValue(builder.getUIntType(), UInt(CandidateExit::EndSearch))));
+        kIROp_MetalRTProcessReportedHit,
+        SLANG_COUNT_OF(operands),
+        operands);
+
+    // A normal Metal return cannot exit the caller. Keep this exit in IR so the existing
+    // exit-lowering pass propagates it through helpers to the Intersection implementation.
     auto terminateBlock = builder.createBlock();
     auto continueBlock = builder.createBlock();
     function->addBlock(terminateBlock);
     function->addBlock(continueBlock);
-    builder.emitIfElse(terminate, terminateBlock, continueBlock, after);
+    builder.emitIfElse(
+        builder.emitEql(
+            decision,
+            builder.getIntValue(builder.getUIntType(), UInt(CandidateExit::EndSearch))),
+        terminateBlock,
+        continueBlock,
+        continueBlock);
     builder.setInsertInto(terminateBlock);
     builder.emitThrow(builder.getIntValue(builder.getUIntType(), UInt(CandidateExit::EndSearch)));
     builder.setInsertInto(continueBlock);
-    builder.emitReturn(builder.getBoolValue(true));
+    builder.emitReturn(builder.emitEql(
+        decision,
+        builder.getIntValue(builder.getUIntType(), UInt(CandidateExit::Accept))));
     return function;
 }
 
@@ -940,10 +899,33 @@ IRFuncType* getAnyHitFunctionSignature(IRBuilder& builder)
 }
 
 /// Creates the implementation function for a selected AnyHit or Intersection shader.
+/// Consider this source AnyHit body:
+///     static void invoke(rt::AnyHitInput<Context> input)
+///     {
+///         if (input.distance < 1.0)
+///             input.ignoreHit();
+///     }
+///
+/// We copy invoke and the helpers that need candidate lowering, then generate this initial body
+/// around the copy (pseudocode; additional resource and AnyHit-selection arguments are omitted):
+///     uint implementation(thread void* untypedState, ...)
+///     {
+///         thread CandidateState* state = (thread CandidateState*)untypedState;
+///         invoke_copy(Input{});
+///         return Accept;
+///     }
+///
+/// Input{} is the source function's empty logical input, not a copy of the runtime state.
+/// Subsequent steps add the required arguments to invoke_copy and its helpers. For this example,
+/// input.distance becomes a load of state->candidateDistance, and input.ignoreHit() becomes an
+/// exit propagated through the copied functions so implementation returns Ignore instead of
+/// reaching return Accept. Other input replacements are recorded for lowerVisibleStageInputs.
+/// For Intersection, returning Accept means normal completion; only successful reportHit calls
+/// mark a hit accepted in the shared state.
+///
 /// Procedural AnyHit is exported as [[visible]] so reportHit can call it through the AnyHit VFT.
 /// Triangle/curve AnyHit and procedural Intersection remain ordinary functions. Their native
 /// [[intersection]] wrappers, generated by createNativeCandidateCallback, call them directly.
-/// Each implementation receives candidate state and calls a clone of the source invoke.
 static VisibleAdapter createCandidateImplementation(
     IRModule* module,
     const SchemaStage& stage,

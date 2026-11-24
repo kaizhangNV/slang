@@ -104,15 +104,13 @@ struct ProceduralIntersection : rt::IIntersectionShader
 // METALCH: ProceduralClosestHit_invoke_{{[0-9]+}}({{.*}}, [[CONTEXT]]->primitiveIndex_{{[0-9]+}}, [[CONTEXT]]->instanceIDs_{{[0-9]+}});
 // Any-hit reads custom attributes from the candidate and reports IgnoreHit via its result.
 // METALAH: rt_AnyHitInput_ignoreHit_
-// METALAH: {{candidateAttributes_[0-9]+}}))).{{uv_[0-9]+}}.y) < 0.0f
+// METALAH: candidateAttributes))).{{uv_[0-9]+}}.y) < 0.0f
 // METALAH: rt_AnyHitInput_ignoreHit_{{[0-9]+}}();
 // METALAH: visible]] uint ProceduralAnyHit_anyhit(void thread* candidateState_
-// METALAH: ProceduralAnyHit_invoke_{{[0-9]+}}({{.*}}->payload_
-// ReportHit writes the candidate attributes and invokes the supplied any-hit table slot.
+// METALAH: ProceduralAnyHit_invoke_{{[0-9]+}}({{.*}}->payload
+// ReportHit's IR wrapper calls the prelude with the supplied any-hit table slot.
 // METALIS: portableRTReportHit_{{[0-9]+}}({{.*}}visible_function_table<uint(void thread*, uchar thread*)> [[TABLE:[A-Za-z0-9_]+]], uint [[SLOT:[A-Za-z0-9_]+]],
-// METALIS: ->candidateAttributes_
-// METALIS: [[TABLE]]{{\[}}[[SLOT]]{{\]}}(
-// METALIS: ->committedAttributes_
+// METALIS: _slang_metalReportHit<{{.*}}>({{.*}}[[TABLE]], [[SLOT]],
 // METALIS: intersection(bounding_box,
 // METALIS-SAME: ProceduralIntersection_intersection(
 // METALIS-SAME: ray_data PortableRTRayData_{{[0-9]+}}& rayData_

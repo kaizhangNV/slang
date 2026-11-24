@@ -2252,7 +2252,8 @@ public:
     // Version 39 preserves the ordinary RT requirement keys and schema/input metadata used by
     // target adapter synthesis. Older modules do not carry these compiler-consumed contracts.
     const static UInt k_minSupportedModuleVersion = 39;
-    const static UInt k_maxSupportedModuleVersion = 39;
+    // Version 40 adds the Metal ReportHit prelude operation; version-39 modules remain readable.
+    const static UInt k_maxSupportedModuleVersion = 40;
     static_assert(k_minSupportedModuleVersion <= k_maxSupportedModuleVersion);
 
     /// Returns whether `version` is in the inclusive range this compiler can load.

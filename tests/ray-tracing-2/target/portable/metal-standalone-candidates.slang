@@ -72,7 +72,7 @@ struct StandaloneIntersection : rt::IIntersectionShader
 // INTERSECTION-DAG: candidateReport
 // INTERSECTION-DAG: globalResourceContext
 // INTERSECTION-DAG: portableRTReportHit_{{[0-9]+}}({{.*}}visible_function_table<uint(void thread*, uchar thread*)> [[FILTER:_S[0-9]+]], uint [[SLOT:_S[0-9]+]],
-// INTERSECTION-DAG: [[FILTER]]{{\[}}[[SLOT]]{{\]}}(
+// INTERSECTION-DAG: _slang_metalReportHit<{{.*}}>({{.*}}[[FILTER]], [[SLOT]],
 // INTERSECTION-NOT: metalRTReportHit
 // INTERSECTION-NOT: intersectionShaders
 // INTERSECTION-NOT: candidateDescriptor

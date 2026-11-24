@@ -1327,6 +1327,24 @@ bool MetalSourceEmitter::tryEmitInstExprImpl(IRInst* inst, const EmitOpInfo& inO
     }
     switch (inst->getOp())
     {
+    case kIROp_MetalRTProcessReportedHit:
+        {
+            ensurePrelude(kMetalBuiltinPreludeReportHit);
+            auto report = cast<IRMetalRTProcessReportedHit>(inst);
+            // Emit the attribute type explicitly: an empty attribute address emits as nullptr,
+            // which cannot supply a type for Metal's template argument deduction.
+            m_writer->emit("_slang_metalReportHit<");
+            emitType(cast<IRPtrTypeBase>(report->getAttributes()->getDataType())->getValueType());
+            m_writer->emit(">(");
+            for (UInt i = 0; i < inst->getOperandCount(); ++i)
+            {
+                if (i != 0)
+                    m_writer->emit(", ");
+                emitOperand(inst->getOperand(i), getInfo(EmitOp::General));
+            }
+            m_writer->emit(")");
+            return true;
+        }
     case kIROp_MakeArray:
     case kIROp_MakeArrayFromElement:
         {

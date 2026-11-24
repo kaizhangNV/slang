@@ -943,4 +943,5 @@ return {
 	["Type.UntypedBufferResourceType.MetalAccelerationStructure"] = 982,
 	["castToNativeAccelerationStructure"] = 983,
 	["Type.FlexibleTraceProgramDescriptor"] = 984,
+	["metalRTProcessReportedHit"] = 986,
 }

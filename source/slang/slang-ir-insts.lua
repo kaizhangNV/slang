@@ -1822,8 +1822,23 @@ local insts = {
 			},
 		},
 	},
-	-- These accessors bind an ordinary logical input value to the current invocation.
+	-- Retained for reading older lowered modules. New ReportHit bodies use the prelude below.
 	{ metalRTCandidateDispatch = { min_operands = 4 } },
+	{
+		metalRTProcessReportedHit = {
+			-- Processes a reported hit: validate distance, run AnyHit, and commit accepted values.
+			-- Returns Accept/Ignore/EndSearch; the generated IR wrapper propagates EndSearch.
+			operands = {
+				{ "state" },
+				{ "globalContext" },
+				{ "anyHitFunctions" },
+				{ "anyHitIndex" },
+				{ "distance" },
+				{ "hitKind" },
+				{ "attributes" },
+			},
+		},
+	},
 	{ metalRTGetGlobalResourceContext = {} },
 	-- Payload/callable-data return a reference to shared mutable invocation storage;
 	-- the others return read-only record/attribute views or builtin scalar values.
