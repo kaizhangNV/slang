@@ -705,8 +705,24 @@ IRFunc* createReportHit(IRModule* module, const CandidateStateLayout& state, IRT
         SLANG_COUNT_OF(operands),
         operands);
 
-    // A normal Metal return cannot exit the caller. Keep this exit in IR so the existing
-    // exit-lowering pass propagates it through helpers to the Intersection implementation.
+    // Generate this control flow (pseudocode):
+    //     if (decision == EndSearch)
+    //         throw EndSearch;
+    //     return decision == Accept; // Accept returns true; Ignore (rejection) returns false.
+    //
+    // Consider an Intersection shader calling this helper (pseudocode):
+    //     bool helper(Input input)
+    //     {
+    //         bool accepted = input.reportHit(...);
+    //         doMoreWork(); // Must not run after EndSearch.
+    //         return accepted;
+    //     }
+    //
+    // Returning normally from reportHit would let helper execute doMoreWork and then resume
+    // Intersection. emitThrow marks the EndSearch path so lowerCandidateExits can propagate it
+    // through caller sites, skipping the remaining source code until the generated Intersection
+    // implementation returns the exit decision. This becomes ordinary result checks and returns;
+    // the native [[intersection]] wrapper still writes back the payload and accepted hit.
     auto terminateBlock = builder.createBlock();
     auto continueBlock = builder.createBlock();
     function->addBlock(terminateBlock);
