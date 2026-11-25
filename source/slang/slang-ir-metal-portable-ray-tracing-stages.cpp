@@ -660,7 +660,7 @@ VisibleAdapter createVisibleAdapter(
         auto value = inputs.tryLoadInput(op);
         SLANG_RELEASE_ASSERT(value);
         seen.add({op, value->getDataType()});
-        result.bindings.add({op, value->getDataType(), value});
+        result.inputReplacements.add({op, value->getDataType(), value});
     }
 
     // Nested dispatch also needs the program descriptor and the complete records buffer.
@@ -743,7 +743,7 @@ VisibleAdapter createVisibleAdapter(
         // Save one rule per opcode/result type, even if several helpers contain the same read.
         // For example, all float MetalRTGetCurrentDistance reads use the same context field load.
         if (value)
-            result.bindings.add({op, type, value});
+            result.inputReplacements.add({op, type, value});
     }
 
     // Call the original method with its empty logical input. Later input lowering adds the
@@ -755,16 +755,18 @@ VisibleAdapter createVisibleAdapter(
 
 void lowerVisibleStageInputs(IRModule* module, const List<VisibleAdapter>& adapters)
 {
-    // Different stage contexts can bind the same logical getter through different pointer or
+    // Different stage contexts can replace the same logical getter through different pointer or
     // path types. Partition by those canonical types rather than erasing their address spaces.
     using Query = KeyValuePair<IROp, IRType*>;
-    using BindingKey = KeyValuePair<Query, IRType*>;
-    List<BindingKey> keys;
-    HashSet<BindingKey> seen;
+    using InputReplacementKey = KeyValuePair<Query, IRType*>;
+    List<InputReplacementKey> keys;
+    HashSet<InputReplacementKey> seen;
     for (const auto& adapter : adapters)
-        for (const auto& binding : adapter.bindings)
+        for (const auto& replacement : adapter.inputReplacements)
         {
-            BindingKey key({binding.op, binding.resultType}, binding.value->getDataType());
+            InputReplacementKey key(
+                {replacement.op, replacement.resultType},
+                replacement.value->getDataType());
             if (seen.add(key))
                 keys.add(key);
         }
@@ -774,11 +776,11 @@ void lowerVisibleStageInputs(IRModule* module, const List<VisibleAdapter>& adapt
         HashSet<IRFunc*> visited;
         List<IRInst*> operations;
         for (const auto& adapter : adapters)
-            for (const auto& binding : adapter.bindings)
-                if (binding.op == key.key.key && binding.resultType == key.key.value &&
-                    binding.value->getDataType() == key.value)
+            for (const auto& replacement : adapter.inputReplacements)
+                if (replacement.op == key.key.key && replacement.resultType == key.key.value &&
+                    replacement.value->getDataType() == key.value)
                 {
-                    parameter.bind(adapter.function, binding.value);
+                    parameter.bind(adapter.function, replacement.value);
                     collectOperations(adapter.function, visited, operations);
                 }
         // Threading replaces call instructions while walking callers. Keep only the accessors

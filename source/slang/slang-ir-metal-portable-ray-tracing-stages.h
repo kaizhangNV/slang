@@ -102,7 +102,7 @@ IRInst* recoverStageDataPointer(IRBuilder& builder, IRInst* untypedDataPointer, 
 /// to pass the loaded distance field through source helpers and replace their matching
 /// reads. The getter's result type can differ from the supplied value's type: an instance-index
 /// getter returns uint, while its wrapper supplies a pointer to the array of instance indices.
-struct StageInputBinding
+struct StageInputReplacement
 {
     IROp op;
     IRType* resultType;
@@ -114,7 +114,7 @@ struct StageInputBinding
 struct VisibleAdapter
 {
     IRFunc* function = nullptr;
-    List<StageInputBinding> bindings;
+    List<StageInputReplacement> inputReplacements;
     IRInst* descriptorResources = nullptr;
     IRInst* records = nullptr;
 };
@@ -125,7 +125,7 @@ struct VisibleAdapter
 StageRequirements getStageContractRequirements(Stage stage);
 
 /// Collects reachable invocation getters, excluding dispatch and candidate-control operations.
-/// Adapters use these operations only to bind source getters to the fixed invocation values.
+/// Adapters use these operations to identify the fixed invocation values that replace getters.
 void collectStageInputOperations(IRFunc* invoke, List<IRInst*>& operations);
 
 /// Identifies a logical invocation getter before a selected adapter supplies its value.
@@ -144,7 +144,7 @@ VisibleAdapter createVisibleAdapter(
     IRStructType* contextType,
     UnownedStringSlice symbolName);
 
-/// Threads adapter-bound values through ordinary helpers and replaces their logical getters.
+/// Threads adapter-supplied values through ordinary helpers and replaces their logical getters.
 /// Candidate-stage mutable/control state is deliberately outside this visible-stage operation.
 void lowerVisibleStageInputs(IRModule* module, const List<VisibleAdapter>& adapters);
 

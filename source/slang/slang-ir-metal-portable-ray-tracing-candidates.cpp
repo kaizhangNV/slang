@@ -743,9 +743,22 @@ IRFunc* createReportHit(IRModule* module, const CandidateStateLayout& state, IRT
     return function;
 }
 
-/// Supplies immutable values at the independently compiled provider boundary. Mutable getters
-/// are lowered to state loads at their original use so ReportHit can change the current interval.
-void collectBindings(
+/// Builds the mapping from remaining logical Input properties to values supplied by CandidateState.
+/// Each entry in adapter.inputReplacements records:
+///     key: (getter opcode, getter result type)
+///     value: an IR value obtained from the corresponding CandidateState field.
+///
+/// For example, input.dispatchRaysIndex reads CandidateState.dispatchRaysIndex. This function
+/// emits the field load and records {MetalRTGetDispatchRaysIndex, uint3, loadedValue}. Payload
+/// access needs a typed pointer recovered from state.payload; Record access needs a value loaded
+/// through state.record. The mapping therefore stores replacement values, not just field keys.
+///
+/// This function leaves the getter instructions in place. Later, after all adapters are created
+/// and TraceRay/CallShader lowering has introduced any additional reads, lowerVisibleStageInputs
+/// forwards these values through the user functions and replaces the getter instructions.
+/// Mutable candidate reads, such as the current distance, were already handled by
+/// lowerMutableInputs, which emits loads at each read so changes made by ReportHit remain visible.
+void collectInputReplacements(
     IRModule* module,
     VisibleAdapter& adapter,
     IRInst* context,
@@ -757,13 +770,13 @@ void collectBindings(
     List<IRFunc*> functions;
     collectFunctions(adapter.function, seen, functions);
     HashSet<KeyValuePair<IROp, IRType*>> queries;
-    // Nested trace/callable lowering introduces launch queries after this collection. Bind
-    // those fixed invocation values now, including when the source stage reads neither one.
+    // Nested trace/callable lowering introduces launch queries after this collection. Record
+    // their replacement values now, including when the source stage reads neither one.
     for (auto op : {kIROp_MetalRTGetDispatchRaysIndex, kIROp_MetalRTGetDispatchRaysDimensions})
     {
         auto value = loadField(builder, context, state.inputs.getValue(op));
         queries.add({op, value->getDataType()});
-        adapter.bindings.add({op, value->getDataType(), value});
+        adapter.inputReplacements.add({op, value->getDataType(), value});
     }
     for (auto function : functions)
         for (auto block : function->getBlocks())
@@ -794,7 +807,7 @@ void collectBindings(
                             loadField(builder, context, state.record)));
                 }
                 if (value)
-                    adapter.bindings.add({op, type, value});
+                    adapter.inputReplacements.add({op, type, value});
             }
 }
 
@@ -1097,7 +1110,7 @@ static VisibleAdapter createCandidateImplementation(
 
     // Save payload pointers, Record values and fixed built-ins for lowerVisibleStageInputs.
     // That pass forwards them after trace/callShader lowering has introduced any additional reads.
-    collectBindings(module, result, candidateStatePtr, state);
+    collectInputReplacements(module, result, candidateStatePtr, state);
     return result;
 }
 
