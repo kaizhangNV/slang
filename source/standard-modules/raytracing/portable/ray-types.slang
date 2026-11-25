@@ -30,6 +30,7 @@ public interface IEnabledRayMotion : IRayMotion {}
 /// @par Constraints
 /// Conforms to `IRayMotion`, but not `IEnabledRayMotion`, so hit and miss inputs do not expose
 /// `time` for this motion model.
+[KnownBuiltin("RayTracingNoMotion")]
 public struct NoMotion : IRayMotion {}
 
 /// Selects Metal primitive motion without moving acceleration-structure instances.
@@ -37,6 +38,7 @@ public struct NoMotion : IRayMotion {}
 /// @par Constraints
 /// Conforms to `IEnabledRayMotion` and requires Metal library version 2.4 or later.
 [require(metallib_2_4)]
+[KnownBuiltin("RayTracingPrimitiveMotion")]
 public struct PrimitiveMotion : IEnabledRayMotion {}
 
 /// Selects instance motion and passes `RayTraversalDesc.time` to native traversal.
@@ -48,6 +50,7 @@ public struct PrimitiveMotion : IEnabledRayMotion {}
 /// @par Constraints
 /// Conforms to `IEnabledRayMotion` and requires `portable_raytracing_instance_motion`.
 [require(portable_raytracing_instance_motion)]
+[KnownBuiltin("RayTracingInstanceMotion")]
 public struct InstanceMotion : IEnabledRayMotion {}
 
 /// Selects Metal traversal with both primitive and instance motion enabled.
@@ -55,6 +58,7 @@ public struct InstanceMotion : IEnabledRayMotion {}
 /// @par Constraints
 /// Conforms to `IEnabledRayMotion` and requires Metal library version 2.4 or later.
 [require(metallib_2_4)]
+[KnownBuiltin("RayTracingPrimitiveAndInstanceMotion")]
 public struct PrimitiveAndInstanceMotion : IEnabledRayMotion {}
 
 /// Describes a ray origin, interval, and direction.
@@ -94,9 +98,9 @@ public typealias RayDesc = RayDesc;
 
 /// Supplies the per-call traversal controls and native SBT selectors.
 ///
-/// A program schema defines which stage programs are available, while `sbtOffset`, `sbtStride`,
-/// and `missIndex` select runtime records from the host-built SBT. `time` is consumed only by a
-/// motion-enabled trace context.
+/// A program schema defines which stage programs are available. The descriptor fixes the geometry
+/// multiplier; `rayType` and `missIndex` select runtime records from the host-built SBT. `time` is
+/// consumed only by a motion-enabled trace context.
 public struct RayTraversalDesc
 {
     /// Supplies the ray origin, direction, and traversal interval.
@@ -142,22 +146,12 @@ public struct RayTraversalDesc
     /// consistent with the instance masks stored in the acceleration structure.
     public uint instanceMask;
 
-    /// Supplies the ray's offset when selecting a hit-group record from the shader binding table.
-    /// A host can use this as the ray-type column of a logical geometry-by-ray-type table.
+    /// Selects the ray-type column of the descriptor's hit-record table.
     ///
     /// @par Constraints
-    /// Uses a runtime `uint`, not a schema-list index. The caller must choose this offset together
-    /// with `sbtStride` and the acceleration structure's record offsets to select a valid record
-    /// in the host-built shader binding table.
-    public uint sbtOffset;
-
-    /// Supplies the stride applied to the geometry contribution when selecting a hit-group record.
-    /// Counts records rather than bytes. For two ray-type columns per geometry row, use 2.
-    ///
-    /// @par Constraints
-    /// Uses a runtime `uint`. Its value must agree with the host-built shader binding table's
-    /// geometry layout and the native traversal operation's supported selector range.
-    public uint sbtStride;
+    /// Uses a runtime `uint`, not a schema-list index. The caller supplies a valid ray type for the
+    /// descriptor and a compatible host-built table. This field adds no runtime bounds check.
+    public uint rayType;
 
     /// Selects the miss record used when traversal finds no accepted hit.
     ///
@@ -169,8 +163,8 @@ public struct RayTraversalDesc
 
 /// Identifies an acceleration-structure topology understood by structural tracing.
 ///
-/// The interface is sealed because lowering maps each supported topology to a fixed native
-/// acceleration-structure representation.
+/// The interface is sealed because lowering needs to know the topology when constructing the
+/// target's traversal and resource types.
 ///
 /// @par Constraints
 /// Only the standard library can add conforming types. A trace context's `AccelerationStructure`
@@ -178,28 +172,34 @@ public struct RayTraversalDesc
 [sealed]
 public interface IAccelerationStructure {}
 
-/// Makes the existing native acceleration-structure handle usable with the structural API.
+/// Represents two-level TLAS-to-BLAS traversal, or Metal IAS-to-primitive-AS traversal.
 ///
-/// It represents portable two-level TLAS-to-BLAS traversal (or Metal IAS-to-primitive-AS
-/// traversal).
-///
-/// The core module already declares this intrinsic resource type in `hlsl.meta.slang`. Extending
-/// it preserves the type accepted by existing bindings and native trace operations; declaring a
-/// new struct here would introduce a distinct type. The extension also keeps the core module
-/// independent of this experimental module's interface.
-///
-/// @par Specialization
-/// Extends the core `RaytracingAccelerationStructure` type with `IAccelerationStructure`
-/// conformance. There are no generic constraints; this conformance identifies that concrete
-/// handle as the portable two-level topology.
-public extension RaytracingAccelerationStructure : IAccelerationStructure {}
-
-/// Names the portable two-level acceleration-structure handle.
+/// On native ray-tracing targets this has the same representation as the core
+/// `RaytracingAccelerationStructure`. On Metal the host binds an argument buffer containing
+/// the native acceleration structure and its instance-contribution data. Keeping them together
+/// lets one trace program select different acceleration structures with different instance data.
+/// The core type retains its native Metal representation for APIs such as `RayQuery`.
 ///
 /// @par Constraints
-/// This alias is exactly `RaytracingAccelerationStructure`, which conforms to the sealed
-/// `IAccelerationStructure` interface. It does not denote the multilevel handle family.
-public typealias AccelerationStructure = RaytracingAccelerationStructure;
+/// Conforms to the sealed `IAccelerationStructure` contract. `Handle` can be stored in ordinary
+/// buffer data and resolves to this resource through the usual descriptor-handle operations.
+__intrinsic_type(RaytracingAccelerationStructure, 2)
+[KnownBuiltin("RayTracingAccelerationStructure")]
+public struct AccelerationStructure
+    : IAccelerationStructure, __IDynamicResourceCastable<__DynamicResourceKind.General>
+{
+    public static const DescriptorKind kind = DescriptorKind.AccelerationStructure;
+    public static const DescriptorAccess descriptorAccess = DescriptorAccess.Read;
+    public typealias Handle = DescriptorHandle<AccelerationStructure>;
+
+    // Match kConversionCost_ImplicitDereference in the core resource Handle constructors.
+    __implicit_conversion(10)
+    [ForceInline]
+    public __init(Handle handle)
+    {
+        return getDescriptorFromHandle(handle);
+    }
+}
 
 /// Refines `IAccelerationStructure` for handles with a maximum traversal depth.
 ///
@@ -225,19 +225,21 @@ internal interface IMultiLevelAccelerationStructure : IAccelerationStructure
 /// Represents Metal traversal with an explicit maximum acceleration-structure depth.
 ///
 /// `maxLevelCount` includes the primitive acceleration structure and every instance level on the
-/// path to it. A value of one represents direct primitive-AS traversal; larger values enable
-/// Metal's multi-level traversal. A hit path therefore contains at most `maxLevelCount - 1`
-/// instances.
+/// path to it. One represents direct primitive-AS traversal, two uses ordinary instancing,
+/// and larger values enable Metal's multi-level traversal. A hit path therefore contains at most `maxLevelCount - 1`
+/// instances. Like `AccelerationStructure`, this binds a Metal argument buffer containing the
+/// native acceleration structure and its instance-contribution data for the whole path.
 ///
 /// @tparam maxLevelCount Maximum depth, including the final primitive acceleration structure.
 /// This integer parameter is a type-level constant, not the runtime number of instances hit.
 ///
 /// @par Constraints
 /// Requires Metal and conforms to the internal `IMultiLevelAccelerationStructure` contract,
-/// which inherits `IAccelerationStructure`. The parameter is declared as `int` with no
-/// language-level range constraint; the caller must select a depth supported by Metal.
+/// which inherits `IAccelerationStructure`. The level count must be in [1, 32]. A generic or
+/// link-time count is checked when specialization or linking supplies its concrete value.
 [require(metal)]
 __intrinsic_type(RaytracingAccelerationStructure)
+[KnownBuiltin("RayTracingMultiLevelAccelerationStructure")]
 public struct MultiLevelAccelerationStructure<let maxLevelCount : int>
     : IMultiLevelAccelerationStructure
 {
@@ -250,6 +252,11 @@ public struct MultiLevelAccelerationStructure<let maxLevelCount : int>
     public static const uint levelCount = maxLevelCount;
 }
 
+/// Reads candidate or committed triangle orientation from the current Metal invocation.
+[require(metal, portable_anyhit_closesthit)]
+__intrinsic_op(metalRTGetTriangleFrontFacing)
+internal bool __metalRTGetTriangleFrontFacing();
+
 /// Exposes the built-in attributes of a triangle hit as a zero-storage property view.
 ///
 /// Each property maps independently to native stage state; the aggregate is not transported as one
@@ -259,25 +266,27 @@ public struct TriangleData
     /// Reads the two barycentric coordinates supplied for the triangle hit.
     ///
     /// @par Constraints
-    /// Requires `anyhit_closesthit`, so access is available only in supported
+    /// Requires `portable_anyhit_closesthit`, so access is available only in supported
     /// any-hit and closest-hit stages. The coordinates describe built-in triangle intersection
     /// state, rather than application-defined procedural attributes.
     ///
-    /// @todo A following PR must connect this getter to native hit attributes or Metal stage state.
-    [require(anyhit_closesthit)]
+    /// Native adapters read this value from their triangle hit attributes. Metal adapters obtain
+    /// it from candidate or committed-hit state.
+    [require(portable_anyhit_closesthit)]
     public property float2 barycentricCoord
     {
+        __intrinsic_op(portableRTGetTriangleBarycentricCoord)
         get;
     }
 
     /// Reports whether the ray hit the triangle's front face according to native face orientation.
     ///
     /// @par Constraints
-    /// Requires `anyhit_closesthit`, so access is available only in supported
+    /// Requires `portable_anyhit_closesthit`, so access is available only in supported
     /// any-hit and closest-hit stages. Reads built-in triangle state for the current hit.
     ///
-    /// @todo A following PR must synthesize Metal's candidate or committed-hit facing value.
-    [require(anyhit_closesthit)]
+    /// Metal adapters supply candidate or committed-hit facing state independently of barycentrics.
+    [require(portable_anyhit_closesthit)]
     public property bool frontFacing
     {
         get
@@ -290,12 +299,7 @@ public struct TriangleData
             case cuda:
                 return HitKind() == HIT_KIND_TRIANGLE_FRONT_FACE;
             case metal:
-                // TODO: A following PR must synthesize the candidate's [[front_facing]] input or
-                // the committed intersection result's triangle_front_facing value.
-                static_assert(
-                    false,
-                    "Metal structural ray-tracing frontFacing requires compiler synthesis");
-                return false; // Unreachable; required by return checking.
+                return __metalRTGetTriangleFrontFacing();
             }
         }
     }
@@ -315,10 +319,10 @@ public struct CurveData
     /// Uses a `float` and inherits `CurveData`'s Metal library version 3.1 requirement. The getter
     /// has no additional declared stage or numeric-range constraint.
     ///
-    /// @todo A following PR must synthesize this getter from Metal's candidate or committed curve
-    /// data.
+    /// Metal adapters supply this value from candidate or committed curve data.
     public property float parameter
     {
+        __intrinsic_op(portableRTGetCurveParameter)
         get;
     }
 }
@@ -336,6 +340,7 @@ public interface IIntersectionPrimitive
     /// This associated type has no conformance constraint. Built-in primitives select their
     /// zero-storage `TriangleData` or `CurveData` view; procedural primitives select the value
     /// type reported by their intersection shader.
+    [KnownBuiltin("RayTracingPrimitiveAttributes")]
     associatedtype Attributes;
 }
 
@@ -369,6 +374,7 @@ public interface ICustomIntersectionPrimitive : IIntersectionPrimitive {}
 ///
 /// @par Constraints
 /// Conforms to `IBuiltinIntersectionPrimitive`, so a matching hit group uses `NoIntersection`.
+[KnownBuiltin("RayTracingTrianglePrimitive")]
 public struct TrianglePrimitive : IBuiltinIntersectionPrimitive
 {
     /// Selects the built-in triangle attribute view for matching hit-stage inputs.
@@ -385,6 +391,7 @@ public struct TrianglePrimitive : IBuiltinIntersectionPrimitive
 /// Conforms to `IBuiltinIntersectionPrimitive`, so a matching hit group uses `NoIntersection`.
 /// Requires Metal library version 3.1 or later.
 [require(metallib_3_1)]
+[KnownBuiltin("RayTracingCurvePrimitive")]
 public struct CurvePrimitive : IBuiltinIntersectionPrimitive
 {
     /// Selects the built-in curve attribute view for matching hit-stage inputs.
@@ -406,6 +413,7 @@ public struct CurvePrimitive : IBuiltinIntersectionPrimitive
 /// @par Constraints
 /// Conforms to `ICustomIntersectionPrimitive`. A matching hit group must supply an intersection
 /// shader; `NoIntersection` requires a built-in primitive and cannot be selected for this type.
+[KnownBuiltin("RayTracingBoundingBoxPrimitive")]
 public struct BoundingBoxPrimitive<CustomAttributes> : ICustomIntersectionPrimitive
 {
     /// Selects the application-defined attributes reported by the intersection shader.

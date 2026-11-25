@@ -1,6 +1,8 @@
 // slang-ir-entry-point-pass.cpp
 #include "slang-ir-entry-point-pass.h"
 
+#include "slang-ir-portable-ray-tracing-util.h"
+
 namespace Slang
 {
 
@@ -30,6 +32,11 @@ void PerEntryPointPass::processModule(IRModule* module)
         //
         auto entryPointDecoration = func->findDecoration<IREntryPointDecoration>();
         if (!entryPointDecoration)
+            continue;
+
+        // Logical RT inputs are handled by target synthesis after specialization. Their
+        // reflected Record layout does not describe native function parameters yet.
+        if (PortableRT::getEntryPointInputInfo(func))
             continue;
 
         // If we find a candidate entry point, then we

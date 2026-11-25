@@ -211,6 +211,10 @@ def metallib_4_0 : metallib_3_2;
 /// [Version]
 alias metallib_latest = metallib_4_0;
 
+/// Opts into the extended Metal ray-tracing traversal limits.
+/// This is selected explicitly rather than implied by a Metal language version.
+def metal_raytracing_extended_limits : metal;
+
 // HLSL versions
 
 def _sm_4_0 : hlsl;
@@ -1491,8 +1495,6 @@ alias tesscontrol = hull;
 /// [Stage]
 alias tesseval = domain;
 
-// These stage names also describe logical roles in the portable ray-tracing API on Metal.
-// Native pipeline entry points and intrinsics additionally require `raytracing`.
 /// Ray-generation stage, including its logical role in portable ray tracing on Metal.
 /// [Stage]
 alias raygen = _raygen + raytracing | _raygen + metal;
@@ -1501,37 +1503,59 @@ alias raygen = _raygen + raytracing | _raygen + metal;
 /// [Stage]
 alias raygeneration = raygen;
 
-/// Intersection stage, including its logical role in portable ray tracing on Metal.
+/// Intersection shader stage & ray-tracing capabilities.
 /// [Stage]
-alias intersection = _intersection + raytracing | _intersection + metal;
+alias intersection = _intersection + raytracing;
 
-/// Any-hit stage, including its logical role in portable ray tracing on Metal.
+/// Any-hit shader stage & ray-tracing capabilities.
 /// [Stage]
-alias anyhit = _anyhit + raytracing | _anyhit + metal;
+alias anyhit = _anyhit + raytracing;
 
-/// Closest-hit stage, including its logical role in portable ray tracing on Metal.
+/// Closest-hit shader stage & ray-tracing capabilities.
 /// [Stage]
-alias closesthit = _closesthit + raytracing | _closesthit + metal;
+alias closesthit = _closesthit + raytracing;
 
-/// Callable stage, including its logical role in portable ray tracing on Metal.
+/// Callable shader stage & ray-tracing capabilities.
 /// [Stage]
-alias callable = _callable + raytracing | _callable + metal;
+alias callable = _callable + raytracing;
 
-/// Miss stage, including its logical role in portable ray tracing on Metal.
+/// Miss shader stage & ray-tracing capabilities.
 /// [Stage]
-alias miss = _miss + raytracing | _miss + metal;
+alias miss = _miss + raytracing;
+
+// Existing stage aliases such as `miss` describe native ray-tracing pipelines, including DXR.
+// They require `raytracing`, which excludes Metal. The portable aliases below preserve support
+// for those native pipelines and also admit Metal for the same source stages.
+/// Closest-hit stage supported by the portable ray-tracing API on native targets and Metal.
+/// [Compound]
+alias portable_closesthit = closesthit | _closesthit + metal;
+/// Logical any-hit role used by the portable ray-tracing API.
+/// [Compound]
+alias portable_anyhit = anyhit | _anyhit + metal;
+/// Logical hit roles that can read built-in triangle attributes, including Metal dispatch.
+/// [Compound]
+alias portable_anyhit_closesthit = portable_anyhit | portable_closesthit;
+/// Logical intersection role used by the portable ray-tracing API.
+/// [Compound]
+alias portable_intersection = intersection | _intersection + metal;
+/// Logical miss role used by the portable ray-tracing API.
+/// [Compound]
+alias portable_miss = miss | _miss + metal;
+/// Logical callable role used by the portable ray-tracing API.
+/// [Compound]
+alias portable_callable = callable | _callable + metal;
 
 /// Stages that may invoke a callable shader through the portable ray-tracing API.
 /// [Compound]
-alias portable_raytracing_call_shader = cuda_glsl_hlsl_spirv + raygen
-                                       | cuda_glsl_hlsl_spirv + closesthit
-                                       | cuda_glsl_hlsl_spirv + miss
-                                       | cuda_glsl_hlsl_spirv + callable
-                                       | _raygen + metal
-                                       | compute + metal
-                                       | _closesthit + metal
-                                       | _miss + metal
-                                       | _callable + metal;
+alias portable_call_shader = cuda_glsl_hlsl_spirv + raygen
+                             | cuda_glsl_hlsl_spirv + closesthit
+                             | cuda_glsl_hlsl_spirv + miss
+                             | cuda_glsl_hlsl_spirv + callable
+                             | _raygen + metal
+                             | compute + metal
+                             | _closesthit + metal
+                             | _miss + metal
+                             | _callable + metal;
 
 /// Mesh shader stage & mesh shader capabilities
 /// [Stage]

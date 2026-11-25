@@ -1664,6 +1664,7 @@ struct SPIRVEmitContext : public SourceEmitterBase, public SPIRVEmitSharedContex
             return SpvStorageClassNodePayloadAMDX;
         case AddressSpace::Global:
         case AddressSpace::MetalObjectData:
+        case AddressSpace::MetalRayData:
         case AddressSpace::SpecializationConstant:
             // msvc is limiting us from putting the UNEXPECTED macro here, so
             // just fall out
@@ -5285,6 +5286,19 @@ struct SPIRVEmitContext : public SourceEmitterBase, public SPIRVEmitSharedContex
         case kIROp_Lsh:
             result = emitArithmetic(parent, inst);
             break;
+        case kIROp_CastToNativeAccelerationStructure:
+            {
+                auto sourceType =
+                    cast<IRRaytracingAccelerationStructureType>(inst->getOperand(0)->getDataType());
+                auto resultType = cast<IRRaytracingAccelerationStructureType>(inst->getDataType());
+                // The level operand does not affect the emitted SPIR-V AS type. Reuse the
+                // operand's value ID, so this conversion emits no instruction or handle copy.
+                SLANG_RELEASE_ASSERT(ensureInst(sourceType) == ensureInst(resultType));
+                auto inner = ensureInst(inst->getOperand(0));
+                registerInst(inst, inner);
+                result = inner;
+                break;
+            }
         case kIROp_CastDescriptorHandleToUInt2:
         case kIROp_CastUInt2ToDescriptorHandle:
         case kIROp_CastUInt64ToDescriptorHandle:

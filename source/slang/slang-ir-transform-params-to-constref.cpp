@@ -1,6 +1,7 @@
 #include "slang-ir-transform-params-to-constref.h"
 
 #include "slang-ir-insts.h"
+#include "slang-ir-portable-ray-tracing-util.h"
 #include "slang-ir-util.h"
 #include "slang-ir.h"
 
@@ -437,6 +438,10 @@ struct EntryPointInParamToBorrowContext : public TransformParamsToConstRefContex
     virtual bool shouldProcessFunction(IRFunc* func) override
     {
         if (!func->isDefinition())
+            return false;
+        // Input<Context> is a logical invocation view. Its native parameters are generated
+        // after specialization, and ordinary calls must retain this source parameter meanwhile.
+        if (PortableRT::getEntryPointInputInfo(func))
             return false;
         if (func->findDecoration<IREntryPointDecoration>() != nullptr)
             return true;

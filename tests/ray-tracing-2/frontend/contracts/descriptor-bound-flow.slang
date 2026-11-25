@@ -16,11 +16,11 @@ struct Schema : rt::ITraceProgramSchema
     typealias CallableShaders = rt::EmptyCallableShaderList;
 }
 
-rt::TraceProgramDescriptor<Schema> descriptor;
+rt::TraceProgramDescriptor<Schema, 1> descriptor;
 
 struct Bindings
 {
-    rt::TraceProgramDescriptor<Schema> descriptor;
+    rt::TraceProgramDescriptor<Schema, 1> descriptor;
 }
 ParameterBlock<Bindings> bindings;
 
@@ -34,6 +34,6 @@ void main()
 {
     // Opaque means the descriptor has no source-visible representation or public constructor. It
     // remains a value handle, so ordinary generic code may copy one supplied by host binding.
-    rt::TraceProgramDescriptor<Schema> copy = identity(descriptor);
+    rt::TraceProgramDescriptor<Schema, 1> copy = identity(descriptor);
     copy = identity(bindings.descriptor);
 }

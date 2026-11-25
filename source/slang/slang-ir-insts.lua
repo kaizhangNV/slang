@@ -40,6 +40,7 @@ local insts = {
 				},
 			},
 			{ AfterBaseType = {} },
+			{ MetalRTInstancePath = { hoistable = true } },
 			{
 				StringTypeBase = {
 					hoistable = true,
@@ -536,7 +537,40 @@ local insts = {
 							},
 						},
 					},
-					{ RaytracingAccelerationStructure = { struct_name = "RaytracingAccelerationStructureType" } },
+					-- Source types have one operand: 0xFFFF for the core native resource, or the maximum
+					-- level count N in [1, 32] for portable traversal. AccelerationStructure and
+					-- MultiLevelAccelerationStructure<2> share [2]. Native RT emitters ignore N.
+					-- Metal replaces portable types with argument buffers. N=1 selects primitive
+					-- traversal, N=2 ordinary instancing, and N>2 multilevel traversal.
+					{
+						RaytracingAccelerationStructure = {
+							struct_name = "RaytracingAccelerationStructureType",
+							operands = { { "maxLevelCount" } },
+						},
+					},
+					-- The lowered Metal resource needs only instancing/motion tags. Traversal
+					-- depth stays in the source schema and the intersector/table configuration.
+					{
+						MetalAccelerationStructure = {
+							struct_name = "MetalAccelerationStructureType",
+							operands = { { "tagMask", "IRIntLit" } },
+						},
+					},
+					{
+						MetalIntersectionFunctionTable = {
+							operands = { { "tagMask", "IRIntLit" }, { "maxLevels", "IRIntLit" } },
+							hoistable = true,
+						},
+					},
+					{
+						MetalVisibleFunctionTable = {
+							operands = {
+								{ "functionType", "IRFuncType" },
+								{ "stageKind", "IRIntLit" },
+							},
+							hoistable = true,
+						},
+					},
 				},
 			},
 			{
@@ -736,10 +770,29 @@ local insts = {
 			},
 			{
 				TraceProgramDescriptor = {
-					-- An opaque structural ray-tracing program descriptor. Its operands retain the
-					-- schema type argument and conformance witness without exposing any
-					-- target-specific resource representation in source or IR.
+					-- An opaque structural ray-tracing program descriptor. The schema, fixed
+					-- count/layout, and conformance identify it; the remaining operands retain types
+					-- needed for backend synthesis. These may begin as associated-type lookups
+					-- and become concrete types after specialization. They add no runtime fields.
 					struct_name = "TraceProgramDescriptorType",
+					operands = {
+						{ "schema", "IRType" },
+						{ "rayTypeCount" },
+						{ "hitRecordLayout" },
+						{ "schemaWitness" },
+						{ "accelerationStructureType", "IRType" },
+						{ "motionType", "IRType" },
+						{ "hitGroupsType", "IRType" },
+						{ "missShadersType", "IRType" },
+						{ "callableShadersType", "IRType" },
+					},
+					hoistable = true,
+				},
+			},
+			{
+				FlexibleTraceProgramDescriptor = {
+					-- Declaration-only resource; executable lowering is not implemented yet.
+					struct_name = "FlexibleTraceProgramDescriptorType",
 					operands = {
 						{ "schema", "IRType" },
 						{ "schemaWitness" },
@@ -1707,6 +1760,123 @@ local insts = {
 		},
 	},
 	{ GetVulkanRayTracingPayloadLocation = { min_operands = 1 } },
+	{
+		metalRTTraceDispatch = {
+			-- Physical resources and signatures have already been resolved. This operation
+			-- never asks emission to inspect a schema witness or a logical input type.
+			operands = {
+				{ "tagMask" },
+				{ "maxLevels" },
+				{ "geometryKind" },
+				{ "hasIntersectionFunctions" },
+				{ "hasMissFunctions" },
+				{ "hasClosestHitFunctions" },
+				{ "origin" },
+				{ "direction" },
+				{ "minDistance" },
+				{ "maxDistance" },
+				{ "time" },
+				{ "rayFlags" },
+				{ "instanceMask" },
+				{ "sbtOffset" },
+				{ "sbtStride" },
+				{ "missIndex" },
+				{ "accelerationStructure" },
+				{ "intersectionFunctions" },
+				{ "missFunctions" },
+				{ "closestHitFunctions" },
+				{ "descriptorResources" },
+				{ "records" },
+				{ "hitRecordStride", "IRIntLit" },
+				{ "missRecordStride", "IRIntLit" },
+				{ "rayData" },
+				{ "globalContext" },
+				-- Candidate dispatch and committed closest-hit dispatch call this same helper so
+				-- both interpret a multi-level instance path through the AS metadata trie
+				-- identically. It is meaningful only when the tag mask contains instancing.
+				{ "instanceHitGroupContributionLookup" },
+                { "instanceContributionMetadata" },
+                { "payload" },
+                { "committedAttributes" },
+                { "customHitKindAddress" },
+                { "dispatchRaysIndex" },
+                { "dispatchRaysDimensions" },
+                { "committedAttributesOffsetAddress" },
+			},
+		},
+	},
+	{
+		metalRTCallDispatch = {
+			-- Dispatches through the physical callable table using a host-selected record.
+			operands = {
+				{ "callableIndex" },
+				{ "data" },
+				{ "dispatchRaysIndex" },
+				{ "dispatchRaysDimensions" },
+				{ "descriptorResources" },
+				{ "records" },
+				{ "callableRecordStride", "IRIntLit" },
+				{ "descriptorResourcesType" },
+				{ "callableFunctionsKey", "IRStructKey" },
+				{ "globalContext" },
+			},
+		},
+	},
+	-- Retained for reading older lowered modules. New ReportHit bodies use the prelude below.
+	{ metalRTCandidateDispatch = { min_operands = 4 } },
+	{
+		metalRTProcessReportedHit = {
+			-- Processes a reported hit: validate distance, run AnyHit, and commit accepted values.
+			-- Returns Accept/Ignore/EndSearch; the generated IR wrapper propagates EndSearch.
+			operands = {
+				{ "state" },
+				{ "globalContext" },
+				{ "anyHitFunctions" },
+				{ "anyHitIndex" },
+				{ "distance" },
+				{ "hitKind" },
+				{ "attributes" },
+			},
+		},
+	},
+	{ metalRTGetGlobalResourceContext = {} },
+	-- Payload/callable-data return a reference to shared mutable invocation storage;
+	-- the others return read-only record/attribute views or builtin scalar values.
+	-- Copies of the input token must not introduce copies of that underlying state.
+	{ portableRTGetPayload = { operands = { { "input" } } } },
+	{ portableRTGetCallableData = { operands = { { "input" } } } },
+	{ portableRTGetRecord = { operands = { { "input" } } } },
+	{ portableRTGetHitAttributes = { operands = { { "input" } } } },
+	{ portableRTGetTriangleBarycentricCoord = { operands = { { "input" } } } },
+	{ portableRTGetCurveParameter = { operands = { { "input" } } } },
+	-- Metal supplies these invocation values through generated traversal/dispatch adapters.
+	-- Unlike the native core intrinsics, the source operations do not prescribe a physical
+	-- parameter. Reachable uses determine what the adapter must supply to ordinary helpers.
+	{ metalRTGetMinDistance = {} },
+	{ metalRTGetCurrentDistance = {} },
+	{ metalRTGetHitKind = {} },
+	{ metalRTGetRayFlags = {} },
+	{ metalRTGetPrimitiveIndex = {} },
+	{ metalRTGetGeometryIndex = {} },
+	{ metalRTGetWorldSpaceOrigin = {} },
+	{ metalRTGetWorldSpaceDirection = {} },
+	{ metalRTGetDispatchRaysIndex = {} },
+	{ metalRTGetDispatchRaysDimensions = {} },
+	{ metalRTGetRayTime = {} },
+	{ metalRTGetInstanceCount = {} },
+	{ metalRTGetInstanceIndex = { operands = { { "level" } } } },
+	{ metalRTGetInstanceID = { operands = { { "level" } } } },
+	{ metalRTGetObjectSpaceRay = {} },
+	{ metalRTGetObjectToWorld = {} },
+	{ metalRTGetWorldToObject = {} },
+	{ metalRTGetTriangleFrontFacing = {} },
+	-- These operations affect the candidate protocol. In particular, terminating any-hit
+	-- inside a source helper exits the source stage, not merely that helper's local call.
+	{ metalRTIgnoreHit = {} },
+	{ metalRTAcceptHitAndEndSearch = {} },
+	{ metalRTReportHit = { operands = { { "distance" }, { "hitKind" }, { "attributes" } } } },
+	-- The logical descriptor and mutable data reference retain their checked concrete types.
+	{ metalRTCallShader = { operands = { { "descriptor" }, { "callableIndex" }, { "data" } } } },
 	{ GetLegalizedSPIRVGlobalParamAddr = { min_operands = 1 } },
 	{
 		GetPerVertexInputArray = {
@@ -2160,6 +2330,50 @@ local insts = {
 				},
 			},
 			{ CudaKernel = { struct_name = "CudaKernelDecoration" } },
+			{
+				-- Identifies the context pointer introduced by explicit-global-context lowering.
+				-- Physical indirect calls consume this role, never a debug name.
+				ExplicitGlobalContextDecoration = {},
+			},
+			{
+				-- Gives a component parameter its stable position in the shared resource layout.
+				MetalRTGlobalResourceDecoration = { operands = { { "layoutIndex", "IRIntLit" } } },
+			},
+			{
+				-- The fixed table ABI passes resources, never a caller's private globals.
+				MetalRTGlobalResourceContextDecoration = {},
+			},
+			{
+				-- Identifies a fixed invocation-context field and its optional logical getter.
+				-- Constructed after specialization; caller and provider share this physical ABI.
+				MetalRTInvocationFieldDecoration = {
+					operands = { { "role", "IRIntLit" }, { "operation", "IRIntLit" } },
+				},
+			},
+			{
+				-- An explicitly selected logical Metal stage remains an ordinary exported
+				-- helper. It is an executable analysis root, not a native shader entry.
+				MetalRTStandaloneStageDecoration = {},
+			},
+			{
+				-- Marks a physical function exported for a generated visible-function table.
+				-- Its table type owns the signature used by every dynamically selected arm.
+				metalVisibleFunction = {
+					struct_name = "MetalVisibleFunctionDecoration",
+					operands = { { "stageKind", "IRIntLit" }, { "tableType", "IRType" } },
+				},
+			},
+			{
+				-- Marks a native traversal callback, rather than a portable source stage.
+				metalIntersectionFunction = {
+					struct_name = "MetalIntersectionFunctionDecoration",
+					operands = {
+						{ "geometryKind", "IRIntLit" },
+						{ "tagMask", "IRIntLit" },
+						{ "maxLevels", "IRIntLit" },
+					},
+				},
+			},
 			{ CudaHost = { struct_name = "CudaHostDecoration" } },
 			{
 				TorchEntryPoint = {
@@ -2359,6 +2573,43 @@ local insts = {
 					-- Attaches a name to this instruction so that it can be identified
 					-- later in the compiler reliably
 					operands = { { "nameOperand", "IRIntLit" } },
+				},
+			},
+			{
+				-- Decorates the IR struct type of a logical RT stage input, such as
+				-- ClosestHitInput<Context> or MissInput<Context>. These inputs have no
+				-- fields and lower to empty IR structs. The backend still needs types
+				-- from Context to generate the entry adapter and input operations,
+				-- so this decoration preserves those types and the input's stage kind.
+				PortableRTStageInputDecoration = {
+					operands = {
+						{ "stageKind", "IRIntLit" },
+						{ "accelerationStructureType", "IRType" },
+						{ "payloadType", "IRType" },
+						{ "recordType", "IRType" },
+						{ "primitiveType", "IRType" },
+						{ "attributesType", "IRType" },
+						{ "motionType", "IRType" },
+					},
+				},
+			},
+			{
+				-- The nominal list is empty at runtime. These operands retain its entry
+				-- types and the associated types needed by backend synthesis. Projected
+				-- packs start as ordinary expansions and specialize to TypePack values.
+				-- Only hit-group lists use the operands after recordTypes; miss and
+				-- callable lists use empty packs in those slots.
+				PortableRTShaderListDecoration = {
+					operands = {
+						{ "typepack" },
+						{ "recordTypes" },
+						{ "payloadTypes" },
+						{ "primitiveTypes" },
+						{ "attributesTypes" },
+						{ "closestHitTypes" },
+						{ "anyHitTypes" },
+						{ "intersectionTypes" },
+					},
 				},
 			},
 			{
@@ -2850,6 +3101,10 @@ local insts = {
 	-- already concrete types.
 	{ CastDescriptorHandleToResource = { operands = { { "handle" } } } },
 	{ CastResourceToDescriptorHandle = { operands = { { "resource" } } } },
+	-- Converts a portable acceleration structure to the core resource type expected by native TraceRay.
+	-- HLSL, GLSL, CUDA, and SPIR-V ignore the level operand, so emit the value directly.
+	-- Metal does not support this conversion because its portable AS is an argument buffer.
+	{ castToNativeAccelerationStructure = { operands = { { "value" } } } },
 	-- Wrap/unwrap a `uint` heap index in an untyped descriptor-heap handle. This is an internal
 	-- representation only: the `lowerUntypedResourceHandleToUInt` pass forwards each cast to its
 	-- `uint` operand and removes it before emit, so these ops never reach a target emitter.

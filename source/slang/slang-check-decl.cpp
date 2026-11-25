@@ -17,10 +17,10 @@
 #include "slang-ast-iterator.h"
 #include "slang-ast-print.h"
 #include "slang-ast-synthesis.h"
-#include "slang-check-portable-ray-tracing.h"
 #include "slang-lookup.h"
 #include "slang-mangle.h"
 #include "slang-parser.h"
+#include "slang-portable-ray-tracing-utility.h"
 #include "slang-rich-diagnostics.h"
 #include "slang-syntax.h"
 
@@ -23411,7 +23411,7 @@ bool isOpaqueHandleType(Type* type)
     if (PortableRT::getStageInputKind(isDeclRefTypeOf<AggTypeDecl>(type).getDecl()) !=
         Stage::Unknown)
         return true;
-    if (as<TraceProgramDescriptorType>(type))
+    if (as<TraceProgramDescriptorTypeBase>(type))
         return true;
     if (as<ResourceType>(type))
         return true;

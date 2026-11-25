@@ -8,8 +8,9 @@ namespace descriptors
 {
 // Serializing an application helper must preserve its references to the standard RT type and
 // the generic schema requirement, without redeclaring the compiler's descriptor type.
-public rt::TraceProgramDescriptor<Program> identity<Program : rt::ITraceProgramSchema>(
-    rt::TraceProgramDescriptor<Program> value)
+public rt::TraceProgramDescriptor<Program, N, Layout> identity<
+    Program : rt::ITraceProgramSchema, let N : int, let Layout : rt::HitRecordLayout>(
+    rt::TraceProgramDescriptor<Program, N, Layout> value)
 {
     return value;
 }

@@ -10,9 +10,8 @@ namespace Slang
 struct PerEntryPointPass
 {
 public:
-    // We will process a whole module by visiting all
-    // its global functions, looking for entry points.
-    //
+    /// Visits entry points whose parameters describe native shader inputs. Portable RT stages
+    /// still taking a logical input are handled separately after specialization.
     void processModule(IRModule* module);
 
     struct EntryPointInfo

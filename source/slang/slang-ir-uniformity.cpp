@@ -2,6 +2,7 @@
 
 #include "slang-ir-dominators.h"
 #include "slang-ir-insts.h"
+#include "slang-ir-portable-ray-tracing-util.h"
 #include "slang-ir-util.h"
 #include "slang-ir.h"
 #include "slang-rich-diagnostics.h"
@@ -452,6 +453,10 @@ struct ValidateUniformityContext
                     continue;
                 for (auto param : func->getParams())
                 {
+                    // A logical RT input is a fieldless token, not a native varying, and has
+                    // no parameter layout. Still analyze the stage body below.
+                    if (PortableRT::getEntryPointInputInfo(func))
+                        continue;
                     auto varLayout = findVarLayout(param);
                     if (isVaryingParameter(varLayout) ||
                         varLayout->findAttr<IRSystemValueSemanticAttr>())

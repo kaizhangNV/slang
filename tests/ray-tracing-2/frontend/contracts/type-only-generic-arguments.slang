@@ -55,7 +55,7 @@ typealias InterfacePhantom = Phantom<rt::ITraceProgramSchema>;
 typealias InputPhantom = Phantom<rt::ClosestHitInput<HitContext>>;
 typealias StageInterfacePhantom = Phantom<rt::IMissShader>;
 typealias LegalTracer = rt::RayTracer<TestSchema>;
-typealias LegalDescriptor = rt::TraceProgramDescriptor<TestSchema>;
+typealias LegalDescriptor = rt::TraceProgramDescriptor<TestSchema, 1>;
 
 void useType<T>() {}
 void useTypes<each T>() {}

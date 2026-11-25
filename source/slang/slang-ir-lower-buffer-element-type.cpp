@@ -935,6 +935,19 @@ struct LoweredElementTypeContext
     {
         // If `type` is already a lowered type, no more lowering is required.
         LoweredElementTypeInfo info;
+        // Nested physical types need the same protection as top-level buffer elements. For
+        // example, a descriptor embeds an already physical candidate-resource struct while ray
+        // data stores a pointer to it. Cloning that unchanged subobject gives the pointer and
+        // its target different nominal types. A late policy may still reprocess physical types
+        // when it needs to lower their contents, such as pointer fields on Metal.
+        if (type->findDecoration<IRPhysicalTypeDecoration>() &&
+            (leafTypeLoweringPolicy->shouldSkipPhysicalTypes() ||
+             !leafTypeLoweringPolicy->needsElementLowering(type)))
+        {
+            info.originalType = type;
+            info.loweredType = type;
+            return info;
+        }
         auto& map = getTypeLoweringMap(config);
         auto& mapLoweredTypeToInfo = map.mapLoweredTypeToInfo;
         auto& loweredTypeInfo = map.loweredTypeInfo;

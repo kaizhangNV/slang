@@ -2383,6 +2383,12 @@ LinkedIR linkIR(CodeGenContext* codeGenContext)
                 // regardless if the source files participate in the line table or not.
                 cloneValue(context, inst);
                 break;
+            case kIROp_StaticAssert:
+                // A type with a link-time constant argument can create a module-level check.
+                // Nothing references the assertion itself, but its condition must be checked
+                // after linking resolves that argument, even when the type is used only in data.
+                cloneValue(context, inst);
+                break;
             case kIROp_DebugBuildIdentifier:
                 // The debug build identifier won't be referenced by anything,
                 // but we still need to keep it around if it is in the IR.

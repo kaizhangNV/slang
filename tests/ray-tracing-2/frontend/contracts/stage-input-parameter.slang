@@ -19,7 +19,7 @@ struct TestHitContext : rt::IHitContext
     typealias Record = TestRecord;
 }
 
-[require(closesthit)]
+[require(portable_closesthit)]
 void updatePayload(in rt::ClosestHitInput<TestHitContext> input)
 {
     // Copying a view preserves access to the same payload and selected SBT record.
@@ -27,7 +27,7 @@ void updatePayload(in rt::ClosestHitInput<TestHitContext> input)
     local.payload.value = local.record.value;
 }
 
-[require(closesthit)]
+[require(portable_closesthit)]
 void closestHitHelper(in rt::ClosestHitInput<TestHitContext> input)
 {
     rt::ClosestHitInput<TestHitContext> explicitCopy = input;
@@ -39,7 +39,7 @@ void closestHitHelper(in rt::ClosestHitInput<TestHitContext> input)
     updatePayload(rt::ClosestHitInput<TestHitContext>(input));
 }
 
-[require(anyhit)]
+[require(portable_anyhit)]
 void anyHitHelper(in rt::AnyHitInput<TestHitContext> input)
 {
     let local = input;
@@ -54,8 +54,8 @@ struct TestProceduralContext : rt::IHitContext
     typealias Record = TestRecord;
 }
 
-[require(intersection, cuda)]
-[require(intersection, metal)]
+[require(portable_intersection, cuda)]
+[require(portable_intersection, metal)]
 void intersectionHelper(in rt::IntersectionInput<TestProceduralContext> input)
 {
     let local = input;
@@ -69,14 +69,14 @@ struct TestCallableContext : rt::ICallableContext
     typealias Record = TestRecord;
 }
 
-[require(callable)]
+[require(portable_callable)]
 void callableHelper(in rt::CallableInput<TestCallableContext> input)
 {
     let local = input;
     local.data.value = local.record.value;
 }
 
-[require(closesthit)]
+[require(portable_closesthit)]
 void choose(in rt::ClosestHitInput<TestHitContext> input, float value) {}
 void choose(int first, int second) {}
 

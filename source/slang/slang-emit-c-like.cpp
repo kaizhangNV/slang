@@ -1558,6 +1558,11 @@ CLikeSourceEmitter::FoldPolicy CLikeSourceEmitter::getFoldPolicy(IRInst* inst)
     case kIROp_GetValueFromBoundInterface:
         return FoldPolicy::Always;
 
+    // This conversion only changes the IR type. Keeping it folded emits the original AS
+    // expression, while the normal folding checks preserve the evaluation of its operand.
+    case kIROp_CastToNativeAccelerationStructure:
+        return FoldPolicy::Always;
+
     case kIROp_GetVulkanRayTracingPayloadLocation:
         return FoldPolicy::Always;
 
@@ -2699,6 +2704,14 @@ void CLikeSourceEmitter::defaultEmitInstExpr(IRInst* inst, const EmitOpInfo& inO
             emitOperand(inst->getOperand(1), rightSide(outerPrec, prec));
             break;
         }
+    case kIROp_CastToNativeAccelerationStructure:
+        {
+            SLANG_RELEASE_ASSERT(
+                isD3DTarget(getTargetReq()) || isKhronosTarget(getTargetReq()) ||
+                isCUDATarget(getTargetReq()));
+            emitOperand(inst->getOperand(0), outerPrec);
+            break;
+        }
     case kIROp_CastDescriptorHandleToUInt2:
     case kIROp_CastUInt2ToDescriptorHandle:
     case kIROp_CastDescriptorHandleToResource:
@@ -3395,6 +3408,8 @@ void CLikeSourceEmitter::_emitInst(IRInst* inst)
     case kIROp_StructuredBufferGetDimensions:
     case kIROp_MetalAtomicCast:
     case kIROp_MetalCastToDepthTexture:
+    case kIROp_MetalRTTraceDispatch:
+    case kIROp_MetalRTCallDispatch:
     case kIROp_SetOptiXPayloadRegister:
     case kIROp_CoopMatMulAdd:
     case kIROp_CoopVecMatMulAdd:

@@ -36,21 +36,28 @@ struct OtherSchema : rt::ITraceProgramSchema
     typealias CallableShaders = rt::EmptyCallableShaderList;
 };
 
-typealias Descriptor = rt::TraceProgramDescriptor<Schema>;
+typealias Descriptor = rt::TraceProgramDescriptor<Schema, 1>;
 
 // GLSL compatibility mode normally makes unqualified globals static. Resource classification
 // must keep these descriptors host-bound; otherwise the opaque-static diagnostic rejects them.
 Descriptor descriptor;
-rt::TraceProgramDescriptor<OtherSchema> otherDescriptor;
+rt::TraceProgramDescriptor<OtherSchema, 1> otherDescriptor;
+rt::TraceProgramDescriptor<Schema, 2> twoRayTypes;
+rt::TraceProgramDescriptor<Schema, 3> threeRayTypes;
+rt::TraceProgramDescriptor<Schema, 2, rt::HitRecordLayout.SharedAcrossGeometries> sharedRecords;
 
-// Checked generic substitution must preserve each schema and its conformance witness in IR.
-// The two specializations stay distinct even though neither handle has source-visible fields.
+// Checked generic substitution preserves schema, count, layout, and conformance in IR.
+// schema-contract.slang checks the five schema-type operands as well. The specializations stay
+// distinct even though none of these handles have source-visible fields.
 // CHECK: [nameHint("descriptor")]
 // CHECK-NEXT: [export({{.*}})]
-// CHECK-NEXT: let %descriptor : TraceProgramDescriptor(%Schema, %{{[0-9]+}}) = global_param
+// CHECK-NEXT: let %descriptor : TraceProgramDescriptor(%Schema, 1 : Int, 0 : Enum(Int), %{{[0-9]+}}, {{.*}}) = global_param
 // CHECK: [nameHint("otherDescriptor")]
 // CHECK-NEXT: [export({{.*}})]
-// CHECK-NEXT: let %otherDescriptor : TraceProgramDescriptor(%OtherSchema, %{{[0-9]+}}) = global_param
+// CHECK-NEXT: let %otherDescriptor : TraceProgramDescriptor(%OtherSchema, 1 : Int, 0 : Enum(Int), %{{[0-9]+}}, {{.*}}) = global_param
+// CHECK: let %twoRayTypes : TraceProgramDescriptor(%Schema, 2 : Int, 0 : Enum(Int), {{.*}}) = global_param
+// CHECK: let %threeRayTypes : TraceProgramDescriptor(%Schema, 3 : Int, 0 : Enum(Int), {{.*}}) = global_param
+// CHECK: let %sharedRecords : TraceProgramDescriptor(%Schema, 2 : Int, 1 : Enum(Int), {{.*}}) = global_param
 
 struct Bindings
 {
@@ -61,7 +68,7 @@ struct Bindings
 Optional<Descriptor> optionalDescriptor;
 /*OPTIONAL_ALIAS:
 ^^^^^^^^ 'Optional<T>' cannot wrap a resource or opaque type
-^^^^^^^^ 'rt.TraceProgramDescriptor<Schema>' is a resource or opaque type and cannot be used as the value type of 'Optional<T>'.
+^^^^^^^^ 'rt.TraceProgramDescriptor<Schema, 1, rt.HitRecordLayout.PerGeometry>' is a resource or opaque type and cannot be used as the value type of 'Optional<T>'.
 */
 #elif defined(TEST_OPTIONAL_STRUCT)
 Optional<Bindings> optionalBindings;
@@ -73,7 +80,7 @@ Optional<Bindings> optionalBindings;
 static Descriptor staticDescriptor;
 /*STATIC:
                   ^^^^^^^^^^^^^^^^ opaque type is not supported for mutable static storage
-                  ^^^^^^^^^^^^^^^^ mutable file- or namespace-scope `static` variable 'staticDescriptor' has the opaque type 'rt.TraceProgramDescriptor<Schema>', which cannot be represented by mutable storage
+                  ^^^^^^^^^^^^^^^^ mutable file- or namespace-scope `static` variable 'staticDescriptor' has the opaque type 'rt.TraceProgramDescriptor<Schema, 1, rt.HitRecordLayout.PerGeometry>', which cannot be represented by mutable storage
                   ^^^^^^^^^^^^^^^^ do you intend to define a `uniform` parameter instead?
 */
 #endif
@@ -81,12 +88,17 @@ static Descriptor staticDescriptor;
 // Descriptor parameters use host bindings without an explicit uniform modifier, through either
 // an alias or a direct specialization.
 [numthreads(1, 1, 1)]
-void main(Descriptor aliasedDescriptor, rt::TraceProgramDescriptor<OtherSchema> directDescriptor)
+void main(Descriptor aliasedDescriptor, rt::TraceProgramDescriptor<OtherSchema, 1> directDescriptor)
 {
     // The dedicated AST type must still support inference and substitution through a generic
-    // function's TraceProgramDescriptor<Program> parameter and result after module loading.
+    // function's TraceProgramDescriptor<Program, 1> parameter and result after module loading.
     Descriptor copy = descriptors::identity(descriptor);
-    rt::TraceProgramDescriptor<OtherSchema> otherCopy = descriptors::identity(otherDescriptor);
+    rt::TraceProgramDescriptor<OtherSchema, 1> otherCopy = descriptors::identity(otherDescriptor);
     copy = descriptors::identity(aliasedDescriptor);
     otherCopy = descriptors::identity(directDescriptor);
+    // These assignments also check deduction of the value arguments through a saved module.
+    rt::TraceProgramDescriptor<Schema, 2> two = descriptors::identity(twoRayTypes);
+    rt::TraceProgramDescriptor<Schema, 3> three = descriptors::identity(threeRayTypes);
+    rt::TraceProgramDescriptor<Schema, 2, rt::HitRecordLayout.SharedAcrossGeometries> shared =
+        descriptors::identity(sharedRecords);
 }
